@@ -99,6 +99,11 @@ def home():
                     deactivated_returned.add(u)
                     ever_removed.discard(u)
 
+            # Strip disabled-tagged accounts from these counts too.
+            disabled_tagged_home = {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
+            ever_unfollowed_you -= disabled_tagged_home
+            ever_removed -= disabled_tagged_home
+
             still_follow_them = ever_unfollowed_you & curr.following
 
             summary = {
@@ -527,6 +532,15 @@ def get_lists(snapshot_id: int | None = None):
                     row["last_followed_you_days_ago"] = (now - d).days if d else None
                     row["last_followed_you_snapshot_id"] = last_sid
             return row
+
+        # Exclude disabled-tagged accounts from every non-bucket list. Once you've
+        # tagged something as disabled, you don't want to keep seeing it in the
+        # follower / following / unfollow analyses — only in the disabled bucket.
+        disabled_tagged = {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
+        for kind in list(sections.keys()):
+            if kind in BUCKET_KINDS:
+                continue
+            sections[kind] = [u for u in sections[kind] if u not in disabled_tagged]
 
         annotated = {
             kind: [build_row(u, kind) for u in usernames]
