@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0e0e10" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="IG Tracker" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/static/icon.svg" />
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <title>Instagram Tracker</title>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">IG Tracker</div>
+    <div class="snapshot-pill" id="snapshot-pill">no data</div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-view="home">Home</button>
+    <button class="tab" data-view="lists">Lists</button>
+    <button class="tab" data-view="check">Check</button>
+    <button class="tab" data-view="snapshots">Imports</button>
+  </nav>
+
+  <main id="main">
+    <!-- Home view -->
+    <section class="view active" data-view="home">
+      <div class="card drop-card" id="drop-card">
+        <h2>Import Instagram export</h2>
+        <p class="muted">Drop the <code>.zip</code> Instagram emailed you, or pick a file. The app finds <code>followers_and_following</code> automatically — no prep step.</p>
+        <input type="file" id="file-input" accept=".zip" hidden />
+        <button class="primary big" id="pick-file">Pick zip file</button>
+        <div class="hint">Or drag-and-drop here.</div>
+        <div id="import-status" class="status"></div>
+      </div>
+
+      <div class="card" id="alerts-card" hidden>
+        <h2>Alerts</h2>
+        <ul class="alerts" id="alerts-list"></ul>
+      </div>
+
+      <div class="card" id="summary-card" hidden>
+        <h2>Latest snapshot</h2>
+        <div class="summary-grid" id="summary-grid"></div>
+      </div>
+
+      <div class="card" id="buckets-card">
+        <h2>Tag buckets</h2>
+        <div class="bucket-row">
+          <button class="bucket-btn" data-flag="favorite">★ Favorites <span class="count" id="count-favorite">0</span></button>
+          <button class="bucket-btn" data-flag="want_remove">✦ Want to remove <span class="count" id="count-want_remove">0</span></button>
+          <button class="bucket-btn" data-flag="watchlist">↺ Wait-back <span class="count" id="count-watchlist">0</span></button>
+          <button class="bucket-btn" data-flag="disabled">⚠ Disabled <span class="count" id="count-disabled">0</span></button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Lists view -->
+    <section class="view" data-view="lists">
+      <div class="card">
+        <h2>Lists</h2>
+        <select id="list-kind" class="full-select"></select>
+        <div class="sort-row">
+          <label class="muted small">Sort:</label>
+          <select id="list-sort" class="full-select inline">
+            <option value="default">Default (list-specific)</option>
+            <option value="alpha">Alphabetical</option>
+            <option value="status">By current status</option>
+            <option value="days_desc">Longest you've been following ↑</option>
+            <option value="days_asc">Most recent follow ↓</option>
+            <option value="mutual_oldest">Oldest mutual ↑</option>
+            <option value="mutual_recent">Most recent mutual ↓</option>
+            <option value="pending_oldest">Oldest pending ↑</option>
+            <option value="pending_recent">Most recent pending ↓</option>
+            <option value="recent_stop">Recently stopped (NFY back)</option>
+            <option value="oldest_stop">Stopped longest ago (NFY back)</option>
+            <option value="never_first">Never followed back first (NFY back)</option>
+          </select>
+        </div>
+        <div id="list-output" class="list-output"></div>
+      </div>
+    </section>
+
+    <!-- Check view (merged Lookup + Filter) -->
+    <section class="view" data-view="check">
+      <div class="card" id="queue-card" hidden>
+        <div class="card-header">
+          <h2>Follow queue <span class="count-pill" id="queue-count">0</span></h2>
+          <button class="ghost-btn" id="queue-clear">Clear all</button>
+        </div>
+        <p class="muted small">Saved across sessions and shared between your Mac and phone. Tap a name to open Instagram and remove it from the queue.</p>
+        <div id="queue-list" class="result-list"></div>
+      </div>
+
+      <div class="card">
+        <h2>Check accounts</h2>
+        <p class="muted">Paste one username/link for full history, or many lines for a bulk seen-vs-new report. New entries are added to the Follow queue above.</p>
+        <textarea id="check-input" rows="3" placeholder="@username or instagram.com/...&#10;Add more lines for a bulk check."></textarea>
+        <button class="primary" id="check-go">Check</button>
+        <div id="check-result"></div>
+      </div>
+    </section>
+
+    <!-- Snapshots view -->
+    <section class="view" data-view="snapshots">
+      <div class="card">
+        <h2>Imports</h2>
+        <p class="muted">All snapshots ordered oldest → newest.</p>
+        <ul id="snapshot-list" class="snapshot-list"></ul>
+      </div>
+    </section>
+  </main>
+
+  <!-- Account detail modal -->
+  <div class="modal" id="account-modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-body">
+      <button class="modal-close" data-close>×</button>
+      <div id="account-detail"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
