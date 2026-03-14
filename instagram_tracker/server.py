@@ -676,7 +676,8 @@ def update_tag(payload: dict = Body(...)):
     flag = payload.get("flag")
     value = bool(payload.get("value"))
     if not account or flag not in tags_mod.VALID_FLAGS:
-        raise HTTPException(status_code=400, detail="Need account and a valid flag (favorite | want_remove | watchlist).")
+        valid = " | ".join(sorted(tags_mod.VALID_FLAGS))
+        raise HTTPException(status_code=400, detail=f"Need account and a valid flag ({valid}).")
     username, profile_url = normalize_account_input(account)
     with db_conn() as conn:
         return tags_mod.set_flag(conn, username, flag, value, profile_url)
