@@ -364,6 +364,7 @@ function renderTagToggles(tags) {
   `;
 }
 
+let modalTaggedDirty = false;
 function bindTagToggles(root, username, currentTags) {
   $$(".tag-toggle", root).forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -373,6 +374,7 @@ function bindTagToggles(root, username, currentTags) {
         const result = await api.post("/api/tags", { account: username, flag, value: willBe });
         btn.classList.toggle("active", result[flag]);
         toast(`${flag} ${result[flag] ? "added" : "removed"}`);
+        modalTaggedDirty = true;
         loadHome();
       } catch (e) {
         toast(`Failed: ${e.message}`);
@@ -386,13 +388,21 @@ function bindTagToggles(root, username, currentTags) {
 // ---------- account modal (used from list/alert clicks) ----------
 
 const modal = $("#account-modal");
-$$("[data-close]").forEach((el) => el.addEventListener("click", () => {
+function closeModal() {
   if (history.state?.modal) {
     history.back();
   } else {
     modal.hidden = true;
   }
-}));
+  if (modalTaggedDirty) {
+    modalTaggedDirty = false;
+    // Refresh whichever data view the user is on, so newly tagged accounts are reflected.
+    const view = history.state?.view || "lists";
+    if (view === "lists") loadLists();
+    else if (view === "home") loadHome();
+  }
+}
+$$("[data-close]").forEach((el) => el.addEventListener("click", closeModal));
 
 // Browser back/forward integration.
 window.addEventListener("popstate", (e) => {
@@ -414,6 +424,9 @@ window.addEventListener("popstate", (e) => {
     loadLists();
   } else if (view === "snapshots") loadSnapshots();
   else if (view === "check") loadQueue();
+  else if (view === "home") loadHome();
+  // Modal close via popstate already triggered a refresh; clear the dirty flag.
+  modalTaggedDirty = false;
 });
 
 // Bootstrap initial state from URL hash.
@@ -743,8 +756,17 @@ async function loadLists() {
             btn.classList.toggle("on", !!result[flag]);
             toast(`${flag.replace("_", " ")} ${result[flag] ? "added" : "removed"}`);
             loadHome();
-            // If we're currently viewing the bucket they just removed from, drop the row.
-            if (!result[flag] && (select.value === flag)) row.remove();
+            const currentKind = select.value;
+            const BUCKETS = ["favorite", "want_remove", "watchlist", "disabled"];
+            // If we just removed from the bucket we're viewing, drop the row.
+            if (!result[flag] && currentKind === flag) {
+              row.remove();
+            }
+            // If we just tagged disabled ON while viewing a non-bucket list, drop the row
+            // (it's now excluded from non-bucket lists by the server).
+            if (flag === "disabled" && result.disabled && !BUCKETS.includes(currentKind)) {
+              row.remove();
+            }
           } catch (err) {
             toast(`Failed: ${err.message}`);
           }

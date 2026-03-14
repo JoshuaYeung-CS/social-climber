@@ -478,6 +478,7 @@ def get_lists(snapshot_id: int | None = None):
                 "favorite": flagged.get(u, {}).get("favorite", False),
                 "want_remove": flagged.get(u, {}).get("want_remove", False),
                 "watchlist": flagged.get(u, {}).get("watchlist", False),
+                "disabled": flagged.get(u, {}).get("disabled", False),
                 "currently_following": u in sd.following,
                 "currently_follower": u in sd.followers,
                 "currently_pending": u in sd.pending,

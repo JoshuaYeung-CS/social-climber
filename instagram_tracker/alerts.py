@@ -36,12 +36,13 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
     favorites = {row["username"] for row in list_with_flag(conn, "favorite")}
 
     diff_alerts: list[dict] = []
+    disabled_tagged = {r["username"] for r in list_with_flag(conn, "disabled")}
     if previous is not None:
         prev = snapshot_data(conn, previous)
         curr = snapshot_data(conn, latest)
 
-        lost_followers = prev.followers - curr.followers           # they unfollowed you
-        left_following = prev.following - curr.following
+        lost_followers = (prev.followers - curr.followers) - disabled_tagged  # they unfollowed you
+        left_following = (prev.following - curr.following) - disabled_tagged
         # Same-snapshot rule: if it's not in the new snapshot's recently_unfollowed,
         # the user didn't initiate the unfollow — assume they removed you.
         they_removed_you = left_following - curr.recently_unfollowed
