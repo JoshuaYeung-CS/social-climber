@@ -1,53 +1,69 @@
 # Instagram Tracker
 
-A local-only web app to track changes to your Instagram followers/following over time. No accounts, no API, no data ever leaves your devices.
+A local-only web app for tracking changes to your Instagram followers and following over time. Imports the official Instagram data export, stores everything in a local SQLite database, and runs a small FastAPI server with a mobile-friendly web UI. No third-party services, no Instagram API, no data ever leaves your machine.
 
-## What it does
+## Features
 
-- **Drop a zip, get answers.** Drag the Instagram data export (the `.zip` they email you) into the app. It finds the right files inside, no manual prep.
-- **"Who unfollowed me since last time?"** Front and center on the home screen.
-- **Have I ever followed them?** Paste any username or `instagram.com/...` link and instantly see whether you've ever followed/requested/been followed-by them.
-- **Filter a list of links.** Paste a list, get back which entries you've already touched and which are new.
-- **Tag people.** Three buckets: ★ Favorites (alert if they unfollow), ✦ Want-remove (planning to unfollow), ↺ Wait-back (recently followed, waiting on them; alerts after 7 days with no follow-back).
+- **One-step import.** Drop the `.zip` Instagram emails you onto the home screen. The app auto-discovers the relevant JSON files inside any nesting level.
+- **Snapshot history.** Every import is stored as a snapshot. Compare any two snapshots, browse the full timeline, or look up an account's complete history.
+- **Cumulative analyses across all snapshots:**
+  - Anyone who ever unfollowed you, with rename and deactivation noise filtered out
+  - Anyone who ever removed you as a follower (Instagram's silent kick)
+  - Accounts you still follow despite them dropping you
+- **Per-account intelligence:**
+  - Detects username renames using shared Instagram-side timestamps
+  - Detects account deactivations (gaps where the original follow timestamp is preserved)
+  - Counts distinct on/off/on follow runs per account
+- **Tagging buckets:**
+  - ★ Favorites — alert when they unfollow you
+  - ✦ Want to remove — plan-to-unfollow list
+  - ↺ Wait-back — auto-alerts when a tagged account hasn't followed back in 7 days
+  - ⚠ Disabled — flag dead accounts; auto-unflag on reactivation
+- **Bulk check.** Paste a list of usernames or Instagram links to see which ones you've already followed/requested and which are net-new.
+- **Persistent follow queue.** New accounts you decide to follow stay queued across sessions. Tap a queue entry to open Instagram and remove it from the queue.
+- **PWA-ready.** Add to Home Screen on iPhone for a native-feeling app over your local Wi-Fi.
 
-## Run it
+## Running locally
+
+Requires Python 3.10+ (3.11 recommended). On first run, dependencies install into a local `.venv` automatically.
 
 ```bash
-cd /Users/joshua/git-repos/instagram_tracker
 ./run.sh
 ```
 
-First run installs deps into a local `.venv`. After that it just starts. The launcher prints two URLs:
+The launcher prints two URLs:
+- `http://localhost:8000` — open on the same machine
+- `http://<your-lan-ip>:8000` — open in Safari on your phone (same Wi-Fi)
 
-- `http://localhost:8000` — open on the Mac
-- `http://<mac-ip>:8000` — open in Safari on your phone (must be on the same Wi-Fi)
+Stop with `Ctrl-C`. Your local database lives at `data/instagram_tracker.db`.
 
-To use it like an app on your iPhone: open the second URL in Safari, tap Share → "Add to Home Screen". The icon launches a fullscreen, app-feeling experience.
+## Project layout
 
-## Stop it
+```
+instagram_tracker/
+├── server.py          FastAPI HTTP API (~12 endpoints)
+├── ingest.py          Zip/folder import with auto-discovery
+├── queries.py         Read-side queries, rename + deactivation detection
+├── diffs.py           Snapshot diff math (pure functions)
+├── alerts.py          Home-screen alert generation
+├── tags.py            Bucket flags + auto-clear logic
+├── followup.py        Persistent follow queue
+├── filtering.py       Bulk seen-vs-new analyzer
+├── parsers.py         Instagram JSON parsing
+├── db.py              SQLite schema + idempotent migrations
+├── migrate_v1.py      One-shot migration from a previous v1 layout
+└── static/            Mobile-first single-page UI (vanilla JS, no build step)
+```
 
-Ctrl-C in the terminal that ran `./run.sh`. The data lives in `data/instagram_tracker.db`.
+## Privacy
 
-## Where things are
+This is the entire surface area for your data:
+- `data/instagram_tracker.db` — local SQLite file, never transmitted
+- A FastAPI server that binds to `0.0.0.0:8000` so your phone on the same Wi-Fi can reach it
+- The frontend is plain HTML/CSS/JS served from disk; it makes no third-party requests
 
-- `instagram_tracker/server.py` — HTTP API
-- `instagram_tracker/static/` — web UI (HTML/CSS/JS)
-- `instagram_tracker/db.py` — SQLite schema
-- `instagram_tracker/ingest.py` — zip/folder import
-- `instagram_tracker/queries.py` — read-side queries
-- `instagram_tracker/diffs.py` — snapshot diff math
-- `instagram_tracker/alerts.py` — home-screen alerts
-- `instagram_tracker/tags.py` — favorites/want-remove/wait-back
-- `instagram_tracker/filtering.py` — "filter my links list" logic
-- `instagram_tracker/migrate_v1.py` — one-shot migration db
-- `data/instagram_tracker.db` — your local database
+`data/`, `.venv/`, and other local artifacts are gitignored. Even if this repository is shared, none of your follower history is included.
 
-## Migration
+## License
 
-Runs automatically on first launch (if the old `instagram_tracker_v1/instagram_tracker.db` exists). It's idempotent — re-running does nothing if v2 already has data.
-
-The v1 database file was backed up to `instagram_tracker.db.backup_2026-04-28` before any migration ran.
-
-## Future iOS app path
-
-The frontend is written so it can be wrapped in [Capacitor](https://capacitorjs.com) into a real iOS app later. The Python backend would need to be replaced for true on-device standalone.
+MIT — see [LICENSE](./LICENSE).
