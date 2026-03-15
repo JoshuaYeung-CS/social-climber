@@ -1,7 +1,7 @@
 """All read-side queries.
 
-The previous hot paths re-fetched each snapshot's data row-by-row in O(snapshots) loops.
-v2 uses a single SQL query plus in-memory grouping when full history is needed.
+Multi-snapshot queries load all rows in a single SQL roundtrip, then group in
+memory — much faster than re-fetching per snapshot in a loop.
 """
 
 import sqlite3

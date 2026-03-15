@@ -27,9 +27,5 @@ if [[ ! -d .venv ]]; then
     .venv/bin/pip install --quiet -r requirements.txt
 fi
 
-# Migrate v1 data on first run only (the script itself is a no-op if the v2 db
-# already has snapshots, so it's safe to call every time).
-.venv/bin/python -m instagram_tracker.migrate_v1 || true
-
 PORT="${1:-8000}"
 exec .venv/bin/python -m instagram_tracker "$PORT"

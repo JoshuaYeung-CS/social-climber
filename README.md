@@ -41,18 +41,17 @@ Stop with `Ctrl-C`. Your local database lives at `data/instagram_tracker.db`.
 
 ```
 instagram_tracker/
-├── server.py          FastAPI HTTP API (~12 endpoints)
-├── ingest.py          Zip/folder import with auto-discovery
-├── queries.py         Read-side queries, rename + deactivation detection
-├── diffs.py           Snapshot diff math (pure functions)
-├── alerts.py          Home-screen alert generation
-├── tags.py            Bucket flags + auto-clear logic
-├── followup.py        Persistent follow queue
-├── filtering.py       Bulk seen-vs-new analyzer
-├── parsers.py         Instagram JSON parsing
-├── db.py              SQLite schema + idempotent migrations
-├── migrate_v1.py      One-shot migration from a previous v1 layout
-└── static/            Mobile-first single-page UI (vanilla JS, no build step)
+├── server.py     FastAPI HTTP API (~12 endpoints)
+├── ingest.py     Zip/folder import with auto-discovery
+├── queries.py    Read-side queries, rename + deactivation detection
+├── diffs.py      Snapshot diff math (pure functions)
+├── alerts.py     Home-screen alert generation
+├── tags.py       Bucket flags + auto-clear logic
+├── followup.py   Persistent follow queue
+├── filtering.py  Bulk seen-vs-new analyzer
+├── parsers.py    Instagram JSON parsing
+├── db.py         SQLite schema + idempotent migrations
+└── static/       Mobile-first single-page UI (vanilla JS, no build step)
 ```
 
 ## Privacy

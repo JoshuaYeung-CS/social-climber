@@ -1,4 +1,4 @@
-"""Replaces the prune-ever-file workflow.
+"""Bulk seen-vs-new analyzer.
 
 Take a multi-line text blob (usernames, @handles, or instagram links).
 Return which entries the user has ever seen (so they can prune them out)

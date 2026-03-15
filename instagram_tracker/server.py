@@ -23,7 +23,7 @@ from .config import DB_PATH, STATIC_DIR
 from .db import connect
 from .parsers import normalize_account_input
 
-app = FastAPI(title="Instagram Tracker", version="2.0.0")
+app = FastAPI(title="Instagram Tracker", version="1.0.0")
 
 
 @contextmanager
