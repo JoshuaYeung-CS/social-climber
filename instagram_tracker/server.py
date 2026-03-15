@@ -240,6 +240,8 @@ def get_lists(snapshot_id: int | None = None):
         sid = _resolve(conn, snapshot_id)
         sd = q.snapshot_data(conn, sid)
         sections = diffs_mod.current_lists(sd)
+        # Combined "everyone with a current relationship" — easy to scroll/search for tagging.
+        sections["everyone"] = sorted(sd.followers | sd.following | sd.pending)
 
         prev_id = q.previous_id(conn, sid)
         if prev_id is not None:

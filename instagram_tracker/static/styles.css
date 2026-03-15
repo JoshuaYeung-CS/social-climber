@@ -267,6 +267,19 @@ code {
 .full-select.inline { width: auto; flex: 1; margin-bottom: 0; }
 .sort-row { display: flex; align-items: center; gap: 8px; margin: -4px 0 12px; }
 .small { font-size: 12px; }
+.list-filter {
+  width: 100%;
+  padding: 10px;
+  font-size: 15px;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  -webkit-appearance: none;
+}
+.list-filter:focus { outline: none; border-color: var(--accent); }
+.filter-count { padding: 4px 2px 8px; }
 .list-row .timing {
   font-size: 12px;
   color: var(--muted);

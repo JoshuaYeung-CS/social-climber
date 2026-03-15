@@ -489,6 +489,7 @@ async function showHistory(username) {
 // ---------- lists ----------
 
 const LIST_KINDS = [
+  ["everyone", "Everyone (search-friendly)"],
   ["all_followers", "All followers"],
   ["all_following", "All following"],
   ["mutuals", "Mutuals"],
@@ -524,7 +525,10 @@ function buildListKindOptions() {
   });
 }
 buildListKindOptions();
-select.addEventListener("change", loadLists);
+select.addEventListener("change", () => {
+  filterInput.value = "";
+  loadLists();
+});
 
 const sortSelect = $("#list-sort");
 sortSelect.addEventListener("change", loadLists);
@@ -718,6 +722,36 @@ function fmtDate(iso) {
 // kept for backward compat where called from older code paths
 const fmtDaysSince = fmtDuration;
 
+// Live search filter for the Lists view. Hides rows whose username doesn't
+// match the query (case-insensitive substring). Re-applied after every list
+// load so switching list-kind keeps the filter in sync.
+const filterInput = $("#list-filter");
+filterInput.addEventListener("input", applyListFilter);
+function applyListFilter() {
+  const q = (filterInput.value || "").toLowerCase().trim();
+  const out = $("#list-output");
+  const rows = $$(".list-row", out);
+  let visible = 0;
+  for (const row of rows) {
+    const u = (row.dataset.username || "").toLowerCase();
+    const show = q === "" || u.includes(q);
+    row.style.display = show ? "" : "none";
+    if (show) visible++;
+  }
+  // Show count line at top if filtering.
+  let counter = out.querySelector(".filter-count");
+  if (q && rows.length > 0) {
+    if (!counter) {
+      counter = document.createElement("div");
+      counter.className = "filter-count muted small";
+      out.insertBefore(counter, out.firstChild);
+    }
+    counter.textContent = `Showing ${visible} of ${rows.length}`;
+  } else if (counter) {
+    counter.remove();
+  }
+}
+
 async function loadLists() {
   try {
     const data = await api.get("/api/lists");
@@ -730,11 +764,12 @@ async function loadLists() {
         opt.textContent = `${base[1]} (${count})`;
       }
     });
-    const kind = select.value || "all_followers";
+    const kind = select.value || "everyone";
     const out = $("#list-output");
     let items = sections[kind] || [];
     if (items.length === 0) {
       out.innerHTML = `<div class="muted">(none — 0 entries)</div>`;
+      applyListFilter();
       return;
     }
 
@@ -744,6 +779,7 @@ async function loadLists() {
     }
 
     out.innerHTML = items.map(renderListRow).join("");
+    applyListFilter();
     $$(".list-row", out).forEach((row) => {
       row.addEventListener("click", () => openAccountModal(row.dataset.username));
       $$(".row-tag", row).forEach((btn) => {
