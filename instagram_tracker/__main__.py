@@ -44,6 +44,8 @@ def main():
         host=DEFAULT_HOST,
         port=port,
         log_level="info",
+        reload=True,
+        reload_dirs=["instagram_tracker"],
     )
 
 

@@ -84,10 +84,13 @@ def home():
             ever_unfollowed_you = {u for u in ever_unfollowed_you if not aliases_active(u, curr.followers)}
             ever_removed = {u for u in ever_removed if not aliases_active(u, curr.following)}
 
-            # Strip disabled-tagged accounts from these counts too.
-            disabled_tagged_home = {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
-            ever_unfollowed_you -= disabled_tagged_home
-            ever_removed -= disabled_tagged_home
+            # Strip disabled- and unavailable-tagged accounts from these counts too.
+            suppressed_home = (
+                {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
+                | {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
+            )
+            ever_unfollowed_you -= suppressed_home
+            ever_removed -= suppressed_home
 
             still_follow_them = ever_unfollowed_you & curr.following
 
@@ -105,6 +108,7 @@ def home():
                 "ever_you_unfollowed": len(ever_self),
                 "still_follow_after_drop": len(still_follow_them),
                 "disabled_tagged": len(tags_mod.list_with_flag(conn, "disabled")),
+                "unavailable_tagged": len(tags_mod.list_with_flag(conn, "unavailable")),
             }
 
         bucket_counts = {
@@ -112,6 +116,7 @@ def home():
             "want_remove": len(tags_mod.list_with_flag(conn, "want_remove")),
             "watchlist": len(tags_mod.list_with_flag(conn, "watchlist")),
             "disabled": len(tags_mod.list_with_flag(conn, "disabled")),
+            "unavailable": len(tags_mod.list_with_flag(conn, "unavailable")),
         }
 
         return {
@@ -255,7 +260,7 @@ def get_lists(snapshot_id: int | None = None):
             sections["they_removed_you_as_follower"] = []
 
         # Bucket lists.
-        for flag in ("favorite", "want_remove", "watchlist", "disabled"):
+        for flag in ("favorite", "want_remove", "watchlist", "disabled", "unavailable"):
             sections[flag] = sorted(r["username"] for r in tags_mod.list_with_flag(conn, flag))
 
         # ---- Cumulative / historical lists across ALL snapshots ----
@@ -387,11 +392,19 @@ def get_lists(snapshot_id: int | None = None):
             "all_followers",
             "feeder_accounts",
         }
-        BUCKET_KINDS = {"favorite", "want_remove", "watchlist", "disabled"}
+        BUCKET_KINDS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable"}
 
         flagged = tags_mod.all_flagged_usernames(conn)
 
         reengaged = q.detect_reengagements(conn)
+
+        # Privacy inference: union of every username that will appear in any section,
+        # so each row can show a "likely private/public" hint. One bulk query, cached
+        # for all build_row calls below.
+        all_usernames: set[str] = set()
+        for usernames in sections.values():
+            all_usernames.update(usernames)
+        privacy_map = q.privacy_status_bulk(conn, list(all_usernames))
 
         def relationship(u: str) -> tuple[str, str]:
             in_fol = u in sd.following
@@ -410,6 +423,7 @@ def get_lists(snapshot_id: int | None = None):
         def bucket_status(kind: str, u: str) -> tuple[str, str]:
             in_fol = u in sd.following
             in_back = u in sd.followers
+            in_pend = u in sd.pending
             if kind == "watchlist":
                 if not in_fol:
                     return ("you've unfollowed", "stopped")
@@ -433,6 +447,12 @@ def get_lists(snapshot_id: int | None = None):
                 if in_fol or in_back or in_pend:
                     return ("⚠ BACK ONLINE", "action")
                 return ("still gone", "good")
+            if kind == "unavailable":
+                # Same proof-of-life rule as disabled, but tied to "Instagram says
+                # the page doesn't exist" rather than user's manual judgement.
+                if in_fol or in_back or in_pend:
+                    return ("✕ PAGE BACK", "action")
+                return ("still gone", "good")
             return ("", "")
 
         def parse_label_date(label: str | None) -> datetime | None:
@@ -451,6 +471,7 @@ def get_lists(snapshot_id: int | None = None):
                 "want_remove": flagged.get(u, {}).get("want_remove", False),
                 "watchlist": flagged.get(u, {}).get("watchlist", False),
                 "disabled": flagged.get(u, {}).get("disabled", False),
+                "unavailable": flagged.get(u, {}).get("unavailable", False),
                 "currently_following": u in sd.following,
                 "currently_follower": u in sd.followers,
                 "currently_pending": u in sd.pending,
@@ -459,6 +480,9 @@ def get_lists(snapshot_id: int | None = None):
             }
             if u in reengaged:
                 row["history_status"] = "re-engaged"
+            priv = privacy_map.get(u)
+            if priv and priv != "unknown":
+                row["privacy"] = priv  # "likely_private" | "likely_public"
             # Aliases (rename chain).
             chain = alias_map.get(u)
             if chain:
@@ -501,14 +525,17 @@ def get_lists(snapshot_id: int | None = None):
                     row["last_followed_you_snapshot_id"] = last_sid
             return row
 
-        # Exclude disabled-tagged accounts from every non-bucket list. Once you've
-        # tagged something as disabled, you don't want to keep seeing it in the
-        # follower / following / unfollow analyses — only in the disabled bucket.
-        disabled_tagged = {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
+        # Exclude disabled- or unavailable-tagged accounts from every non-bucket list.
+        # Once you've tagged something as gone, you don't want to keep seeing it in
+        # the follower / following / unfollow analyses — only in its bucket.
+        suppressed_set = (
+            {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
+            | {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
+        )
         for kind in list(sections.keys()):
             if kind in BUCKET_KINDS:
                 continue
-            sections[kind] = [u for u in sections[kind] if u not in disabled_tagged]
+            sections[kind] = [u for u in sections[kind] if u not in suppressed_set]
 
         annotated = {
             kind: [build_row(u, kind) for u in usernames]
@@ -544,6 +571,7 @@ def lookup(account: str):
         summary = q.ever_summary(conn, username)
         tags = tags_mod.get_tags(conn, username)
         aliases = q.username_alias_map(conn).get(username, [])
+        privacy = q.privacy_status_bulk(conn, [username]).get(username, "unknown")
         if summary is None:
             return {
                 "username": username,
@@ -551,8 +579,9 @@ def lookup(account: str):
                 "found": False,
                 "tags": tags,
                 "aliases": aliases,
+                "privacy": privacy,
             }
-        return {**summary, "found": True, "tags": tags, "aliases": aliases}
+        return {**summary, "found": True, "tags": tags, "aliases": aliases, "privacy": privacy}
 
 
 @app.get("/api/renames")

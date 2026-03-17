@@ -104,6 +104,7 @@ async function loadHome() {
         ["You ever unfollowed", s.ever_you_unfollowed ?? 0, "you_unfollowed_ever"],
         ["You still follow them after they unfollowed you", s.still_follow_after_drop ?? 0, "still_follow_after_drop"],
         ["⚠ Tagged disabled", s.disabled_tagged ?? 0, "disabled"],
+        ["✕ Tagged unavailable", s.unavailable_tagged ?? 0, "unavailable"],
       ];
       for (const [label, value, listKind] of stats) {
         const div = document.createElement("div");
@@ -142,6 +143,7 @@ async function loadHome() {
     $("#count-want_remove").textContent = data.bucket_counts.want_remove;
     $("#count-watchlist").textContent = data.bucket_counts.watchlist;
     $("#count-disabled").textContent = data.bucket_counts.disabled ?? 0;
+    $("#count-unavailable").textContent = data.bucket_counts.unavailable ?? 0;
   } catch (e) {
     console.error(e);
     toast(`Couldn't load home: ${e.message}`);
@@ -351,6 +353,7 @@ function renderLookup(data) {
       ${data.follow_runs_count > 1 ? `<div class="warn-banner">⚠ You've followed this person <strong>${data.follow_runs_count} separate times</strong> across history.</div>` : ""}
       ${data.follower_runs_count > 1 ? `<div class="warn-banner">⚠ They've followed you <strong>${data.follower_runs_count} separate times</strong> across history.</div>` : ""}
       <div class="facts">
+        ${data.privacy && data.privacy !== "unknown" ? `<div class="row"><span class="key">Privacy</span><span>${data.privacy === "likely_private" ? "🔒 likely private" : "🌐 likely public"}</span></div>` : ""}
         <div class="row"><span class="key">Ever followed</span><span>${data.ever_followed ? `yes (${data.follow_runs_count}× run${data.follow_runs_count === 1 ? "" : "s"})` : "no"}</span></div>
         <div class="row"><span class="key">Ever requested</span><span>${data.ever_requested ? "yes" : "no"}</span></div>
         <div class="row"><span class="key">Ever followed you</span><span>${data.ever_was_follower ? `yes (${data.follower_runs_count}× run${data.follower_runs_count === 1 ? "" : "s"})` : "no"}</span></div>
@@ -371,6 +374,7 @@ function renderTagToggles(tags) {
       <button class="tag-toggle ${tags.want_remove ? "active" : ""}" data-flag="want_remove">✦ Want-remove</button>
       <button class="tag-toggle ${tags.watchlist ? "active" : ""}" data-flag="watchlist">↺ Wait-back</button>
       <button class="tag-toggle ${tags.disabled ? "active" : ""}" data-flag="disabled">⚠ Disabled</button>
+      <button class="tag-toggle ${tags.unavailable ? "active" : ""}" data-flag="unavailable">✕ Unavailable</button>
     </div>
   `;
 }
@@ -522,6 +526,7 @@ const LIST_KINDS = [
   ["want_remove", "✦ Want to remove"],
   ["watchlist", "↺ Wait-back"],
   ["disabled", "⚠ Disabled"],
+  ["unavailable", "✕ Unavailable (page not found)"],
 ];
 
 const select = $("#list-kind");
@@ -633,6 +638,8 @@ function renderListRow(item) {
   if (item.mutual_since_at) parts.push(`mutual since ${escapeHtml(fmtDate(item.mutual_since_at))}`);
   if (item.pending_since_at) parts.push(`requested ${escapeHtml(fmtDate(item.pending_since_at))}`);
   if (item.history_status === "re-engaged") parts.push(`<span class="info-tag">re-engaged</span>`);
+  if (item.privacy === "likely_private") parts.push(`<span class="privacy-tag privacy-private">🔒 likely private</span>`);
+  else if (item.privacy === "likely_public") parts.push(`<span class="privacy-tag privacy-public">🌐 likely public</span>`);
   if (item.aliases && item.aliases.length > 1) parts.push(`<span class="info-tag">renamed: ${escapeHtml(item.aliases.join(' → '))}</span>`);
   if (item.ever_followed_you === false) parts.push(`<span class="never">never followed back</span>`);
   else if (item.ever_followed_you === true && item.last_followed_you_at) parts.push(`stopped following you on ${escapeHtml(fmtDate(item.last_followed_you_at))}`);
@@ -667,6 +674,7 @@ function renderListRow(item) {
     ${tagBtn("want_remove", "✦", item.want_remove)}
     ${tagBtn("watchlist", "↺", item.watchlist)}
     ${tagBtn("disabled", "⚠", item.disabled)}
+    ${tagBtn("unavailable", "✕", item.unavailable)}
   `;
 
   return `
@@ -767,14 +775,14 @@ async function loadLists() {
             toast(`${flag.replace("_", " ")} ${result[flag] ? "added" : "removed"}`);
             loadHome();
             const currentKind = select.value;
-            const BUCKETS = ["favorite", "want_remove", "watchlist", "disabled"];
+            const BUCKETS = ["favorite", "want_remove", "watchlist", "disabled", "unavailable"];
             // If we just removed from the bucket we're viewing, drop the row.
             if (!result[flag] && currentKind === flag) {
               row.remove();
             }
-            // If we just tagged disabled ON while viewing a non-bucket list, drop the row
-            // (it's now excluded from non-bucket lists by the server).
-            if (flag === "disabled" && result.disabled && !BUCKETS.includes(currentKind)) {
+            // If we just tagged disabled or unavailable ON while viewing a non-bucket
+            // list, drop the row (server excludes these from non-bucket lists).
+            if ((flag === "disabled" || flag === "unavailable") && result[flag] && !BUCKETS.includes(currentKind)) {
               row.remove();
             }
           } catch (err) {

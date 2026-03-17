@@ -36,13 +36,16 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
     favorites = {row["username"] for row in list_with_flag(conn, "favorite")}
 
     diff_alerts: list[dict] = []
-    disabled_tagged = {r["username"] for r in list_with_flag(conn, "disabled")}
+    suppressed = (
+        {r["username"] for r in list_with_flag(conn, "disabled")}
+        | {r["username"] for r in list_with_flag(conn, "unavailable")}
+    )
     if previous is not None:
         prev = snapshot_data(conn, previous)
         curr = snapshot_data(conn, latest)
 
-        lost_followers = (prev.followers - curr.followers) - disabled_tagged  # they unfollowed you
-        left_following = (prev.following - curr.following) - disabled_tagged
+        lost_followers = (prev.followers - curr.followers) - suppressed  # they unfollowed you
+        left_following = (prev.following - curr.following) - suppressed
         # Same-snapshot rule: if it's not in the new snapshot's recently_unfollowed,
         # the user didn't initiate the unfollow — assume they removed you.
         they_removed_you = left_following - curr.recently_unfollowed
@@ -124,24 +127,28 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
             "privacy": status,
         })
 
-    # Stateful: tagged-as-disabled accounts that show real proof-of-life.
-    # The only reliable signal is them appearing in YOUR followers (they actively
-    # follow you back, so their account must be alive). `curr.following` and the
-    # outgoing `pending` are both preserved by Instagram even after deactivation,
-    # so they don't count as reactivation evidence.
-    to_unflag: list[str] = []
-    for entry in list_with_flag(conn, "disabled"):
-        u = entry["username"]
-        if u in curr.followers:
-            stateful.append({
-                "kind": "disabled_reactivated",
-                "username": u,
-                "severity": "high",
-                "message": f"⚠ {u} (tagged disabled) is back online — flag cleared.",
-            })
-            to_unflag.append(u)
-    for u in to_unflag:
-        set_flag(conn, u, "disabled", False)
+    # Stateful: tagged-as-disabled or tagged-as-unavailable accounts that show
+    # real proof-of-life. The only reliable signal is them appearing in YOUR
+    # followers (they actively follow you back, so their account must be alive).
+    # `curr.following` and outgoing `pending` are both preserved by Instagram
+    # even after deactivation, so they don't count as reactivation evidence.
+    for flag, icon, label in (
+        ("disabled", "⚠", "disabled"),
+        ("unavailable", "✕", "unavailable"),
+    ):
+        to_unflag: list[str] = []
+        for entry in list_with_flag(conn, flag):
+            u = entry["username"]
+            if u in curr.followers:
+                stateful.append({
+                    "kind": f"{flag}_reactivated",
+                    "username": u,
+                    "severity": "high",
+                    "message": f"{icon} {u} (tagged {label}) is back online — flag cleared.",
+                })
+                to_unflag.append(u)
+        for u in to_unflag:
+            set_flag(conn, u, flag, False)
 
     return {
         "diff": diff_alerts,
