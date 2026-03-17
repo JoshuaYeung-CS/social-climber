@@ -175,7 +175,7 @@ async def import_export(
             import_target = Path(folder_path).expanduser().resolve()
 
         with db_conn() as conn:
-            results = ingest_mod.import_path(conn, import_target, label)
+            run = ingest_mod.import_path(conn, import_target, label)
 
         return {
             "imports": [
@@ -185,8 +185,18 @@ async def import_export(
                     "counts": r.counts,
                     "missing_files": r.missing_files,
                 }
-                for r in results
-            ]
+                for r in run.imports
+            ],
+            "skipped": [
+                {
+                    "label": s.label,
+                    "reason": s.reason,
+                    "message": s.message,
+                    "existing_snapshot_id": s.existing_snapshot_id,
+                    "existing_label": s.existing_label,
+                }
+                for s in run.skipped
+            ],
         }
     finally:
         if cleanup is not None and cleanup.exists():

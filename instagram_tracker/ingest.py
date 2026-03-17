@@ -50,7 +50,10 @@ def _clean_label_from_name(name: str) -> str | None:
 
     return None
 
-from .db import utc_now_iso
+from .db import (
+    compute_content_hash_from_rows,
+    utc_now_iso,
+)
 from .parsers import (
     Row,
     parse_followers,
@@ -66,6 +69,44 @@ class ImportResult:
     label: str
     counts: dict[str, int]
     missing_files: list[str]
+
+
+@dataclass
+class SkippedImport:
+    label: str
+    reason: str           # "duplicate" | "out_of_order"
+    message: str
+    existing_snapshot_id: int | None = None
+    existing_label: str | None = None
+
+
+def _label_to_sortable(label: str | None) -> str | None:
+    """Turn a label like '2026-04-28_15-50-49' into '2026-04-28T15:50:49'
+    for chronological comparison. Returns None if the label is unparseable —
+    callers should fall back to created_at."""
+    if not label:
+        return None
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})", label)
+    if m:
+        y, mo, d, hh, mm, ss = m.groups()
+        return f"{y}-{mo}-{d}T{hh}:{mm}:{ss}"
+    return None
+
+
+def _latest_taken_at(conn: sqlite3.Connection) -> tuple[str | None, str | None]:
+    """Returns (sortable_taken_at, displayable_label) for the chronologically
+    latest snapshot already in the DB. None if no snapshots exist."""
+    rows = conn.execute("SELECT label, created_at FROM snapshots").fetchall()
+    if not rows:
+        return (None, None)
+    best_key: str | None = None
+    best_label: str | None = None
+    for r in rows:
+        key = _label_to_sortable(r["label"]) or r["created_at"]
+        if best_key is None or key > best_key:
+            best_key = key
+            best_label = r["label"] or r["created_at"]
+    return (best_key, best_label)
 
 
 def _find_ff_dirs(root: Path) -> list[Path]:
@@ -134,7 +175,7 @@ def _ingest_one(
     ff_dir: Path,
     label: str,
     source_path: str,
-) -> ImportResult:
+) -> ImportResult | SkippedImport:
     missing_files: list[str] = []
 
     follower_files = sorted(ff_dir.glob("followers_*.json"))
@@ -175,15 +216,57 @@ def _ingest_one(
     if not any([follower_rows, following_rows, pending_rows, recent_rows, unfollowed_rows]):
         raise ValueError(f"No usable Instagram export data found in: {ff_dir}")
 
+    merged, sources = _merge_pending(pending_rows, recent_rows)
+
+    # Reject duplicates: the same Instagram export imported twice produces an
+    # identical username set across all four tables, regardless of filename.
+    content_hash = compute_content_hash_from_rows(
+        follower_rows, following_rows, merged, unfollowed_rows
+    )
+    dup = conn.execute(
+        "SELECT id, label FROM snapshots WHERE content_hash = ? LIMIT 1",
+        (content_hash,),
+    ).fetchone()
+    if dup is not None:
+        return SkippedImport(
+            label=label,
+            reason="duplicate",
+            message=(
+                f"Duplicate of snapshot #{int(dup['id'])} "
+                f"({dup['label'] or 'unlabeled'}) — same followers, following, "
+                "pending, and recently-unfollowed sets. Nothing to import."
+            ),
+            existing_snapshot_id=int(dup["id"]),
+            existing_label=dup["label"],
+        )
+
+    # Reject out-of-order imports: chronological queries (rename/diff detection,
+    # cumulative counts) walk snapshots by id ASC, so an older export inserted
+    # after a newer one would be placed at the wrong end of the timeline and
+    # corrupt those queries. Tell the user to delete the newer snapshots first
+    # if they really need to backfill an older export.
+    new_key = _label_to_sortable(label) or utc_now_iso()
+    latest_key, latest_label = _latest_taken_at(conn)
+    if latest_key is not None and new_key < latest_key:
+        return SkippedImport(
+            label=label,
+            reason="out_of_order",
+            message=(
+                f"This export ({label}) is older than the latest snapshot already "
+                f"imported ({latest_label}). Out-of-order inserts would corrupt "
+                "the diff/rename history. Delete the newer snapshot(s) first if "
+                "you really need to backfill this one."
+            ),
+        )
+
     cur = conn.execute(
-        "INSERT INTO snapshots (created_at, label, source_path) VALUES (?, ?, ?)",
-        (utc_now_iso(), label, source_path),
+        "INSERT INTO snapshots (created_at, label, source_path, content_hash) VALUES (?, ?, ?, ?)",
+        (utc_now_iso(), label, source_path, content_hash),
     )
     snapshot_id = int(cur.lastrowid)
 
     _bulk_insert(conn, "followers", snapshot_id, follower_rows)
     _bulk_insert(conn, "following", snapshot_id, following_rows)
-    merged, sources = _merge_pending(pending_rows, recent_rows)
     _bulk_insert_pending(conn, snapshot_id, merged, sources)
     _bulk_insert(conn, "recently_unfollowed", snapshot_id, unfollowed_rows)
     conn.commit()
@@ -211,11 +294,17 @@ def _label_from_path(path: Path) -> str:
     return re.sub(r"-\d{8}T\d{6}Z-\d+-\d+$", "", name) or path.name
 
 
+@dataclass
+class ImportRun:
+    imports: list[ImportResult]
+    skipped: list[SkippedImport]
+
+
 def import_path(
     conn: sqlite3.Connection,
     path: Path,
     label: str | None = None,
-) -> list[ImportResult]:
+) -> ImportRun:
     """Top-level entry point. `path` may be a folder, a zip, or a single ff_dir."""
     if not path.exists():
         raise ValueError(f"Path not found: {path}")
@@ -242,7 +331,8 @@ def import_path(
                     "Could not find an Instagram 'followers_and_following' folder inside the input."
                 )
 
-        results: list[ImportResult] = []
+        imports: list[ImportResult] = []
+        skipped: list[SkippedImport] = []
         used_labels: set[str] = set()
         for ff in ff_dirs:
             base_label = label or _label_from_path(path) if len(ff_dirs) == 1 else _label_from_path(ff.parent)
@@ -253,8 +343,12 @@ def import_path(
                 unique = f"{base_label}_{i}"
                 i += 1
             used_labels.add(unique)
-            results.append(_ingest_one(conn, ff, unique, str(path)))
-        return results
+            outcome = _ingest_one(conn, ff, unique, str(path))
+            if isinstance(outcome, SkippedImport):
+                skipped.append(outcome)
+            else:
+                imports.append(outcome)
+        return ImportRun(imports=imports, skipped=skipped)
     finally:
         if cleanup_dir is not None and cleanup_dir.exists():
             shutil.rmtree(cleanup_dir, ignore_errors=True)

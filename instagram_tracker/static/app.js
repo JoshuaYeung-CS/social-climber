@@ -189,12 +189,24 @@ async function doImport(file) {
       }
       return line;
     });
+    for (const s of (result.skipped || [])) {
+      const icon = s.reason === "duplicate" ? "↩" : "⚠";
+      lines.push(`<div class="warn-box">${icon} Skipped ${escapeHtml(cleanLabel(s.label))}: ${escapeHtml(s.message)}</div>`);
+    }
     status.innerHTML = lines.join("");
     await loadHome();
-    const warned = result.imports.some((r) => r.missing_files && r.missing_files.length);
-    toast(warned
-      ? `Imported, but Instagram dropped some files — see warning`
-      : `Imported ${result.imports.length} snapshot${result.imports.length === 1 ? "" : "s"}`);
+    const imported = result.imports.length;
+    const skipped = (result.skipped || []).length;
+    if (imported === 0 && skipped > 0) {
+      const reason = result.skipped[0].reason === "duplicate" ? "duplicate" : "older than existing snapshots";
+      toast(`Skipped — ${reason}`);
+    } else {
+      const warned = result.imports.some((r) => r.missing_files && r.missing_files.length);
+      const skipNote = skipped ? `, ${skipped} skipped` : "";
+      toast(warned
+        ? `Imported, but Instagram dropped some files${skipNote}`
+        : `Imported ${imported} snapshot${imported === 1 ? "" : "s"}${skipNote}`);
+    }
   } catch (e) {
     status.innerHTML = `<div class="err">✗ ${escapeHtml(e.message)}</div>`;
   }
