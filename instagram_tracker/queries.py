@@ -365,60 +365,34 @@ def username_alias_map(conn: sqlite3.Connection) -> dict[str, list[str]]:
     return out
 
 
-def detect_deactivations(conn: sqlite3.Connection) -> dict[str, dict]:
-    """For each user with a gap in their followers/following/pending history, classify
-    the gap as a deactivation (timestamp preserved across the gap = same underlying
-    follow relationship survived) or a reengagement (timestamp changed = explicit new
-    follow event from one side).
-
-    Returns dict: username -> {
-        likely_deactivated: bool,    # has at least one deactivation gap, no reengagement
-        likely_reengaged: bool,      # has at least one reengagement gap
-        deactivation_evidence: [...],
-        reengagement_evidence: [...],
-    }
-    """
+def detect_reengagements(conn: sqlite3.Connection) -> set[str]:
+    """Returns the set of usernames whose follow timestamp changed across a gap in
+    their followers/following/pending history — i.e. they left and explicitly
+    re-followed (Instagram assigns a new timestamp on a fresh follow). Used to
+    surface a "re-engaged" tag on rows."""
     all_snaps = sorted(int(r["id"]) for r in conn.execute("SELECT id FROM snapshots").fetchall())
     if not all_snaps:
-        return {}
+        return set()
     snap_index = {sid: i for i, sid in enumerate(all_snaps)}
 
-    out: dict[str, dict] = {}
-
+    out: set[str] = set()
     for table in ("followers", "following", "pending_follow_requests"):
         rows = conn.execute(
             f"SELECT username, snapshot_id, export_timestamp FROM {table} "
             f"WHERE export_timestamp IS NOT NULL ORDER BY username, snapshot_id"
         ).fetchall()
-
         per_user: dict[str, list[tuple[int, int]]] = {}
         for r in rows:
             per_user.setdefault(r["username"], []).append(
                 (int(r["snapshot_id"]), int(r["export_timestamp"]))
             )
-
         for username, history in per_user.items():
-            sids = [s for s, _ in history]
-            ts_by_sid = {s: ts for s, ts in history}
-            for i in range(1, len(sids)):
-                if snap_index[sids[i]] - snap_index[sids[i - 1]] > 1:
-                    record = out.setdefault(
-                        username,
-                        {"deactivation_evidence": [], "reengagement_evidence": []},
-                    )
-                    if ts_by_sid[sids[i]] == ts_by_sid[sids[i - 1]]:
-                        record["deactivation_evidence"].append(
-                            f"{table}: gap snap {sids[i-1]}->{sids[i]}"
-                        )
-                    else:
-                        record["reengagement_evidence"].append(
-                            f"{table}: gap snap {sids[i-1]}->{sids[i]} (ts changed)"
-                        )
-
-    for username, info in out.items():
-        info["likely_deactivated"] = bool(info["deactivation_evidence"]) and not info["reengagement_evidence"]
-        info["likely_reengaged"] = bool(info["reengagement_evidence"])
-
+            for i in range(1, len(history)):
+                prev_sid, prev_ts = history[i - 1]
+                curr_sid, curr_ts = history[i]
+                if snap_index[curr_sid] - snap_index[prev_sid] > 1 and curr_ts != prev_ts:
+                    out.add(username)
+                    break
     return out
 
 

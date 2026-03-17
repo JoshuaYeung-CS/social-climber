@@ -84,21 +84,6 @@ def home():
             ever_unfollowed_you = {u for u in ever_unfollowed_you if not aliases_active(u, curr.followers)}
             ever_removed = {u for u in ever_removed if not aliases_active(u, curr.following)}
 
-            # Strip deactivations: if they "left" but their timestamp was preserved when
-            # they came back, that wasn't a real unfollow/removal — it was deactivation.
-            deact_map = q.detect_deactivations(conn)
-            deactivated_returned: set[str] = set()
-            for u in list(ever_unfollowed_you):
-                info = deact_map.get(u)
-                if info and info["likely_deactivated"] and u in curr.followers:
-                    deactivated_returned.add(u)
-                    ever_unfollowed_you.discard(u)
-            for u in list(ever_removed):
-                info = deact_map.get(u)
-                if info and info["likely_deactivated"] and u in curr.following:
-                    deactivated_returned.add(u)
-                    ever_removed.discard(u)
-
             # Strip disabled-tagged accounts from these counts too.
             disabled_tagged_home = {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
             ever_unfollowed_you -= disabled_tagged_home
@@ -119,7 +104,6 @@ def home():
                 "ever_removed_you_as_follower": len(ever_removed),
                 "ever_you_unfollowed": len(ever_self),
                 "still_follow_after_drop": len(still_follow_them),
-                "deactivated_then_returned": len(deactivated_returned),
                 "disabled_tagged": len(tags_mod.list_with_flag(conn, "disabled")),
             }
 
@@ -302,27 +286,8 @@ def get_lists(snapshot_id: int | None = None):
         ever_removed_you = {u for u in ever_removed_you if not aliases_active(u, sd.following)}
         ever_unfollowed_you = {u for u in ever_unfollowed_you if not aliases_active(u, sd.followers)}
 
-        # Detect deactivations — same-timestamp gaps in followers/following/pending history.
-        deact_map = q.detect_deactivations(conn)
-
-        # Anyone whose disappearance was actually a deactivation (timestamp preserved on
-        # return) shouldn't count as "they unfollowed/removed you". Move them to a
-        # dedicated list instead.
-        deactivated_then_returned: set[str] = set()
-        for u in list(ever_unfollowed_you):
-            info = deact_map.get(u)
-            if info and info["likely_deactivated"] and u in sd.followers:
-                deactivated_then_returned.add(u)
-                ever_unfollowed_you.discard(u)
-        for u in list(ever_removed_you):
-            info = deact_map.get(u)
-            if info and info["likely_deactivated"] and u in sd.following:
-                deactivated_then_returned.add(u)
-                ever_removed_you.discard(u)
-
         sections["ever_unfollowed_you"] = sorted(ever_unfollowed_you)
         sections["ever_removed_you_as_follower"] = sorted(ever_removed_you)
-        sections["deactivated_then_returned"] = sorted(deactivated_then_returned)
         # Subset of ever_unfollowed_you that you still follow.
         sections["still_follow_after_drop"] = sorted(ever_unfollowed_you & sd.following)
 
@@ -416,12 +381,7 @@ def get_lists(snapshot_id: int | None = None):
 
         flagged = tags_mod.all_flagged_usernames(conn)
 
-        # deact_map already computed above where filters were applied; if we reach this
-        # block before that's set (e.g. caller order changes), recompute defensively.
-        try:
-            deact_map  # type: ignore[name-defined]
-        except NameError:
-            deact_map = q.detect_deactivations(conn)
+        reengaged = q.detect_reengagements(conn)
 
         def relationship(u: str) -> tuple[str, str]:
             in_fol = u in sd.following
@@ -487,13 +447,8 @@ def get_lists(snapshot_id: int | None = None):
                 "relationship": rel,
                 "relationship_kind": rel_kind,
             }
-            # Deactivation / reengagement evidence.
-            d_info = deact_map.get(u)
-            if d_info:
-                if d_info["likely_deactivated"]:
-                    row["history_status"] = "deactivated_returned"
-                elif d_info["likely_reengaged"]:
-                    row["history_status"] = "re-engaged"
+            if u in reengaged:
+                row["history_status"] = "re-engaged"
             # Aliases (rename chain).
             chain = alias_map.get(u)
             if chain:

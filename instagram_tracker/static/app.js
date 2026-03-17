@@ -103,7 +103,6 @@ async function loadHome() {
         ["Ever removed you as follower", s.ever_removed_you_as_follower ?? 0, "ever_removed_you_as_follower"],
         ["You ever unfollowed", s.ever_you_unfollowed ?? 0, "you_unfollowed_ever"],
         ["You still follow them after they unfollowed you", s.still_follow_after_drop ?? 0, "still_follow_after_drop"],
-        ["Deactivated & returned", s.deactivated_then_returned ?? 0, "deactivated_then_returned"],
         ["⚠ Tagged disabled", s.disabled_tagged ?? 0, "disabled"],
       ];
       for (const [label, value, listKind] of stats) {
@@ -505,7 +504,6 @@ const LIST_KINDS = [
   ["unfollowers_you_still_follow", "Unfollowers you still follow (since last import)"],
   ["still_follow_after_drop", "You still follow people who unfollowed you"],
   ["renamed", "Renamed accounts"],
-  ["deactivated_then_returned", "Deactivated then returned"],
   ["recent_follow_requests", "Recent follow requests"],
   ["recently_unfollowed", "Recently unfollowed by you"],
   ["favorite", "★ Favorites"],
@@ -525,10 +523,7 @@ function buildListKindOptions() {
   });
 }
 buildListKindOptions();
-select.addEventListener("change", () => {
-  filterInput.value = "";
-  loadLists();
-});
+select.addEventListener("change", loadLists);
 
 const sortSelect = $("#list-sort");
 sortSelect.addEventListener("change", loadLists);
@@ -625,8 +620,7 @@ function renderListRow(item) {
   if (item.followed_at) parts.push(`you followed ${escapeHtml(fmtDate(item.followed_at))}`);
   if (item.mutual_since_at) parts.push(`mutual since ${escapeHtml(fmtDate(item.mutual_since_at))}`);
   if (item.pending_since_at) parts.push(`requested ${escapeHtml(fmtDate(item.pending_since_at))}`);
-  if (item.history_status === "deactivated_returned") parts.push(`<span class="info-tag">deactivated & returned</span>`);
-  else if (item.history_status === "re-engaged") parts.push(`<span class="info-tag">re-engaged</span>`);
+  if (item.history_status === "re-engaged") parts.push(`<span class="info-tag">re-engaged</span>`);
   if (item.aliases && item.aliases.length > 1) parts.push(`<span class="info-tag">renamed: ${escapeHtml(item.aliases.join(' → '))}</span>`);
   if (item.ever_followed_you === false) parts.push(`<span class="never">never followed back</span>`);
   else if (item.ever_followed_you === true && item.last_followed_you_at) parts.push(`stopped following you on ${escapeHtml(fmtDate(item.last_followed_you_at))}`);
@@ -722,36 +716,6 @@ function fmtDate(iso) {
 // kept for backward compat where called from older code paths
 const fmtDaysSince = fmtDuration;
 
-// Live search filter for the Lists view. Hides rows whose username doesn't
-// match the query (case-insensitive substring). Re-applied after every list
-// load so switching list-kind keeps the filter in sync.
-const filterInput = $("#list-filter");
-filterInput.addEventListener("input", applyListFilter);
-function applyListFilter() {
-  const q = (filterInput.value || "").toLowerCase().trim();
-  const out = $("#list-output");
-  const rows = $$(".list-row", out);
-  let visible = 0;
-  for (const row of rows) {
-    const u = (row.dataset.username || "").toLowerCase();
-    const show = q === "" || u.includes(q);
-    row.style.display = show ? "" : "none";
-    if (show) visible++;
-  }
-  // Show count line at top if filtering.
-  let counter = out.querySelector(".filter-count");
-  if (q && rows.length > 0) {
-    if (!counter) {
-      counter = document.createElement("div");
-      counter.className = "filter-count muted small";
-      out.insertBefore(counter, out.firstChild);
-    }
-    counter.textContent = `Showing ${visible} of ${rows.length}`;
-  } else if (counter) {
-    counter.remove();
-  }
-}
-
 async function loadLists() {
   try {
     const data = await api.get("/api/lists");
@@ -769,7 +733,6 @@ async function loadLists() {
     let items = sections[kind] || [];
     if (items.length === 0) {
       out.innerHTML = `<div class="muted">(none — 0 entries)</div>`;
-      applyListFilter();
       return;
     }
 
@@ -779,7 +742,6 @@ async function loadLists() {
     }
 
     out.innerHTML = items.map(renderListRow).join("");
-    applyListFilter();
     $$(".list-row", out).forEach((row) => {
       row.addEventListener("click", () => openAccountModal(row.dataset.username));
       $$(".row-tag", row).forEach((btn) => {

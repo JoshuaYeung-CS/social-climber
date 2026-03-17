@@ -265,21 +265,8 @@ code {
   margin-bottom: 12px;
 }
 .full-select.inline { width: auto; flex: 1; margin-bottom: 0; }
-.sort-row { display: flex; align-items: center; gap: 8px; margin: -4px 0 12px; }
+.sort-row { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
 .small { font-size: 12px; }
-.list-filter {
-  width: 100%;
-  padding: 10px;
-  font-size: 15px;
-  background: var(--bg-elev-2);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  margin-bottom: 8px;
-  -webkit-appearance: none;
-}
-.list-filter:focus { outline: none; border-color: var(--accent); }
-.filter-count { padding: 4px 2px 8px; }
 .list-row .timing {
   font-size: 12px;
   color: var(--muted);
@@ -361,7 +348,7 @@ code {
 .list-row .username-block { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
 .list-row .username-block .sub { font-size: 11px; color: var(--muted); }
 
-.list-output { display: flex; flex-direction: column; gap: 6px; max-height: 70vh; overflow-y: auto; }
+.list-output { display: flex; flex-direction: column; gap: 6px; }
 .list-row {
   display: flex;
   align-items: center;
