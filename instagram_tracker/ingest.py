@@ -294,6 +294,19 @@ def _label_from_path(path: Path) -> str:
     return re.sub(r"-\d{8}T\d{6}Z-\d+-\d+$", "", name) or path.name
 
 
+def _label_from_export_dir(ff: Path) -> str | None:
+    """Walk up from the followers_and_following dir looking for an ancestor
+    whose folder name encodes a snapshot timestamp. Drive-of-many-Metas zips
+    contain multiple `meta-YYYY-Mon-DD-HH-MM-SS/.../followers_and_following`
+    siblings; this is what distinguishes them. The immediate parent
+    (`connections/`) never has a date, so we have to walk further."""
+    for p in ff.parents:
+        c = _clean_label_from_name(p.name)
+        if c:
+            return c
+    return None
+
+
 @dataclass
 class ImportRun:
     imports: list[ImportResult]
@@ -331,12 +344,29 @@ def import_path(
                     "Could not find an Instagram 'followers_and_following' folder inside the input."
                 )
 
+        # Resolve a label per ff_dir up-front so we can sort chronologically
+        # before inserting. For a single Meta zip the parent chain has no
+        # parseable timestamp, so we fall back to the user-supplied or
+        # input-path label. For a Drive zip with many Metas, every ff has its
+        # own meta-... ancestor, giving each snapshot a real timestamp.
+        single = len(ff_dirs) == 1
+        labeled: list[tuple[str, Path]] = []
+        for ff in ff_dirs:
+            inferred = _label_from_export_dir(ff)
+            if single:
+                resolved = label or inferred or _label_from_path(path) or "snapshot"
+            else:
+                resolved = inferred or _label_from_path(path) or "snapshot"
+            labeled.append((resolved, ff))
+
+        # Sort chronologically by label (parseable labels are 'YYYY-MM-DD_HH-MM-SS'
+        # which sort lexicographically as ISO). Unparseable labels fall to the end.
+        labeled.sort(key=lambda x: (_label_to_sortable(x[0]) is None, _label_to_sortable(x[0]) or x[0]))
+
         imports: list[ImportResult] = []
         skipped: list[SkippedImport] = []
         used_labels: set[str] = set()
-        for ff in ff_dirs:
-            base_label = label or _label_from_path(path) if len(ff_dirs) == 1 else _label_from_path(ff.parent)
-            base_label = base_label or "snapshot"
+        for base_label, ff in labeled:
             unique = base_label
             i = 2
             while unique in used_labels:
