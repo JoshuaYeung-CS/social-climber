@@ -551,77 +551,42 @@ function goToList(kind, push = true) {
     buildListKindOptions();
   }
   select.value = kind;
-  if (kind === "not_following_you_back") sortSelect.value = "recent_stop";
-  else if (kind === "you_unfollowed" || kind === "they_unfollowed_you" || kind === "they_removed_you_as_follower") sortSelect.value = "alpha";
-  else sortSelect.value = "default";
+  // Default to newest-first across the board; bucket lists default alphabetical
+  // so favorites/want-remove/etc. read like a roster.
+  const BUCKET_KINDS = new Set(["favorite", "want_remove", "watchlist", "disabled", "unavailable"]);
+  sortSelect.value = BUCKET_KINDS.has(kind) ? "alphabetical" : "reverse_chronological";
   if (push) {
     history.pushState({ view: "lists", listKind: kind }, "", `#lists/${kind}`);
   }
   loadLists();
 }
 
+// Pick the "when did this happen" date for a row, used for chronological sorts.
+// Order of preference: when you became mutual > when you started following them
+// > when they last followed you > when the pending request was sent. Most rows
+// have at least one. Returns "" so missing values sort to the end naturally.
+function rowDateKey(r) {
+  return r.mutual_since_at || r.followed_at || r.last_followed_you_at || r.pending_since_at || "";
+}
+
 function applySort(items, mode) {
   const arr = items.slice();
-  const N = (v, fallback) => (v == null ? fallback : v);
-  const STATUS_ORDER = { good: 0, warn: 1, info: 2, muted: 3 };
-  if (mode === "alpha") {
+  if (mode === "alphabetical") {
     arr.sort((a, b) => a.username.localeCompare(b.username));
-  } else if (mode === "status") {
-    arr.sort((a, b) => {
-      const ai = STATUS_ORDER[a.relationship_kind] ?? 9;
-      const bi = STATUS_ORDER[b.relationship_kind] ?? 9;
-      return ai - bi || a.username.localeCompare(b.username);
-    });
-  } else if (mode === "days_desc") {
-    arr.sort((a, b) => N(b.days_since, -1) - N(a.days_since, -1) || a.username.localeCompare(b.username));
-  } else if (mode === "days_asc") {
-    arr.sort((a, b) => N(a.days_since, Number.MAX_SAFE_INTEGER) - N(b.days_since, Number.MAX_SAFE_INTEGER) || a.username.localeCompare(b.username));
-  } else if (mode === "mutual_oldest") {
-    arr.sort((a, b) => N(b.mutual_since_days_ago, -1) - N(a.mutual_since_days_ago, -1) || a.username.localeCompare(b.username));
-  } else if (mode === "mutual_recent") {
-    arr.sort((a, b) => N(a.mutual_since_days_ago, Number.MAX_SAFE_INTEGER) - N(b.mutual_since_days_ago, Number.MAX_SAFE_INTEGER) || a.username.localeCompare(b.username));
-  } else if (mode === "pending_oldest") {
-    arr.sort((a, b) => N(b.pending_since_days_ago, -1) - N(a.pending_since_days_ago, -1) || a.username.localeCompare(b.username));
-  } else if (mode === "pending_recent") {
-    arr.sort((a, b) => N(a.pending_since_days_ago, Number.MAX_SAFE_INTEGER) - N(b.pending_since_days_ago, Number.MAX_SAFE_INTEGER) || a.username.localeCompare(b.username));
-  } else if (mode === "recent_stop") {
-    // Mix never-followed-back and stopped together, sorted by most-recent event first
-    // (reverse chronological). >1 year events drop to the bottom, still mixed.
-    const eventDaysAgo = (r) =>
-      r.ever_followed_you === false ? r.days_since : r.last_followed_you_days_ago;
-    arr.sort((a, b) => {
-      const aE = eventDaysAgo(a);
-      const bE = eventDaysAgo(b);
-      const aStale = (aE ?? 0) >= 365 ? 1 : 0;
-      const bStale = (bE ?? 0) >= 365 ? 1 : 0;
-      if (aStale !== bStale) return aStale - bStale;
-      return N(aE, Number.MAX_SAFE_INTEGER) - N(bE, Number.MAX_SAFE_INTEGER)
-        || a.username.localeCompare(b.username);
-    });
-  } else if (mode === "oldest_stop") {
-    arr.sort((a, b) => {
-      const aNever = a.ever_followed_you === false;
-      const bNever = b.ever_followed_you === false;
-      if (aNever !== bNever) return aNever ? 1 : -1;
-      if (aNever) return N(b.days_since, -1) - N(a.days_since, -1) || a.username.localeCompare(b.username);
-      return N(b.last_followed_you_days_ago, -1) - N(a.last_followed_you_days_ago, -1)
-           || a.username.localeCompare(b.username);
-    });
-  } else if (mode === "never_first") {
-    // Never-followed-back at top: < 1 year first (oldest within), then >= 1 year (oldest within).
-    arr.sort((a, b) => {
-      const aNever = a.ever_followed_you === false;
-      const bNever = b.ever_followed_you === false;
-      if (aNever !== bNever) return aNever ? -1 : 1;
-      if (aNever) {
-        const aStale = (a.days_since ?? 0) >= 365 ? 1 : 0;
-        const bStale = (b.days_since ?? 0) >= 365 ? 1 : 0;
-        if (aStale !== bStale) return aStale - bStale;
-        return N(b.days_since, -1) - N(a.days_since, -1) || a.username.localeCompare(b.username);
-      }
-      return a.username.localeCompare(b.username);
-    });
+    return arr;
   }
+  // chronological = oldest first; reverse_chronological = newest first.
+  // Rows with no date fall to the end (alphabetized among themselves).
+  const reverse = mode === "reverse_chronological";
+  arr.sort((a, b) => {
+    const ad = rowDateKey(a);
+    const bd = rowDateKey(b);
+    if (!ad && !bd) return a.username.localeCompare(b.username);
+    if (!ad) return 1;
+    if (!bd) return -1;
+    const cmp = reverse ? bd.localeCompare(ad) : ad.localeCompare(bd);
+    return cmp || a.username.localeCompare(b.username);
+  });
   return arr;
 }
 
@@ -757,9 +722,7 @@ async function loadLists() {
     }
 
     sortSelect.parentElement.style.display = "";
-    if (sortSelect.value !== "default") {
-      items = applySort(items, sortSelect.value);
-    }
+    items = applySort(items, sortSelect.value);
 
     out.innerHTML = items.map(renderListRow).join("");
     $$(".list-row", out).forEach((row) => {
