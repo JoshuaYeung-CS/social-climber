@@ -406,6 +406,72 @@ def get_lists(snapshot_id: int | None = None):
             all_usernames.update(usernames)
         privacy_map = q.privacy_status_bulk(conn, list(all_usernames))
 
+        # Per-row chronological dates for history lists. Without these, lists like
+        # "you_unfollowed_ever" had no date fields populated (the user isn't
+        # currently in followers/following) so the chronological sort silently
+        # collapsed to alphabetical. Compute three bulk sid maps once and let
+        # build_row pick the right one per kind:
+        #   last_in_followers_sid  -> when they were last seen following you
+        #   first_in_followers_sid -> when they first started following you
+        #   last_unfollow_sid      -> when you most recently unfollowed them
+        last_in_followers_sid: dict[str, int] = {}
+        first_in_followers_sid: dict[str, int] = {}
+        last_in_following_sid: dict[str, int] = {}
+        last_unfollow_sid: dict[str, int] = {}
+        if all_usernames:
+            placeholders = ",".join("?" * len(all_usernames))
+            params = list(all_usernames)
+            for r in conn.execute(
+                f"SELECT username, MAX(snapshot_id) AS sid FROM followers WHERE username IN ({placeholders}) GROUP BY username",
+                params,
+            ).fetchall():
+                last_in_followers_sid[r["username"]] = int(r["sid"])
+            for r in conn.execute(
+                f"SELECT username, MIN(snapshot_id) AS sid FROM followers WHERE username IN ({placeholders}) GROUP BY username",
+                params,
+            ).fetchall():
+                first_in_followers_sid[r["username"]] = int(r["sid"])
+            for r in conn.execute(
+                f"SELECT username, MAX(snapshot_id) AS sid FROM following WHERE username IN ({placeholders}) GROUP BY username",
+                params,
+            ).fetchall():
+                last_in_following_sid[r["username"]] = int(r["sid"])
+            for r in conn.execute(
+                f"SELECT username, MAX(snapshot_id) AS sid FROM recently_unfollowed WHERE username IN ({placeholders}) GROUP BY username",
+                params,
+            ).fetchall():
+                last_unfollow_sid[r["username"]] = int(r["sid"])
+
+        # "Last followed you" date: kinds where the row is someone who used to
+        # follow you and stopped. Pulls from last_in_followers_sid.
+        LAST_FOLLOWED_YOU_KINDS = {
+            "not_following_you_back",
+            "they_unfollowed_you",
+            "ever_unfollowed_you",
+            "unfollowers_you_still_follow",
+        }
+        # "Last appeared in your following" date: kinds where they used to
+        # appear in your following list and disappeared (i.e. they removed you,
+        # so the entry vanished from your export). Pulls from last_in_following_sid.
+        LAST_IN_FOLLOWING_KINDS = {
+            "they_removed_you_as_follower",
+            "ever_removed_you_as_follower",
+        }
+        # "When you unfollowed them" date: kinds populated from your
+        # recently_unfollowed history.
+        YOU_UNFOLLOWED_KINDS = {
+            "you_unfollowed",
+            "you_unfollowed_ever",
+            "recently_unfollowed",
+        }
+        # "When they first started following you" date: kinds where the natural
+        # chronological ordering is by their entry into your followers list.
+        FIRST_FOLLOWED_YOU_KINDS = {
+            "all_followers",
+            "feeder_accounts",
+            "mutuals",
+        }
+
         def relationship(u: str) -> tuple[str, str]:
             in_fol = u in sd.following
             in_back = u in sd.followers
@@ -523,6 +589,37 @@ def get_lists(snapshot_id: int | None = None):
                     row["last_followed_you_at"] = d.date().isoformat() if d else meta.get("label")
                     row["last_followed_you_days_ago"] = (now - d).days if d else None
                     row["last_followed_you_snapshot_id"] = last_sid
+
+            # History-list dates: populate the chronological field that's actually
+            # meaningful for the row's list, so the sort dropdown does the right
+            # thing instead of falling back to alphabetical.
+            if kind in LAST_FOLLOWED_YOU_KINDS and "last_followed_you_at" not in row:
+                last_sid = last_in_followers_sid.get(u)
+                if last_sid is not None:
+                    meta = snap_meta.get(last_sid, {})
+                    d = parse_label_date(meta.get("label"))
+                    row["last_followed_you_at"] = d.date().isoformat() if d else meta.get("label")
+                    row["last_followed_you_days_ago"] = (now - d).days if d else None
+            if kind in LAST_IN_FOLLOWING_KINDS:
+                last_sid = last_in_following_sid.get(u)
+                if last_sid is not None:
+                    meta = snap_meta.get(last_sid, {})
+                    d = parse_label_date(meta.get("label"))
+                    row["removed_you_at"] = d.date().isoformat() if d else meta.get("label")
+            if kind in YOU_UNFOLLOWED_KINDS:
+                last_sid = last_unfollow_sid.get(u)
+                if last_sid is not None:
+                    meta = snap_meta.get(last_sid, {})
+                    d = parse_label_date(meta.get("label"))
+                    row["unfollowed_by_you_at"] = d.date().isoformat() if d else meta.get("label")
+                    row["unfollowed_by_you_days_ago"] = (now - d).days if d else None
+            if kind in FIRST_FOLLOWED_YOU_KINDS:
+                first_sid = first_in_followers_sid.get(u)
+                if first_sid is not None:
+                    meta = snap_meta.get(first_sid, {})
+                    d = parse_label_date(meta.get("label"))
+                    row["first_followed_you_at"] = d.date().isoformat() if d else meta.get("label")
+
             return row
 
         # Exclude disabled- or unavailable-tagged accounts from every non-bucket list.

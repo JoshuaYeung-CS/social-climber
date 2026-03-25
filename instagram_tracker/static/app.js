@@ -562,11 +562,59 @@ function goToList(kind, push = true) {
 }
 
 // Pick the "when did this happen" date for a row, used for chronological sorts.
-// Order of preference: when you became mutual > when you started following them
-// > when they last followed you > when the pending request was sent. Most rows
-// have at least one. Returns "" so missing values sort to the end naturally.
+// Server populates the right field per list-kind context, so we just walk a
+// fallback chain: most-meaningful event date first. Returns "" so missing
+// values sort to the end naturally.
 function rowDateKey(r) {
-  return r.mutual_since_at || r.followed_at || r.last_followed_you_at || r.pending_since_at || "";
+  return (
+    r.unfollowed_by_you_at ||
+    r.removed_you_at ||
+    r.last_followed_you_at ||
+    r.mutual_since_at ||
+    r.followed_at ||
+    r.first_followed_you_at ||
+    r.pending_since_at ||
+    ""
+  );
+}
+
+// Sort dropdown labels adapt to the list you're on. For unfollow lists the
+// chronological field is the unfollow date; for "who follows me" lists it's
+// the follow-back date; etc. Falling back to generic newest/oldest text when
+// the list doesn't have a clean event verb.
+const SORT_LABELS = {
+  // followed_at-based (you started following them)
+  all_following:     { newest: "Most recently followed",     oldest: "Earliest followed" },
+  unfollowers_you_still_follow: { newest: "Most recently followed",     oldest: "Earliest followed" },
+  still_follow_after_drop:      { newest: "Most recently followed",     oldest: "Earliest followed" },
+  // mutual_since_at-based
+  mutuals:           { newest: "Most recent mutual",         oldest: "Earliest mutual" },
+  // last_followed_you_at-based (they unfollowed you / removed you)
+  not_following_you_back:        { newest: "Most recently stopped",     oldest: "Earliest stopped" },
+  they_unfollowed_you:           { newest: "Most recently unfollowed",  oldest: "Earliest unfollowed" },
+  they_removed_you_as_follower:  { newest: "Most recently removed",     oldest: "Earliest removed" },
+  ever_unfollowed_you:           { newest: "Most recently unfollowed",  oldest: "Earliest unfollowed" },
+  ever_removed_you_as_follower:  { newest: "Most recently removed",     oldest: "Earliest removed" },
+  // unfollowed_by_you_at-based (you unfollowed them)
+  you_unfollowed:        { newest: "Most recently unfollowed", oldest: "Earliest unfollowed" },
+  you_unfollowed_ever:   { newest: "Most recently unfollowed", oldest: "Earliest unfollowed" },
+  recently_unfollowed:   { newest: "Most recently unfollowed", oldest: "Earliest unfollowed" },
+  // first_followed_you_at-based
+  all_followers:    { newest: "Most recently followed you", oldest: "Earliest followed you" },
+  feeder_accounts:  { newest: "Most recently followed you", oldest: "Earliest followed you" },
+  // pending
+  pending:               { newest: "Most recent request",   oldest: "Earliest request" },
+  recent_follow_requests:{ newest: "Most recent request",   oldest: "Earliest request" },
+};
+
+function refreshSortLabels(kind) {
+  const labels = SORT_LABELS[kind] || { newest: "Newest first", oldest: "Oldest first" };
+  const opts = sortSelect.options;
+  for (const opt of opts) {
+    if (opt.value === "reverse_chronological") opt.textContent = labels.newest;
+    else if (opt.value === "chronological")    opt.textContent = labels.oldest;
+    else if (opt.value === "alphabetical")     opt.textContent = "A → Z";
+  }
 }
 
 function applySort(items, mode) {
@@ -714,6 +762,7 @@ async function loadLists() {
       }
     });
     const kind = select.value || "everyone";
+    refreshSortLabels(kind);
     const out = $("#list-output");
     let items = sections[kind] || [];
     if (items.length === 0) {
