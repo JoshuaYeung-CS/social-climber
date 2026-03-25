@@ -307,6 +307,24 @@ def _label_from_export_dir(ff: Path) -> str | None:
     return None
 
 
+def _label_from_ff_mtime(ff: Path) -> str | None:
+    """Last-resort timestamp source: Instagram sets every JSON file's mtime to
+    the moment the export was generated. zipfile.extractall preserves those
+    mtimes, so reading them back gives a real export timestamp even when the
+    zip filename only has a date (e.g. `instagram-handle-2026-04-30-XYZ.zip`
+    where there's no `meta-...` parent folder either)."""
+    from datetime import datetime, timezone
+    for fname in ("following.json", "followers_1.json", "pending_follow_requests.json"):
+        f = ff / fname
+        if f.exists():
+            try:
+                ts = f.stat().st_mtime
+                return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+            except OSError:
+                continue
+    return None
+
+
 @dataclass
 class ImportRun:
     imports: list[ImportResult]
@@ -345,14 +363,13 @@ def import_path(
                 )
 
         # Resolve a label per ff_dir up-front so we can sort chronologically
-        # before inserting. For a single Meta zip the parent chain has no
-        # parseable timestamp, so we fall back to the user-supplied or
-        # input-path label. For a Drive zip with many Metas, every ff has its
-        # own meta-... ancestor, giving each snapshot a real timestamp.
+        # before inserting. Preference order: parent-dir name (Drive-of-many
+        # case) > inner JSON mtime (catches newer zips whose filename has only
+        # a date and no `meta-...` parent) > zip filename parse > raw filename.
         single = len(ff_dirs) == 1
         labeled: list[tuple[str, Path]] = []
         for ff in ff_dirs:
-            inferred = _label_from_export_dir(ff)
+            inferred = _label_from_export_dir(ff) or _label_from_ff_mtime(ff)
             if single:
                 resolved = label or inferred or _label_from_path(path) or "snapshot"
             else:
