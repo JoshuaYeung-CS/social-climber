@@ -64,6 +64,7 @@ function showView(name, push = true) {
   if (name === "lists") loadLists();
   if (name === "snapshots") loadSnapshots();
   if (name === "check") loadQueue();
+  if (name === "history") loadHistory();
   if (push) {
     const state = history.state || {};
     if (state.view !== name || state.listKind) {
@@ -196,6 +197,7 @@ async function doImport(file) {
       lines.push(`<div class="warn-box">${icon} Skipped ${escapeHtml(cleanLabel(s.label))}: ${escapeHtml(s.message)}</div>`);
     }
     status.innerHTML = lines.join("");
+    _historyData = null;  // invalidate so the next History view refetches
     await loadHome();
     const imported = result.imports.length;
     const skipped = (result.skipped || []).length;
@@ -511,13 +513,9 @@ const LIST_KINDS = [
   ["not_following_you_back", "Don't follow you back"],
   ["feeder_accounts", "Feeder accounts (follow you, you don't)"],
   ["pending", "Pending requests you sent"],
-  ["they_unfollowed_you", "They unfollowed you (since last import)"],
-  ["they_removed_you_as_follower", "They removed you as a follower (since last import)"],
-  ["you_unfollowed", "You unfollowed (since last import)"],
-  ["ever_unfollowed_you", "Ever unfollowed you (full history)"],
-  ["ever_removed_you_as_follower", "Ever removed you as a follower (full history)"],
-  ["you_unfollowed_ever", "You ever unfollowed (full history)"],
-  ["unfollowers_you_still_follow", "Unfollowers you still follow (since last import)"],
+  ["ever_unfollowed_you", "Ever unfollowed you"],
+  ["ever_removed_you_as_follower", "Ever removed you as a follower"],
+  ["you_unfollowed_ever", "You ever unfollowed"],
   ["still_follow_after_drop", "You still follow people who unfollowed you"],
   ["renamed", "Renamed accounts"],
   ["recent_follow_requests", "Recent follow requests"],
@@ -584,19 +582,15 @@ function rowDateKey(r) {
 // the list doesn't have a clean event verb.
 const SORT_LABELS = {
   // followed_at-based (you started following them)
-  all_following:     { newest: "Most recently followed",     oldest: "Earliest followed" },
-  unfollowers_you_still_follow: { newest: "Most recently followed",     oldest: "Earliest followed" },
-  still_follow_after_drop:      { newest: "Most recently followed",     oldest: "Earliest followed" },
+  all_following:           { newest: "Most recently followed",     oldest: "Earliest followed" },
+  still_follow_after_drop: { newest: "Most recently followed",     oldest: "Earliest followed" },
   // mutual_since_at-based
-  mutuals:           { newest: "Most recent mutual",         oldest: "Earliest mutual" },
-  // last_followed_you_at-based (they unfollowed you / removed you)
+  mutuals:                 { newest: "Most recent mutual",         oldest: "Earliest mutual" },
+  // last_followed_you_at-based (they unfollowed you)
   not_following_you_back:        { newest: "Most recently stopped",     oldest: "Earliest stopped" },
-  they_unfollowed_you:           { newest: "Most recently unfollowed",  oldest: "Earliest unfollowed" },
-  they_removed_you_as_follower:  { newest: "Most recently removed",     oldest: "Earliest removed" },
   ever_unfollowed_you:           { newest: "Most recently unfollowed",  oldest: "Earliest unfollowed" },
   ever_removed_you_as_follower:  { newest: "Most recently removed",     oldest: "Earliest removed" },
   // unfollowed_by_you_at-based (you unfollowed them)
-  you_unfollowed:        { newest: "Most recently unfollowed", oldest: "Earliest unfollowed" },
   you_unfollowed_ever:   { newest: "Most recently unfollowed", oldest: "Earliest unfollowed" },
   recently_unfollowed:   { newest: "Most recently unfollowed", oldest: "Earliest unfollowed" },
   // first_followed_you_at-based
@@ -773,7 +767,25 @@ async function loadLists() {
     sortSelect.parentElement.style.display = "";
     items = applySort(items, sortSelect.value);
 
-    out.innerHTML = items.map(renderListRow).join("");
+    // For "still follow after drop", group visually so the surprising "we're
+    // mutual again" cases don't get lost in the longer "still doesn't follow
+    // back" list.
+    if (kind === "still_follow_after_drop") {
+      const notBack = items.filter((i) => i.relationship_kind !== "good");
+      const mutual = items.filter((i) => i.relationship_kind === "good");
+      const html = [];
+      if (notBack.length) {
+        html.push(`<div class="list-section">Still doesn't follow back (${notBack.length})</div>`);
+        html.push(notBack.map(renderListRow).join(""));
+      }
+      if (mutual.length) {
+        html.push(`<div class="list-section">Now mutual again (${mutual.length})</div>`);
+        html.push(mutual.map(renderListRow).join(""));
+      }
+      out.innerHTML = html.join("");
+    } else {
+      out.innerHTML = items.map(renderListRow).join("");
+    }
     $$(".list-row", out).forEach((row) => {
       row.addEventListener("click", () => openAccountModal(row.dataset.username));
       $$(".row-tag", row).forEach((btn) => {
@@ -887,6 +899,190 @@ $("#queue-clear").addEventListener("click", async () => {
     toast(e.message);
   }
 });
+
+// ---------- history ----------
+
+let _historyData = null;
+
+async function loadHistory(force = false) {
+  try {
+    if (!_historyData || force) {
+      const data = await api.get("/api/history");
+      _historyData = data.snapshots || [];
+    }
+    renderHistory();
+  } catch (e) {
+    $("#history-chart").innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+$("#history-range")?.addEventListener("change", renderHistory);
+$("#history-series")?.addEventListener("change", renderHistory);
+
+function renderHistory() {
+  if (!_historyData) return;
+  const range = $("#history-range").value;
+  const series = $("#history-series").value;
+  // Filter snapshots by range (using created_at as the timeline anchor).
+  let snaps = _historyData;
+  if (range !== "all") {
+    const cutoff = Date.now() - parseInt(range, 10) * 86400 * 1000;
+    snaps = snaps.filter((s) => Date.parse(s.created_at) >= cutoff);
+  }
+  if (snaps.length === 0) {
+    $("#history-chart").innerHTML = `<div class="muted">No snapshots in this range.</div>`;
+    $("#history-detail").innerHTML = "";
+    return;
+  }
+  drawHistoryChart(snaps, series);
+}
+
+function drawHistoryChart(snaps, seriesPick) {
+  const W = 760, H = 280, PAD_L = 50, PAD_R = 16, PAD_T = 16, PAD_B = 40;
+  const innerW = W - PAD_L - PAD_R, innerH = H - PAD_T - PAD_B;
+
+  const SERIES = [
+    { key: "followers", label: "Followers", color: "#4f8cff" },
+    { key: "following", label: "Following", color: "#ffb454" },
+    { key: "mutuals",   label: "Mutuals",   color: "#3ecf8e" },
+    { key: "pending",   label: "Pending",   color: "#a78bfa" },
+  ];
+  const visible = seriesPick === "all"
+    ? SERIES.filter((s) => s.key !== "pending")
+    : SERIES.filter((s) => s.key === seriesPick);
+
+  // Domain
+  const xs = snaps.map((_, i) => i);
+  const allYs = visible.flatMap((s) => snaps.map((p) => p[s.key]));
+  const yMin = Math.min(...allYs);
+  const yMax = Math.max(...allYs);
+  const yPad = Math.max(1, Math.round((yMax - yMin) * 0.08));
+  const yLo = Math.max(0, yMin - yPad);
+  const yHi = yMax + yPad;
+
+  const xScale = (i) => PAD_L + (snaps.length === 1 ? innerW / 2 : (i / (snaps.length - 1)) * innerW);
+  const yScale = (v) => PAD_T + innerH - ((v - yLo) / (yHi - yLo || 1)) * innerH;
+
+  // Y-axis ticks (5)
+  const yTicks = [];
+  for (let t = 0; t <= 4; t++) {
+    const v = yLo + (t / 4) * (yHi - yLo);
+    yTicks.push({ v: Math.round(v), y: yScale(v) });
+  }
+
+  // X-axis: show ~6 evenly-spaced labels
+  const xLabelCount = Math.min(6, snaps.length);
+  const xLabels = [];
+  for (let i = 0; i < xLabelCount; i++) {
+    const idx = Math.round((i / (xLabelCount - 1 || 1)) * (snaps.length - 1));
+    const s = snaps[idx];
+    xLabels.push({ x: xScale(idx), label: shortDate(s.label || s.created_at) });
+  }
+
+  const linesSvg = visible.map((s) => {
+    const d = snaps.map((p, i) => `${i === 0 ? "M" : "L"} ${xScale(i).toFixed(1)} ${yScale(p[s.key]).toFixed(1)}`).join(" ");
+    return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" />`;
+  }).join("");
+
+  const dotsSvg = snaps.map((p, i) => {
+    return visible.map((s) =>
+      `<circle cx="${xScale(i).toFixed(1)}" cy="${yScale(p[s.key]).toFixed(1)}" r="3" fill="${s.color}" data-snap="${p.snapshot_id}" data-idx="${i}" class="history-dot" />`
+    ).join("");
+  }).join("");
+
+  // Invisible wider hit areas for tap targets
+  const hitsSvg = snaps.map((p, i) => {
+    const x = xScale(i);
+    return `<rect x="${(x - 12).toFixed(1)}" y="${PAD_T}" width="24" height="${innerH}" fill="transparent" data-snap="${p.snapshot_id}" data-idx="${i}" class="history-hit" />`;
+  }).join("");
+
+  const yTicksSvg = yTicks.map((t) =>
+    `<g><line x1="${PAD_L}" y1="${t.y}" x2="${W - PAD_R}" y2="${t.y}" stroke="var(--border)" stroke-width="1" />
+     <text x="${PAD_L - 6}" y="${t.y + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${t.v}</text></g>`
+  ).join("");
+
+  const xLabelsSvg = xLabels.map((l) =>
+    `<text x="${l.x}" y="${H - 14}" text-anchor="middle" font-size="11" fill="var(--muted)">${escapeHtml(l.label)}</text>`
+  ).join("");
+
+  const legend = visible.map((s) =>
+    `<span class="legend-item"><span class="swatch" style="background:${s.color}"></span>${s.label}</span>`
+  ).join("");
+
+  $("#history-chart").innerHTML = `
+    <div class="legend">${legend}</div>
+    <svg viewBox="0 0 ${W} ${H}" class="history-svg" preserveAspectRatio="xMidYMid meet">
+      ${yTicksSvg}
+      ${linesSvg}
+      ${dotsSvg}
+      ${hitsSvg}
+      ${xLabelsSvg}
+    </svg>
+  `;
+
+  $$(".history-hit, .history-dot", $("#history-chart")).forEach((el) => {
+    el.addEventListener("click", () => showHistoryDetail(parseInt(el.dataset.idx, 10), snaps));
+  });
+}
+
+function shortDate(s) {
+  if (!s) return "";
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return String(s).slice(0, 10);
+  const [_, y, mo, d] = m;
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return `${months[parseInt(mo, 10) - 1]} ${parseInt(d, 10)}`;
+}
+
+async function showHistoryDetail(idx, snaps) {
+  const curr = snaps[idx];
+  const prev = idx > 0 ? snaps[idx - 1] : null;
+  const dF = prev ? curr.followers - prev.followers : 0;
+  const dG = prev ? curr.following - prev.following : 0;
+  const dM = prev ? curr.mutuals  - prev.mutuals  : 0;
+  const dP = prev ? curr.pending  - prev.pending  : 0;
+  const arrow = (n) => n > 0 ? `<span class="up">+${n}</span>` : n < 0 ? `<span class="down">${n}</span>` : `<span class="muted">±0</span>`;
+
+  let diffHtml = "";
+  if (prev) {
+    try {
+      const d = await api.get(`/api/diff?old=${prev.snapshot_id}&new=${curr.snapshot_id}`);
+      const sec = d.sections || {};
+      const block = (title, list, max = 8) => {
+        if (!list || !list.length) return "";
+        const shown = list.slice(0, max);
+        const more = list.length > max ? ` <span class="muted">+${list.length - max} more</span>` : "";
+        return `<div class="diff-block"><strong>${title}</strong> (${list.length})<div>${shown.map((u) => `<span class="diff-name">${escapeHtml(u)}</span>`).join(" ")}${more}</div></div>`;
+      };
+      diffHtml = `
+        ${block("New followers", sec.new_followers)}
+        ${block("They unfollowed you", sec.they_unfollowed_you)}
+        ${block("New following (you followed)", sec.new_following)}
+        ${block("You unfollowed", sec.you_unfollowed)}
+        ${block("They removed you as a follower", sec.they_removed_you_as_follower)}
+        ${block("New pending requests", sec.new_pending)}
+        ${block("Resolved pending", sec.resolved_pending)}
+      `;
+    } catch (e) {
+      diffHtml = `<div class="muted">Diff unavailable: ${escapeHtml(e.message)}</div>`;
+    }
+  } else {
+    diffHtml = `<div class="muted">First snapshot in range — nothing to diff against.</div>`;
+  }
+
+  $("#history-detail").innerHTML = `
+    <div class="history-snapshot">
+      <h3>#${curr.snapshot_id} · ${escapeHtml(cleanLabel(curr.label) || curr.created_at)}</h3>
+      <div class="history-counts">
+        <div>Followers <strong>${curr.followers}</strong> ${prev ? arrow(dF) : ""}</div>
+        <div>Following <strong>${curr.following}</strong> ${prev ? arrow(dG) : ""}</div>
+        <div>Mutuals <strong>${curr.mutuals}</strong> ${prev ? arrow(dM) : ""}</div>
+        <div>Pending <strong>${curr.pending}</strong> ${prev ? arrow(dP) : ""}</div>
+      </div>
+      ${diffHtml}
+    </div>
+  `;
+}
 
 // ---------- snapshots ----------
 

@@ -150,6 +150,48 @@ def delete_snapshot(snapshot_id: int):
         return {"deleted": snapshot_id}
 
 
+@app.get("/api/history")
+def get_history():
+    """Per-snapshot counts, ordered chronologically by id (which now matches
+    chronological order thanks to the duplicate-and-out-of-order import guards).
+    Used by the History tab to draw a tappable timeline chart."""
+    with db_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                s.id,
+                s.label,
+                s.created_at,
+                (SELECT COUNT(*) FROM followers f WHERE f.snapshot_id = s.id) AS followers_count,
+                (SELECT COUNT(*) FROM following g WHERE g.snapshot_id = s.id) AS following_count,
+                (SELECT COUNT(*) FROM pending_follow_requests p WHERE p.snapshot_id = s.id) AS pending_count
+            FROM snapshots s
+            ORDER BY s.id ASC
+            """
+        ).fetchall()
+        out = []
+        for r in rows:
+            mutuals = conn.execute(
+                """
+                SELECT COUNT(*) AS c FROM followers f
+                INNER JOIN following g
+                    ON f.snapshot_id = g.snapshot_id AND f.username = g.username
+                WHERE f.snapshot_id = ?
+                """,
+                (int(r["id"]),),
+            ).fetchone()["c"]
+            out.append({
+                "snapshot_id": int(r["id"]),
+                "label": r["label"],
+                "created_at": r["created_at"],
+                "followers": int(r["followers_count"]),
+                "following": int(r["following_count"]),
+                "mutuals": int(mutuals),
+                "pending": int(r["pending_count"]),
+            })
+        return {"snapshots": out}
+
+
 # ---------- import ----------
 
 @app.post("/api/import")
