@@ -538,10 +538,77 @@ function buildListKindOptions() {
   });
 }
 buildListKindOptions();
-select.addEventListener("change", loadLists);
+select.addEventListener("change", () => {
+  // Reset the search when switching lists — different lists, different content.
+  searchInput.value = "";
+  searchClear.hidden = true;
+  loadLists();
+});
 
 const sortSelect = $("#list-sort");
 sortSelect.addEventListener("change", loadLists);
+
+// Per-list search bar. Filters DOM rows in place (no server roundtrip), matches
+// case-insensitive substring against username AND any past aliases (so a renamed
+// account is findable by its old handle). Esc clears.
+const searchInput = $("#list-search");
+const searchClear = $("#list-search-clear");
+const searchCount = $("#search-count");
+
+function applyListSearch() {
+  const q = (searchInput.value || "").toLowerCase().trim();
+  searchClear.hidden = q === "";
+  const out = $("#list-output");
+  const rows = $$(".list-row", out);
+  const sections = $$(".list-section", out);
+  if (rows.length === 0) {
+    searchCount.hidden = true;
+    return;
+  }
+  let visible = 0;
+  for (const row of rows) {
+    const hay = row.dataset.search || (row.dataset.username || "").toLowerCase();
+    const show = q === "" || hay.includes(q);
+    row.style.display = show ? "" : "none";
+    if (show) visible++;
+  }
+  // Hide any section header whose entire group filtered out.
+  for (const sec of sections) {
+    let next = sec.nextElementSibling;
+    let anyVisible = false;
+    while (next && !next.classList.contains("list-section")) {
+      if (next.classList.contains("list-row") && next.style.display !== "none") {
+        anyVisible = true;
+        break;
+      }
+      next = next.nextElementSibling;
+    }
+    sec.style.display = anyVisible ? "" : "none";
+  }
+  if (q === "") {
+    searchCount.hidden = true;
+  } else {
+    searchCount.hidden = false;
+    searchCount.textContent = visible === rows.length
+      ? `${rows.length} matches`
+      : `Showing ${visible} of ${rows.length}`;
+  }
+}
+
+searchInput.addEventListener("input", applyListSearch);
+searchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    searchInput.value = "";
+    applyListSearch();
+    searchInput.blur();
+  }
+});
+searchClear.addEventListener("click", (e) => {
+  e.stopPropagation();
+  searchInput.value = "";
+  applyListSearch();
+  searchInput.focus();
+});
 
 function goToList(kind, push = true) {
   showView("lists", false);
@@ -684,8 +751,14 @@ function renderListRow(item) {
     ${tagBtn("unavailable", "✕", item.unavailable)}
   `;
 
+  // Searchable haystack: current username + any past aliases (rename chain),
+  // lowercased and pipe-joined. Lets the per-list search match a renamed
+  // account by its old handle.
+  const aliasList = (item.aliases && item.aliases.length > 0) ? item.aliases : [item.username];
+  const haystack = aliasList.map((a) => String(a).toLowerCase()).join("|");
+
   return `
-    <div class="list-row${rowClass ? " " + rowClass : ""}" data-username="${escapeAttr(item.username)}">
+    <div class="list-row${rowClass ? " " + rowClass : ""}" data-username="${escapeAttr(item.username)}" data-search="${escapeAttr(haystack)}">
       <div class="username-block">
         <span class="username">${escapeHtml(item.username)}</span>
         ${sub ? `<span class="sub">${sub}</span>` : ""}
@@ -761,6 +834,7 @@ async function loadLists() {
     let items = sections[kind] || [];
     if (items.length === 0) {
       out.innerHTML = `<div class="muted">(none — 0 entries)</div>`;
+      searchCount.hidden = true;
       return;
     }
 
@@ -786,6 +860,9 @@ async function loadLists() {
     } else {
       out.innerHTML = items.map(renderListRow).join("");
     }
+    // Re-apply any active search after rendering so a sort change (which
+    // re-renders the rows) keeps the filter live.
+    applyListSearch();
     $$(".list-row", out).forEach((row) => {
       row.addEventListener("click", () => openAccountModal(row.dataset.username));
       $$(".row-tag", row).forEach((btn) => {

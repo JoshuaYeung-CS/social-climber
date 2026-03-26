@@ -66,6 +66,17 @@
       <div class="card">
         <h2>Lists</h2>
         <select id="list-kind" class="full-select"></select>
+        <div class="search-row">
+          <span class="search-icon" aria-hidden="true">
+            <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="9" cy="9" r="6"></circle>
+              <line x1="14" y1="14" x2="18" y2="18"></line>
+            </svg>
+          </span>
+          <input type="search" id="list-search" class="list-search" placeholder="Search this list…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="search" />
+          <button type="button" id="list-search-clear" class="search-clear" aria-label="Clear search" hidden>×</button>
+        </div>
+        <div id="search-count" class="search-count" hidden></div>
         <div class="sort-row">
           <label class="muted small">Sort:</label>
           <select id="list-sort" class="full-select inline">
