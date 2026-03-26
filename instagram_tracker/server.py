@@ -820,14 +820,33 @@ def update_tag(payload: dict = Body(...)):
 
 # ---------- static frontend ----------
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+class NoCacheStaticFiles(StaticFiles):
+    """Serve static files with Cache-Control: no-store so browsers always pick
+    up the latest JS/CSS after a code change. Local-only dev tool — no CDN
+    edge to worry about, and the cost of re-fetching ~50KB on every page
+    load is negligible. Without this, Safari/Chrome cache app.js aggressively
+    and the user keeps seeing stale UI after an edit."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+        return response
+
+
+_NO_CACHE = {"Cache-Control": "no-store, must-revalidate"}
+
+app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/")
 def root():
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers=_NO_CACHE)
 
 
 @app.get("/manifest.webmanifest")
 def manifest():
-    return FileResponse(STATIC_DIR / "manifest.webmanifest", media_type="application/manifest+json")
+    return FileResponse(
+        STATIC_DIR / "manifest.webmanifest",
+        media_type="application/manifest+json",
+        headers=_NO_CACHE,
+    )
