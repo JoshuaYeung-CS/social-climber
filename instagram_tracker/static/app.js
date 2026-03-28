@@ -988,10 +988,102 @@ async function loadHistory(force = false) {
       _historyData = data.snapshots || [];
     }
     renderHistory();
+    loadActivityLog(force);
   } catch (e) {
     $("#history-chart").innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
   }
 }
+
+let _activityData = null;
+
+async function loadActivityLog(force = false) {
+  const out = $("#activity-log");
+  if (!out) return;
+  try {
+    if (!_activityData || force) {
+      out.innerHTML = `<div class="muted">Loading…</div>`;
+      const data = await api.get("/api/activity-log");
+      _activityData = data.events || [];
+    }
+    renderActivityLog();
+  } catch (e) {
+    out.innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+const ACTIVITY_GROUPS = [
+  { key: "new_followers",       label: "New followers",       cls: "good" },
+  { key: "they_unfollowed_you", label: "They unfollowed you", cls: "bad" },
+  { key: "new_following",       label: "You followed",        cls: "good" },
+  { key: "you_unfollowed",      label: "You unfollowed",      cls: "muted" },
+  { key: "they_removed_you",    label: "They removed you",    cls: "bad" },
+  { key: "new_pending",         label: "New pending",         cls: "info" },
+  { key: "resolved_pending",    label: "Resolved pending",    cls: "muted" },
+];
+
+function renderActivityLog() {
+  const out = $("#activity-log");
+  if (!out || !_activityData) return;
+  const filter = ($("#activity-filter")?.value || "").toLowerCase().trim();
+
+  // Build event cards. Empty-change events are still listed (compact) so the
+  // timeline doesn't have unexplained gaps, but they collapse to a one-liner.
+  const html = [];
+  let shownCount = 0;
+  for (const ev of _activityData) {
+    if (filter) {
+      const allNames = ACTIVITY_GROUPS.flatMap((g) => ev[g.key] || []).join(" ").toLowerCase();
+      if (!allNames.includes(filter)) continue;
+    }
+    shownCount++;
+    const timestamp = (ev.taken_at || "").replace("T", " ").slice(0, 19);
+    const groupSummaries = ACTIVITY_GROUPS
+      .filter((g) => (ev[g.key] || []).length > 0)
+      .map((g) => {
+        const n = (ev[g.key] || []).length;
+        return `<span class="al-pill al-${g.cls}"><strong>${n}</strong> ${escapeHtml(g.label)}</span>`;
+      })
+      .join("");
+    const collapsed = ev.change_count === 0;
+    const detailBlocks = ACTIVITY_GROUPS
+      .map((g) => {
+        const list = ev[g.key] || [];
+        if (!list.length) return "";
+        return `<div class="al-block al-${g.cls}-block">
+          <div class="al-block-title">${escapeHtml(g.label)} <span class="al-count">(${list.length})</span></div>
+          <div class="al-names">${list.map((u) => `<span class="al-name" data-username="${escapeAttr(u)}">${escapeHtml(u)}</span>`).join("")}</div>
+        </div>`;
+      })
+      .join("");
+    html.push(`
+      <details class="al-event${collapsed ? " al-empty" : ""}" data-snap="${ev.snapshot_id}">
+        <summary>
+          <span class="al-time">${escapeHtml(timestamp || ev.label || "")}</span>
+          ${collapsed
+            ? `<span class="muted small">no changes</span>`
+            : `<span class="al-summary-pills">${groupSummaries}</span>`
+          }
+          <span class="al-counts">F ${ev.counts.followers} · G ${ev.counts.following} · M ${ev.counts.mutuals} · P ${ev.counts.pending}</span>
+        </summary>
+        <div class="al-body">${detailBlocks || `<div class="muted small">First snapshot — nothing to compare against.</div>`}</div>
+      </details>
+    `);
+  }
+  out.innerHTML = html.length
+    ? `<div class="muted small al-meta">${shownCount} of ${_activityData.length} events</div>` + html.join("")
+    : `<div class="muted">No events match.</div>`;
+
+  // Wire username taps → open account modal.
+  $$(".al-name", out).forEach((el) =>
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      openAccountModal(el.dataset.username);
+    })
+  );
+}
+
+$("#activity-filter")?.addEventListener("input", renderActivityLog);
 
 $("#history-range")?.addEventListener("change", renderHistory);
 $("#history-series")?.addEventListener("change", renderHistory);

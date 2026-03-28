@@ -496,6 +496,94 @@ code {
 .diff-block { margin: 8px 0; font-size: 13px; }
 .diff-block strong { color: var(--text); }
 .diff-name { display: inline-block; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; margin: 2px 2px 0 0; font-size: 12px; }
+
+/* Activity log under History tab. Newest-first feed of every diff between
+   consecutive snapshots. Each event is a <details> for cheap native expand. */
+.activity-log { display: flex; flex-direction: column; gap: 6px; max-height: 70vh; overflow-y: auto; padding-right: 4px; }
+.activity-log .al-meta { padding: 2px 4px 6px; }
+.al-event {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0;
+  overflow: hidden;
+}
+.al-event[open] { border-color: rgba(79, 140, 255, 0.35); }
+.al-event.al-empty { opacity: 0.55; }
+.al-event summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+  flex-wrap: wrap;
+}
+.al-event summary::-webkit-details-marker { display: none; }
+.al-event summary::before {
+  content: "▸";
+  color: var(--muted);
+  font-size: 10px;
+  width: 10px;
+  flex-shrink: 0;
+  transition: transform 100ms ease;
+}
+.al-event[open] summary::before { transform: rotate(90deg); }
+.al-event.al-empty summary::before { color: transparent; }
+.al-time {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: var(--text);
+  flex-shrink: 0;
+  min-width: 145px;
+}
+.al-summary-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.al-counts {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.al-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  white-space: nowrap;
+}
+.al-pill strong { font-weight: 700; }
+.al-pill.al-good  { color: var(--good); border-color: rgba(62, 207, 142, 0.35); background: rgba(62, 207, 142, 0.08); }
+.al-pill.al-bad   { color: var(--bad);  border-color: rgba(255, 94, 122, 0.35); background: rgba(255, 94, 122, 0.08); }
+.al-pill.al-info  { color: var(--accent); border-color: rgba(79, 140, 255, 0.35); background: rgba(79, 140, 255, 0.08); }
+.al-pill.al-muted { color: var(--muted); }
+.al-body { padding: 0 12px 12px 12px; border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+.al-block {}
+.al-block-title { font-size: 12px; font-weight: 600; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+.al-good-block .al-block-title  { color: var(--good); }
+.al-bad-block .al-block-title   { color: var(--bad); }
+.al-info-block .al-block-title  { color: var(--accent); }
+.al-muted-block .al-block-title { color: var(--muted); }
+.al-block .al-count { color: var(--muted); font-weight: 400; font-size: 11px; }
+.al-names { display: flex; flex-wrap: wrap; gap: 4px; }
+.al-name {
+  display: inline-block;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+.al-name:hover { background: var(--accent-soft); border-color: var(--accent); }
 .list-row {
   display: flex;
   align-items: center;

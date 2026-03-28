@@ -204,6 +204,82 @@ def delete_snapshot(snapshot_id: int):
         return {"deleted": snapshot_id}
 
 
+@app.get("/api/activity-log")
+def get_activity_log():
+    """A chronological log of every change between consecutive snapshots —
+    used by the History tab's scrollable activity feed below the chart.
+    Each entry is a (prev → curr) diff with the actual usernames who joined,
+    left, requested, were removed, etc., plus the counts at curr."""
+    with db_conn() as conn:
+        snaps = q.list_snapshots(conn)  # chronological order
+        if not snaps:
+            return {"events": []}
+
+        # Strip pending-bounces from "they removed you" — same heuristic the
+        # home alerts use. Computed once with the canonical recently_unfollowed
+        # union so we get the strict cumulative-attribution version.
+        ever_self = q.ever_self_unfollowed(conn)
+
+        events: list[dict] = []
+        prev_sd = None
+        prev_meta = None
+        for s in snaps:
+            curr_sd = q.snapshot_data(conn, s.id)
+            counts = {
+                "followers": len(curr_sd.followers),
+                "following": len(curr_sd.following),
+                "mutuals":   len(curr_sd.followers & curr_sd.following),
+                "pending":   len(curr_sd.pending),
+            }
+            event: dict = {
+                "snapshot_id": s.id,
+                "label": s.label,
+                "taken_at": None,  # filled below
+                "previous_id": prev_meta.id if prev_meta else None,
+                "previous_label": prev_meta.label if prev_meta else None,
+                "counts": counts,
+            }
+            row = conn.execute(
+                "SELECT taken_at FROM snapshots WHERE id = ?", (s.id,)
+            ).fetchone()
+            if row:
+                event["taken_at"] = row["taken_at"]
+
+            if prev_sd is not None:
+                left_followers = prev_sd.followers - curr_sd.followers
+                left_following = prev_sd.following - curr_sd.following
+                event["new_followers"]      = sorted(curr_sd.followers - prev_sd.followers)
+                event["they_unfollowed_you"] = sorted(left_followers)
+                event["new_following"]      = sorted(curr_sd.following - prev_sd.following)
+                event["you_unfollowed"]     = sorted(left_following & curr_sd.recently_unfollowed)
+                # Apply the same pending-bounce filter as alerts.
+                event["they_removed_you"]   = sorted(
+                    left_following - curr_sd.recently_unfollowed - curr_sd.pending
+                )
+                event["new_pending"]        = sorted(curr_sd.pending - prev_sd.pending)
+                event["resolved_pending"]   = sorted(prev_sd.pending - curr_sd.pending)
+            else:
+                # First chronological snapshot — no prior to diff against.
+                event["new_followers"]      = []
+                event["they_unfollowed_you"] = []
+                event["new_following"]      = []
+                event["you_unfollowed"]     = []
+                event["they_removed_you"]   = []
+                event["new_pending"]        = []
+                event["resolved_pending"]   = []
+            event["change_count"] = sum(len(event[k]) for k in (
+                "new_followers", "they_unfollowed_you", "new_following",
+                "you_unfollowed", "they_removed_you", "new_pending", "resolved_pending",
+            ))
+            events.append(event)
+            prev_sd = curr_sd
+            prev_meta = s
+
+        # Newest first so the log reads top-down.
+        events.reverse()
+        return {"events": events}
+
+
 @app.get("/api/timeline")
 def get_timeline():
     """Per-snapshot counts in chronological order. Used by the History tab to
