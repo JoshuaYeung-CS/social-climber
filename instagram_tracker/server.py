@@ -121,7 +121,11 @@ def home():
                 ever_unfollowed_you |= followers_by_sid.get(old_id, set()) - followers_by_sid.get(new_id, set())
                 ever_left_following |= following_by_sid.get(old_id, set()) - following_by_sid.get(new_id, set())
             ever_self = q.ever_self_unfollowed(conn)
-            ever_removed = ever_left_following - ever_self
+            # Subtract anyone currently in pending — IG's export bounces some
+            # accounts between `following` and `pending` without any real
+            # change, and we don't want those phantom flips polluting the
+            # cumulative "they removed you as a follower" count.
+            ever_removed = ever_left_following - ever_self - curr.pending
 
             # Strip rename chains so renames don't inflate "they unfollowed/removed you" counts.
             alias_map = q.username_alias_map(conn)
@@ -346,7 +350,12 @@ def get_lists(snapshot_id: int | None = None):
             sections["they_unfollowed_you"] = sorted(left_followers)
             sections["unfollowers_you_still_follow"] = sorted(left_followers & sd.following)
             sections["you_unfollowed"] = sorted(left_following & sd.recently_unfollowed)
-            sections["they_removed_you_as_follower"] = sorted(left_following - sd.recently_unfollowed)
+            # Suppress pending-bounces: an account currently in pending hasn't
+            # really been removed — IG's export just flipped them from
+            # following back to pending without a real relationship change.
+            sections["they_removed_you_as_follower"] = sorted(
+                left_following - sd.recently_unfollowed - sd.pending
+            )
         else:
             sections["they_unfollowed_you"] = []
             sections["unfollowers_you_still_follow"] = []
@@ -360,7 +369,16 @@ def get_lists(snapshot_id: int | None = None):
         # ---- Cumulative / historical lists across ALL snapshots ----
         followers_by_sid = q.followers_by_snapshot(conn)
         following_by_sid = q.following_by_snapshot(conn)
-        ordered_sids = sorted(followers_by_sid.keys() | following_by_sid.keys())
+        chrono = {
+            int(r["id"]): i
+            for i, r in enumerate(
+                conn.execute("SELECT id FROM snapshots ORDER BY taken_at ASC, id ASC").fetchall()
+            )
+        }
+        ordered_sids = sorted(
+            followers_by_sid.keys() | following_by_sid.keys(),
+            key=lambda sid: chrono.get(sid, sid),
+        )
 
         # Anyone who was a follower at some snapshot and not in the next.
         ever_unfollowed_you: set[str] = set()
@@ -381,7 +399,9 @@ def get_lists(snapshot_id: int | None = None):
         # This guards against Instagram's per-snapshot reporting lag (where a self-initiated
         # unfollow doesn't show up in recently_unfollowed until 1+ snapshots later).
         ever_self = q.ever_self_unfollowed(conn)
-        ever_removed_you = ever_left_following - ever_self
+        # Suppress pending-bounces: anyone currently in pending didn't really
+        # get removed — IG's export bounced them back without a real change.
+        ever_removed_you = ever_left_following - ever_self - sd.pending
 
         # Also exclude usernames that are part of a detected rename chain whose CURRENT
         # alias is still in your following/followers — they didn't really leave.

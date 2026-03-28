@@ -48,7 +48,13 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
         left_following = (prev.following - curr.following) - suppressed
         # Same-snapshot rule: if it's not in the new snapshot's recently_unfollowed,
         # the user didn't initiate the unfollow — assume they removed you.
-        they_removed_you = left_following - curr.recently_unfollowed
+        # Also subtract curr.pending: Instagram's export sometimes flips an
+        # account from `following` back to `pending_follow_requests` even
+        # though the underlying relationship didn't change. Without this
+        # filter, every IG-side bounce surfaces as a spurious 'removed you'
+        # alert. If the account is currently in pending, treat the
+        # disappearance from following as a data quirk, not a real removal.
+        they_removed_you = left_following - curr.recently_unfollowed - curr.pending
         # (left_following & curr.recently_unfollowed) = you unfollowed them; not surfaced as an alert.
 
         for u in sorted(lost_followers & favorites):
