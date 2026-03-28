@@ -984,7 +984,7 @@ let _historyData = null;
 async function loadHistory(force = false) {
   try {
     if (!_historyData || force) {
-      const data = await api.get("/api/history");
+      const data = await api.get("/api/timeline");
       _historyData = data.snapshots || [];
     }
     renderHistory();

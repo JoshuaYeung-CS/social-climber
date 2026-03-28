@@ -200,11 +200,13 @@ def delete_snapshot(snapshot_id: int):
         return {"deleted": snapshot_id}
 
 
-@app.get("/api/history")
-def get_history():
-    """Per-snapshot counts, ordered chronologically by id (which now matches
-    chronological order thanks to the duplicate-and-out-of-order import guards).
-    Used by the History tab to draw a tappable timeline chart."""
+@app.get("/api/timeline")
+def get_timeline():
+    """Per-snapshot counts in chronological order. Used by the History tab to
+    draw a tappable timeline chart. Renamed from /api/history because the
+    older per-account /api/history endpoint was already on that path and the
+    two collided silently — the chart always won and the modal's 'Show full
+    history' button broke."""
     with db_conn() as conn:
         rows = conn.execute(
             """
