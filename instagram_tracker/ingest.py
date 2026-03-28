@@ -52,6 +52,7 @@ def _clean_label_from_name(name: str) -> str | None:
 
 from .db import (
     compute_content_hash_from_rows,
+    parse_label_to_iso,
     utc_now_iso,
 )
 from .parsers import (
@@ -240,28 +241,17 @@ def _ingest_one(
             existing_label=dup["label"],
         )
 
-    # Reject out-of-order imports: chronological queries (rename/diff detection,
-    # cumulative counts) walk snapshots by id ASC, so an older export inserted
-    # after a newer one would be placed at the wrong end of the timeline and
-    # corrupt those queries. Tell the user to delete the newer snapshots first
-    # if they really need to backfill an older export.
-    new_key = _label_to_sortable(label) or utc_now_iso()
-    latest_key, latest_label = _latest_taken_at(conn)
-    if latest_key is not None and new_key < latest_key:
-        return SkippedImport(
-            label=label,
-            reason="out_of_order",
-            message=(
-                f"This export ({label}) is older than the latest snapshot already "
-                f"imported ({latest_label}). Out-of-order inserts would corrupt "
-                "the diff/rename history. Delete the newer snapshot(s) first if "
-                "you really need to backfill this one."
-            ),
-        )
+    # Out-of-order imports are now allowed: every snapshot stores its own
+    # taken_at, and all chronological queries sort by that column instead of
+    # snapshot_id. So an older export dropped in after a newer one slots into
+    # the right position automatically.
+    now_iso = utc_now_iso()
+    taken_at = parse_label_to_iso(label) or now_iso
 
     cur = conn.execute(
-        "INSERT INTO snapshots (created_at, label, source_path, content_hash) VALUES (?, ?, ?, ?)",
-        (utc_now_iso(), label, source_path, content_hash),
+        "INSERT INTO snapshots (created_at, label, source_path, content_hash, taken_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (now_iso, label, source_path, content_hash, taken_at),
     )
     snapshot_id = int(cur.lastrowid)
 

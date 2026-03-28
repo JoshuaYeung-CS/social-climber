@@ -12,8 +12,11 @@ CREATE TABLE IF NOT EXISTS snapshots (
     created_at TEXT NOT NULL,
     label TEXT,
     source_path TEXT,
-    content_hash TEXT
+    content_hash TEXT,
+    taken_at TEXT
 );
+-- Index for taken_at is created in the migration block AFTER the ALTER for
+-- pre-existing DBs, so we don't reference a column that's still being added.
 
 CREATE TABLE IF NOT EXISTS followers (
     snapshot_id INTEGER NOT NULL,
@@ -106,10 +109,13 @@ def connect(db_path: Path) -> sqlite3.Connection:
     snap_cols = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
     if "content_hash" not in snap_cols:
         conn.execute("ALTER TABLE snapshots ADD COLUMN content_hash TEXT")
+    if "taken_at" not in snap_cols:
+        conn.execute("ALTER TABLE snapshots ADD COLUMN taken_at TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_taken_at ON snapshots(taken_at)")
 
     # Backfill content_hash for snapshots imported before this column existed,
-    # so the duplicate check below has a complete index. One-time per-snapshot
-    # cost; the COUNT(*) guard skips work once everything is populated.
+    # so the duplicate check has a complete index. One-time per-snapshot cost;
+    # the COUNT(*) guard skips work once everything is populated.
     missing = conn.execute(
         "SELECT COUNT(*) FROM snapshots WHERE content_hash IS NULL"
     ).fetchone()[0]
@@ -126,8 +132,38 @@ def connect(db_path: Path) -> sqlite3.Connection:
                 (compute_content_hash_from_db(conn, sid), sid),
             )
 
+    # Backfill taken_at from each snapshot's parsed label. Without this,
+    # chronological queries collapse to id-order (their old behaviour) for
+    # any pre-existing snapshot, which is fine for the current data because
+    # imports were always chronological — but the column has to be populated
+    # for the indexed sort to actually use it.
+    missing_ts = conn.execute(
+        "SELECT COUNT(*) FROM snapshots WHERE taken_at IS NULL"
+    ).fetchone()[0]
+    if missing_ts:
+        rows = conn.execute(
+            "SELECT id, label, created_at FROM snapshots WHERE taken_at IS NULL"
+        ).fetchall()
+        for r in rows:
+            ts = parse_label_to_iso(r["label"]) or r["created_at"]
+            conn.execute("UPDATE snapshots SET taken_at = ? WHERE id = ?", (ts, int(r["id"])))
+
     conn.commit()
     return conn
+
+
+def parse_label_to_iso(label: str | None) -> str | None:
+    """Parse a snapshot label like '2026-04-30_14-31-18' into an ISO timestamp
+    '2026-04-30T14:31:18' so it sorts correctly as a TEXT column. Returns None
+    for unparseable labels — caller falls back to created_at."""
+    if not label:
+        return None
+    import re
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})", label)
+    if m:
+        y, mo, d, hh, mm, ss = m.groups()
+        return f"{y}-{mo}-{d}T{hh}:{mm}:{ss}"
+    return None
 
 
 _HASH_TABLES = ("followers", "following", "pending_follow_requests", "recently_unfollowed")

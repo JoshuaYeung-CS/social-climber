@@ -35,6 +35,45 @@ def db_conn():
         conn.close()
 
 
+def _per_user_sid_chrono(
+    conn,
+    table: str,
+    usernames,
+    mode: str,
+    extra_join_predicate: str = "",
+) -> dict[str, int]:
+    """For each username in `usernames`, return the snapshot_id where it
+    appeared chronologically first (mode='first') or last (mode='last') in
+    `table`. Replaces the older MIN/MAX(snapshot_id) queries — those returned
+    the row with the smallest/largest id, which is no longer the same as
+    chronological order once out-of-order imports are allowed.
+
+    `extra_join_predicate` lets a caller require an additional condition on
+    the same snapshot row (used for the mutuals query, where 'first' means
+    'first snapshot they were in BOTH followers AND following')."""
+    if not usernames:
+        return {}
+    direction = "ASC" if mode == "first" else "DESC"
+    placeholders = ",".join("?" * len(usernames))
+    rows = conn.execute(
+        f"""
+        SELECT username, snapshot_id FROM (
+            SELECT t.username, t.snapshot_id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY t.username
+                       ORDER BY s.taken_at {direction}, s.id {direction}
+                   ) AS rn
+            FROM {table} t
+            JOIN snapshots s ON s.id = t.snapshot_id
+            {extra_join_predicate}
+            WHERE t.username IN ({placeholders})
+        ) AS x WHERE rn = 1
+        """,
+        list(usernames),
+    ).fetchall()
+    return {r["username"]: int(r["snapshot_id"]) for r in rows}
+
+
 # ---------- error handling: surface ValueError as 400 instead of 500 ----------
 
 @app.exception_handler(ValueError)
@@ -61,10 +100,21 @@ def home():
         if latest is not None:
             curr = q.snapshot_data(conn, latest)
 
-            # Cumulative across all history.
+            # Cumulative across all history. Walk by chronological order,
+            # not by id — taken_at is what makes diffs adjacent in time even
+            # when an older export was imported after a newer one.
             followers_by_sid = q.followers_by_snapshot(conn)
             following_by_sid = q.following_by_snapshot(conn)
-            ordered_sids = sorted(set(followers_by_sid) | set(following_by_sid))
+            chrono = {
+                int(r["id"]): i
+                for i, r in enumerate(
+                    conn.execute("SELECT id FROM snapshots ORDER BY taken_at ASC, id ASC").fetchall()
+                )
+            }
+            ordered_sids = sorted(
+                set(followers_by_sid) | set(following_by_sid),
+                key=lambda sid: chrono.get(sid, sid),
+            )
             ever_unfollowed_you: set[str] = set()
             ever_left_following: set[str] = set()
             for old_id, new_id in zip(ordered_sids[:-1], ordered_sids[1:]):
@@ -388,42 +438,25 @@ def get_lists(snapshot_id: int | None = None):
 
         # For "not following you back" rows: when (if ever) did this account last follow you?
         nfb_set = set(sections.get("not_following_you_back", []))
-        last_followers_sid: dict[str, int] = {}
-        if nfb_set:
-            placeholders = ",".join("?" * len(nfb_set))
-            for r in conn.execute(
-                f"SELECT username, MAX(snapshot_id) AS sid FROM followers WHERE username IN ({placeholders}) GROUP BY username",
-                list(nfb_set),
-            ).fetchall():
-                last_followers_sid[r["username"]] = int(r["sid"])
+        last_followers_sid = _per_user_sid_chrono(conn, "followers", nfb_set, "last")
 
         # For mutuals: when did they first appear in BOTH following and followers in the same snapshot?
         mutual_set = sd.followers & sd.following
-        mutual_since_sid: dict[str, int] = {}
-        if mutual_set:
-            placeholders = ",".join("?" * len(mutual_set))
-            for r in conn.execute(
-                f"""
-                SELECT f.username, MIN(f.snapshot_id) AS sid
-                FROM following f
-                INNER JOIN followers fr ON fr.snapshot_id = f.snapshot_id AND fr.username = f.username
-                WHERE f.username IN ({placeholders})
-                GROUP BY f.username
-                """,
-                list(mutual_set),
-            ).fetchall():
-                mutual_since_sid[r["username"]] = int(r["sid"])
+        mutual_since_sid = _per_user_sid_chrono(
+            conn,
+            "following",
+            mutual_set,
+            "first",
+            extra_join_predicate=(
+                "JOIN followers fr ON fr.snapshot_id = t.snapshot_id "
+                "AND fr.username = t.username"
+            ),
+        )
 
         # For currently-pending: when did the request first appear?
-        pending_set = sd.pending
-        pending_since_sid: dict[str, int] = {}
-        if pending_set:
-            placeholders = ",".join("?" * len(pending_set))
-            for r in conn.execute(
-                f"SELECT username, MIN(snapshot_id) AS sid FROM pending_follow_requests WHERE username IN ({placeholders}) GROUP BY username",
-                list(pending_set),
-            ).fetchall():
-                pending_since_sid[r["username"]] = int(r["sid"])
+        pending_since_sid = _per_user_sid_chrono(
+            conn, "pending_follow_requests", sd.pending, "first"
+        )
 
         TIMED_KINDS = {
             "not_following_you_back",
@@ -456,33 +489,10 @@ def get_lists(snapshot_id: int | None = None):
         #   last_in_followers_sid  -> when they were last seen following you
         #   first_in_followers_sid -> when they first started following you
         #   last_unfollow_sid      -> when you most recently unfollowed them
-        last_in_followers_sid: dict[str, int] = {}
-        first_in_followers_sid: dict[str, int] = {}
-        last_in_following_sid: dict[str, int] = {}
-        last_unfollow_sid: dict[str, int] = {}
-        if all_usernames:
-            placeholders = ",".join("?" * len(all_usernames))
-            params = list(all_usernames)
-            for r in conn.execute(
-                f"SELECT username, MAX(snapshot_id) AS sid FROM followers WHERE username IN ({placeholders}) GROUP BY username",
-                params,
-            ).fetchall():
-                last_in_followers_sid[r["username"]] = int(r["sid"])
-            for r in conn.execute(
-                f"SELECT username, MIN(snapshot_id) AS sid FROM followers WHERE username IN ({placeholders}) GROUP BY username",
-                params,
-            ).fetchall():
-                first_in_followers_sid[r["username"]] = int(r["sid"])
-            for r in conn.execute(
-                f"SELECT username, MAX(snapshot_id) AS sid FROM following WHERE username IN ({placeholders}) GROUP BY username",
-                params,
-            ).fetchall():
-                last_in_following_sid[r["username"]] = int(r["sid"])
-            for r in conn.execute(
-                f"SELECT username, MAX(snapshot_id) AS sid FROM recently_unfollowed WHERE username IN ({placeholders}) GROUP BY username",
-                params,
-            ).fetchall():
-                last_unfollow_sid[r["username"]] = int(r["sid"])
+        last_in_followers_sid  = _per_user_sid_chrono(conn, "followers",            all_usernames, "last")
+        first_in_followers_sid = _per_user_sid_chrono(conn, "followers",            all_usernames, "first")
+        last_in_following_sid  = _per_user_sid_chrono(conn, "following",            all_usernames, "last")
+        last_unfollow_sid      = _per_user_sid_chrono(conn, "recently_unfollowed",  all_usernames, "last")
 
         # "Last followed you" date: kinds where the row is someone who used to
         # follow you and stopped. Pulls from last_in_followers_sid.

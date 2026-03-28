@@ -28,20 +28,37 @@ class SnapshotData:
 # ---------- snapshot listing ----------
 
 def list_snapshots(conn: sqlite3.Connection) -> list[SnapshotMeta]:
+    """Snapshots in chronological order (taken_at ASC, id as tiebreaker for
+    same-second imports)."""
     rows = conn.execute(
-        "SELECT id, created_at, label, source_path FROM snapshots ORDER BY id ASC"
+        "SELECT id, created_at, label, source_path FROM snapshots "
+        "ORDER BY taken_at ASC, id ASC"
     ).fetchall()
     return [SnapshotMeta(r["id"], r["created_at"], r["label"], r["source_path"]) for r in rows]
 
 
 def latest_id(conn: sqlite3.Connection) -> int | None:
-    row = conn.execute("SELECT id FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+    """Most-recent snapshot CHRONOLOGICALLY (not by import order)."""
+    row = conn.execute(
+        "SELECT id FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT 1"
+    ).fetchone()
     return None if row is None else int(row["id"])
 
 
 def previous_id(conn: sqlite3.Connection, snapshot_id: int) -> int | None:
+    """The chronologically-prior snapshot to `snapshot_id`. Compares on the
+    pair (taken_at, id) so two same-second imports still have a deterministic
+    order (the lower id is 'earlier')."""
+    pair = conn.execute(
+        "SELECT taken_at, id FROM snapshots WHERE id = ?", (snapshot_id,)
+    ).fetchone()
+    if pair is None:
+        return None
     row = conn.execute(
-        "SELECT id FROM snapshots WHERE id < ? ORDER BY id DESC LIMIT 1", (snapshot_id,)
+        "SELECT id FROM snapshots "
+        "WHERE (taken_at, id) < (?, ?) "
+        "ORDER BY taken_at DESC, id DESC LIMIT 1",
+        (pair["taken_at"], pair["id"]),
     ).fetchone()
     return None if row is None else int(row["id"])
 
@@ -132,7 +149,9 @@ def _runs_in(conn: sqlite3.Connection, table: str, username: str) -> list[dict]:
     A run is a maximal contiguous sequence of snapshots where the username is present.
     Returns [{start_snapshot_id, end_snapshot_id, length}, ...].
     """
-    snaps = [r["id"] for r in conn.execute("SELECT id FROM snapshots ORDER BY id ASC").fetchall()]
+    snaps = [r["id"] for r in conn.execute(
+        "SELECT id FROM snapshots ORDER BY taken_at ASC, id ASC"
+    ).fetchall()]
     if not snaps:
         return []
     present = {
@@ -173,16 +192,19 @@ def follower_runs(conn: sqlite3.Connection, username: str) -> list[dict]:
 
 
 def latest_profile_url(conn: sqlite3.Connection, username: str) -> str | None:
+    """Most recent (chronological) profile URL for a username across any table."""
     row = conn.execute(
         """
-        SELECT profile_url FROM (
+        SELECT u.profile_url
+        FROM (
             SELECT profile_url, snapshot_id FROM following WHERE username = ? AND profile_url IS NOT NULL AND profile_url != ''
             UNION ALL
             SELECT profile_url, snapshot_id FROM followers WHERE username = ? AND profile_url IS NOT NULL AND profile_url != ''
             UNION ALL
             SELECT profile_url, snapshot_id FROM pending_follow_requests WHERE username = ? AND profile_url IS NOT NULL AND profile_url != ''
-        )
-        ORDER BY snapshot_id DESC
+        ) AS u
+        JOIN snapshots s ON s.id = u.snapshot_id
+        ORDER BY s.taken_at DESC, s.id DESC
         LIMIT 1
         """,
         (username, username, username),
@@ -196,7 +218,7 @@ def ever_summary(conn: sqlite3.Connection, username: str) -> dict | None:
         """
         SELECT s.id, s.created_at, COALESCE(s.label, '') AS label
         FROM following f JOIN snapshots s ON s.id = f.snapshot_id
-        WHERE f.username = ? ORDER BY s.id ASC
+        WHERE f.username = ? ORDER BY s.taken_at ASC, s.id ASC
         """,
         (username,),
     ).fetchall()
@@ -204,7 +226,7 @@ def ever_summary(conn: sqlite3.Connection, username: str) -> dict | None:
         """
         SELECT s.id, s.created_at, COALESCE(s.label, '') AS label
         FROM pending_follow_requests p JOIN snapshots s ON s.id = p.snapshot_id
-        WHERE p.username = ? ORDER BY s.id ASC
+        WHERE p.username = ? ORDER BY s.taken_at ASC, s.id ASC
         """,
         (username,),
     ).fetchall()
@@ -212,7 +234,7 @@ def ever_summary(conn: sqlite3.Connection, username: str) -> dict | None:
         """
         SELECT s.id, s.created_at, COALESCE(s.label, '') AS label
         FROM followers f JOIN snapshots s ON s.id = f.snapshot_id
-        WHERE f.username = ? ORDER BY s.id ASC
+        WHERE f.username = ? ORDER BY s.taken_at ASC, s.id ASC
         """,
         (username,),
     ).fetchall()
@@ -271,7 +293,9 @@ def detect_renames(conn: sqlite3.Connection) -> list[dict]:
 
     Returns chains: [{evidence_tables, timestamp, sequence: [name1, name2, ...], ...}, ...]
     """
-    all_snaps = sorted(int(r["id"]) for r in conn.execute("SELECT id FROM snapshots").fetchall())
+    all_snaps = [int(r["id"]) for r in conn.execute(
+        "SELECT id FROM snapshots ORDER BY taken_at ASC, id ASC"
+    ).fetchall()]
     if not all_snaps:
         return []
     snap_index = {sid: i for i, sid in enumerate(all_snaps)}
@@ -370,7 +394,9 @@ def detect_reengagements(conn: sqlite3.Connection) -> set[str]:
     their followers/following/pending history — i.e. they left and explicitly
     re-followed (Instagram assigns a new timestamp on a fresh follow). Used to
     surface a "re-engaged" tag on rows."""
-    all_snaps = sorted(int(r["id"]) for r in conn.execute("SELECT id FROM snapshots").fetchall())
+    all_snaps = [int(r["id"]) for r in conn.execute(
+        "SELECT id FROM snapshots ORDER BY taken_at ASC, id ASC"
+    ).fetchall()]
     if not all_snaps:
         return set()
     snap_index = {sid: i for i, sid in enumerate(all_snaps)}
@@ -379,18 +405,22 @@ def detect_reengagements(conn: sqlite3.Connection) -> set[str]:
     for table in ("followers", "following", "pending_follow_requests"):
         rows = conn.execute(
             f"SELECT username, snapshot_id, export_timestamp FROM {table} "
-            f"WHERE export_timestamp IS NOT NULL ORDER BY username, snapshot_id"
+            f"WHERE export_timestamp IS NOT NULL"
         ).fetchall()
-        per_user: dict[str, list[tuple[int, int]]] = {}
+        per_user: dict[str, list[tuple[int, int, int]]] = {}
         for r in rows:
+            sid = int(r["snapshot_id"])
+            if sid not in snap_index:
+                continue
             per_user.setdefault(r["username"], []).append(
-                (int(r["snapshot_id"]), int(r["export_timestamp"]))
+                (snap_index[sid], sid, int(r["export_timestamp"]))
             )
         for username, history in per_user.items():
+            history.sort()  # by chronological position
             for i in range(1, len(history)):
-                prev_sid, prev_ts = history[i - 1]
-                curr_sid, curr_ts = history[i]
-                if snap_index[curr_sid] - snap_index[prev_sid] > 1 and curr_ts != prev_ts:
+                prev_pos, _, prev_ts = history[i - 1]
+                curr_pos, _, curr_ts = history[i]
+                if curr_pos - prev_pos > 1 and curr_ts != prev_ts:
                     out.add(username)
                     break
     return out
@@ -411,28 +441,44 @@ def privacy_status_bulk(conn: sqlite3.Connection, usernames: list[str]) -> dict[
     we saw them in following, you sent a request and they accepted -> likely private.
     If they appear in following with no prior pending evidence -> likely public.
     If we don't have enough observation history -> unknown.
+
+    Comparisons are by chronological position (taken_at) — never by raw
+    snapshot_id, so out-of-order imports don't lie about who came first.
     """
     if not usernames:
         return {}
 
-    first_snap_row = conn.execute("SELECT MIN(id) FROM snapshots").fetchone()
-    first_snap_id = first_snap_row[0] if first_snap_row else None
+    # Chronological position of every snapshot id.
+    snap_order: dict[int, int] = {
+        int(r["id"]): i
+        for i, r in enumerate(
+            conn.execute(
+                "SELECT id FROM snapshots ORDER BY taken_at ASC, id ASC"
+            ).fetchall()
+        )
+    }
+    if not snap_order:
+        return {}
 
     placeholders = ",".join("?" * len(usernames))
 
-    first_following: dict[str, int] = {}
-    for r in conn.execute(
-        f"SELECT username, MIN(snapshot_id) AS sid FROM following WHERE username IN ({placeholders}) GROUP BY username",
-        usernames,
-    ).fetchall():
-        first_following[r["username"]] = int(r["sid"])
+    def first_chrono(table: str) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for r in conn.execute(
+            f"SELECT username, snapshot_id FROM {table} WHERE username IN ({placeholders})",
+            usernames,
+        ).fetchall():
+            sid = int(r["snapshot_id"])
+            pos = snap_order.get(sid)
+            if pos is None:
+                continue
+            u = r["username"]
+            if u not in out or pos < out[u]:
+                out[u] = pos
+        return out
 
-    first_pending: dict[str, int] = {}
-    for r in conn.execute(
-        f"SELECT username, MIN(snapshot_id) AS sid FROM pending_follow_requests WHERE username IN ({placeholders}) GROUP BY username",
-        usernames,
-    ).fetchall():
-        first_pending[r["username"]] = int(r["sid"])
+    first_following = first_chrono("following")
+    first_pending = first_chrono("pending_follow_requests")
 
     out: dict[str, str] = {}
     for u in usernames:
@@ -441,8 +487,8 @@ def privacy_status_bulk(conn: sqlite3.Connection, usernames: list[str]) -> dict[
         if ff is None:
             out[u] = "unknown"
             continue
-        if first_snap_id is not None and ff == first_snap_id:
-            # Already in following at the very first snapshot we have — never observed the transition.
+        if ff == 0:
+            # Already in following at the chronologically-first snapshot — never observed the transition.
             out[u] = "unknown"
             continue
         if fp is not None and fp < ff:
