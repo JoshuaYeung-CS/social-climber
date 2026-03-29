@@ -353,7 +353,7 @@ function renderLookup(data) {
       <h3>${escapeHtml(data.username)}</h3>
       <div class="url"><a href="${escapeAttr(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a></div>
       ${renderTagToggles(data.tags)}
-      ${data.aliases && data.aliases.length > 1 ? `<div class="warn-banner info-banner">↪ This account has been renamed. Aliases (oldest → newest): ${data.aliases.map((a) => a === data.username ? `<strong>${escapeHtml(a)}</strong>` : escapeHtml(a)).join(" → ")}</div>` : ""}
+      ${data.aliases && data.aliases.length > 1 ? `<div class="warn-banner info-banner">↪ This account has been renamed. Aliases (oldest → newest): ${data.aliases.map((a) => a === data.username ? `<strong>${escapeHtml(a)}</strong>` : `<a href="#" class="alias-link" data-username="${escapeAttr(a)}">${escapeHtml(a)}</a>`).join(" → ")}</div>` : ""}
       ${data.follow_runs_count > 1 ? `<div class="warn-banner">⚠ You've followed this person <strong>${data.follow_runs_count} separate times</strong> across history.</div>` : ""}
       ${data.follower_runs_count > 1 ? `<div class="warn-banner">⚠ They've followed you <strong>${data.follower_runs_count} separate times</strong> across history.</div>` : ""}
       <div class="facts">
@@ -402,6 +402,15 @@ function bindTagToggles(root, username, currentTags) {
   });
   const histBtn = root.querySelector('[data-action="show-history"]');
   if (histBtn) histBtn.addEventListener("click", () => showHistory(histBtn.dataset.username));
+
+  // Click on any past alias in the rename banner to navigate to that account.
+  $$(".alias-link", root).forEach((el) =>
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openAccountModal(el.dataset.username);
+    })
+  );
 }
 
 // ---------- account modal (used from list/alert clicks) ----------
@@ -647,41 +656,41 @@ function rowDateKey(r) {
   );
 }
 
-// Sort dropdown labels adapt to the list you're on. For unfollow lists the
-// chronological field is the unfollow date; for "who follows me" lists it's
-// the follow-back date; etc. Falling back to generic newest/oldest text when
-// the list doesn't have a clean event verb.
-const SORT_LABELS = {
-  // followed_at-based (you started following them)
-  all_following:           { newest: "Most recently followed",     oldest: "Earliest followed" },
-  still_follow_after_drop: { newest: "Most recently followed",     oldest: "Earliest followed" },
-  // mutual_since_at-based
-  mutuals:                 { newest: "Most recent mutual",         oldest: "Earliest mutual" },
-  // last_followed_you_at-based (they unfollowed you)
-  not_following_you_back:        { newest: "Most recently stopped",     oldest: "Earliest stopped" },
-  ever_unfollowed_you:           { newest: "Most recently unfollowed",  oldest: "Earliest unfollowed" },
-  ever_removed_you_as_follower:  { newest: "Most recently removed",     oldest: "Earliest removed" },
-  // unfollowed_by_you_at-based (you unfollowed them)
-  you_unfollowed_ever:   { newest: "Most recently unfollowed", oldest: "Earliest unfollowed" },
-  recently_unfollowed:   { newest: "Most recently unfollowed", oldest: "Earliest unfollowed" },
-  // first_followed_you_at-based
-  all_followers:    { newest: "Most recently followed you", oldest: "Earliest followed you" },
-  feeder_accounts:  { newest: "Most recently followed you", oldest: "Earliest followed you" },
-  // pending
-  pending:                { newest: "Most recent request",   oldest: "Earliest request" },
-  recent_follow_requests: { newest: "Most recent request",   oldest: "Earliest request" },
-  // incoming
-  incoming_requests:      { newest: "Most recent",           oldest: "Earliest" },
-  ever_incoming_requests: { newest: "Most recent",           oldest: "Earliest" },
+// Each list has its own "what date is sorting by?" — surfaced as a small
+// caption next to the Sort label so the user knows which event the
+// chronological options refer to. The dropdown options themselves stay
+// uniform (Newest first / Oldest first / A → Z), which earlier feedback
+// found easier to scan than per-list verbs.
+const SORT_DATE_HINT = {
+  all_following:                "by when you followed them",
+  still_follow_after_drop:      "by when you followed them",
+  mutuals:                      "by when you became mutual",
+  not_following_you_back:       "by when they last followed you",
+  ever_unfollowed_you:          "by when they last followed you",
+  ever_removed_you_as_follower: "by when they last appeared in your following",
+  you_unfollowed_ever:          "by when you unfollowed them",
+  recently_unfollowed:          "by when you unfollowed them",
+  all_followers:                "by when they first followed you",
+  feeder_accounts:              "by when they first followed you",
+  pending:                      "by when you sent the request",
+  recent_follow_requests:       "by when you sent the request",
+  incoming_requests:             "by when they requested",
+  ever_incoming_requests:        "by when they requested",
 };
 
 function refreshSortLabels(kind) {
-  const labels = SORT_LABELS[kind] || { newest: "Newest first", oldest: "Oldest first" };
+  // Uniform option text — easy to scan.
   const opts = sortSelect.options;
   for (const opt of opts) {
-    if (opt.value === "reverse_chronological") opt.textContent = labels.newest;
-    else if (opt.value === "chronological")    opt.textContent = labels.oldest;
+    if (opt.value === "reverse_chronological") opt.textContent = "Newest first";
+    else if (opt.value === "chronological")    opt.textContent = "Oldest first";
     else if (opt.value === "alphabetical")     opt.textContent = "A → Z";
+  }
+  // Caption next to "Sort:" tells you what the chronological options key off.
+  const caption = $("#sort-caption");
+  if (caption) {
+    const hint = SORT_DATE_HINT[kind];
+    caption.textContent = hint ? `(${hint})` : "";
   }
 }
 
@@ -1037,7 +1046,10 @@ const ACTIVITY_KIND_FILTERS = [
   "new_incoming_request", "incoming_resolved",
 ];
 
-let _activityKindFilter = "all";
+// Multi-select kind filter. Empty Set means "show all kinds" (the All chip
+// is the implicit catch-all). Otherwise show only events whose kind is in
+// the set.
+let _activityKindFilter = new Set();
 let _activityVisibleCap = 500;  // soft cap for initial paint; "show more" expands it
 
 function renderActivityLog() {
@@ -1046,17 +1058,20 @@ function renderActivityLog() {
   const nameFilter = ($("#activity-filter")?.value || "").toLowerCase().trim();
   const kindFilter = _activityKindFilter;
 
-  // Toolbar: chips for kind filter + total count.
+  // Toolbar: chips for kind filter + total count. Multi-select — tapping
+  // a kind chip toggles it; tapping All clears every kind back to the
+  // unfiltered view. The All chip lights up only when no kinds are picked.
   const totalAll = _activityData.length;
+  const noneSelected = kindFilter.size === 0;
   const chips = ACTIVITY_KIND_FILTERS.map((k) => {
     const m = k === "all" ? { label: "All", cls: "muted" } : ACTIVITY_KIND_META[k];
-    const active = k === kindFilter;
+    const active = k === "all" ? noneSelected : kindFilter.has(k);
     return `<button type="button" class="al-chip al-${m.cls}${active ? " active" : ""}" data-kind="${k}">${escapeHtml(m.label)}</button>`;
   }).join("");
 
   // Filter events.
   const filtered = _activityData.filter((e) => {
-    if (kindFilter !== "all" && e.kind !== kindFilter) return false;
+    if (!noneSelected && !kindFilter.has(e.kind)) return false;
     if (nameFilter && !e.username.toLowerCase().includes(nameFilter)) return false;
     return true;
   });
@@ -1117,7 +1132,15 @@ function renderActivityLog() {
 
   $$(".al-chip", out).forEach((el) =>
     el.addEventListener("click", () => {
-      _activityKindFilter = el.dataset.kind;
+      const k = el.dataset.kind;
+      if (k === "all") {
+        _activityKindFilter.clear();
+      } else if (_activityKindFilter.has(k)) {
+        _activityKindFilter.delete(k);
+      } else {
+        _activityKindFilter.add(k);
+      }
+      _activityVisibleCap = 500;
       renderActivityLog();
     })
   );

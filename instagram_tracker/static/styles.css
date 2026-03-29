@@ -670,6 +670,14 @@ code {
   transition: background 100ms ease, border-color 100ms ease;
 }
 .al-name:hover { background: var(--accent-soft); border-color: var(--accent); }
+
+/* Clickable past-alias links inside the rename banner of the account modal. */
+.alias-link {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px dashed currentColor;
+}
+.alias-link:hover { color: var(--accent-hover); border-bottom-style: solid; }
 .list-row {
   display: flex;
   align-items: center;
