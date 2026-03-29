@@ -104,6 +104,8 @@ async function loadHome() {
         ["Ever removed you as follower", s.ever_removed_you_as_follower ?? 0, "ever_removed_you_as_follower"],
         ["You ever unfollowed", s.ever_you_unfollowed ?? 0, "you_unfollowed_ever"],
         ["You still follow them after they unfollowed you", s.still_follow_after_drop ?? 0, "still_follow_after_drop"],
+        ["Requests to follow you", s.incoming_requests ?? 0, "incoming_requests"],
+        ["Ever requested to follow you", s.ever_incoming_requests ?? 0, "ever_incoming_requests"],
         ["⚠ Tagged disabled", s.disabled_tagged ?? 0, "disabled"],
         ["✕ Tagged unavailable", s.unavailable_tagged ?? 0, "unavailable"],
       ];
@@ -513,6 +515,8 @@ const LIST_KINDS = [
   ["not_following_you_back", "Don't follow you back"],
   ["feeder_accounts", "Feeder accounts (follow you, you don't)"],
   ["pending", "Pending requests you sent"],
+  ["incoming_requests", "Requests to follow you"],
+  ["ever_incoming_requests", "Ever requested to follow you"],
   ["ever_unfollowed_you", "Ever unfollowed you"],
   ["ever_removed_you_as_follower", "Ever removed you as a follower"],
   ["you_unfollowed_ever", "You ever unfollowed"],
@@ -664,8 +668,11 @@ const SORT_LABELS = {
   all_followers:    { newest: "Most recently followed you", oldest: "Earliest followed you" },
   feeder_accounts:  { newest: "Most recently followed you", oldest: "Earliest followed you" },
   // pending
-  pending:               { newest: "Most recent request",   oldest: "Earliest request" },
-  recent_follow_requests:{ newest: "Most recent request",   oldest: "Earliest request" },
+  pending:                { newest: "Most recent request",   oldest: "Earliest request" },
+  recent_follow_requests: { newest: "Most recent request",   oldest: "Earliest request" },
+  // incoming
+  incoming_requests:      { newest: "Most recent",           oldest: "Earliest" },
+  ever_incoming_requests: { newest: "Most recent",           oldest: "Earliest" },
 };
 
 function refreshSortLabels(kind) {
@@ -1013,18 +1020,21 @@ async function loadActivityLog(force = false) {
 
 // Per-kind label and color for the flat activity feed.
 const ACTIVITY_KIND_META = {
-  new_follower:     { label: "started following you", cls: "good", verb: "follower" },
-  unfollowed_you:   { label: "unfollowed you",        cls: "bad",  verb: "follower" },
-  you_followed:     { label: "you followed",          cls: "good", verb: "subject" },
-  you_unfollowed:   { label: "you unfollowed",        cls: "muted",verb: "subject" },
-  removed_you:      { label: "removed you",           cls: "bad",  verb: "follower" },
-  you_requested:    { label: "you requested",         cls: "info", verb: "subject" },
-  pending_resolved: { label: "pending resolved",      cls: "muted",verb: "follower" },
+  new_follower:         { label: "started following you", cls: "good"  },
+  unfollowed_you:       { label: "unfollowed you",        cls: "bad"   },
+  you_followed:         { label: "you followed",          cls: "good"  },
+  you_unfollowed:       { label: "you unfollowed",        cls: "muted" },
+  removed_you:          { label: "removed you",           cls: "bad"   },
+  you_requested:        { label: "you requested",         cls: "info"  },
+  pending_resolved:     { label: "your request resolved", cls: "muted" },
+  new_incoming_request: { label: "requested to follow you", cls: "info"  },
+  incoming_resolved:    { label: "their request resolved", cls: "muted" },
 };
 
 const ACTIVITY_KIND_FILTERS = [
   "all", "new_follower", "unfollowed_you", "you_followed", "you_unfollowed",
   "removed_you", "you_requested", "pending_resolved",
+  "new_incoming_request", "incoming_resolved",
 ];
 
 let _activityKindFilter = "all";
@@ -1130,10 +1140,11 @@ $("#activity-filter")?.addEventListener("input", renderActivityLog);
 
 // Series available in the chart. Sticky checkbox state persists across renders.
 const HISTORY_SERIES = [
-  { key: "followers",              label: "Followers",              color: "#4f8cff", on: true  },
-  { key: "following",              label: "Following",              color: "#ffb454", on: true  },
-  { key: "mutuals",                label: "Mutuals",                color: "#3ecf8e", on: true  },
-  { key: "pending",                label: "Pending",                color: "#a78bfa", on: false },
+  { key: "followers",              label: "Followers",                color: "#4f8cff", on: true  },
+  { key: "following",              label: "Following",                color: "#ffb454", on: true  },
+  { key: "mutuals",                label: "Mutuals",                  color: "#3ecf8e", on: true  },
+  { key: "pending",                label: "Pending (you sent)",       color: "#a78bfa", on: false },
+  { key: "incoming",               label: "Pending (they sent)",      color: "#f472b6", on: false },
   { key: "cumulative_unfollowers", label: "Unfollowers (cumulative)", color: "#ff5e7a", on: false },
 ];
 let _historyZoom = null;  // { fromIdx, toIdx } in the (range-filtered) snaps array

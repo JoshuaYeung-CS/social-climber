@@ -52,6 +52,13 @@ def parse_recently_unfollowed(path: Path) -> list[Row]:
     return _extract_simple(data.get("relationships_unfollowed_users", []))
 
 
+def parse_incoming_requests(path: Path) -> list[Row]:
+    """`follow_requests_you've_received.json` — pending requests *from* other
+    accounts asking to follow you. Parallel shape to outgoing pending."""
+    data = _read_json(path)
+    return _extract_simple(data.get("relationships_follow_requests_received", []))
+
+
 def normalize_account_input(value: str) -> tuple[str, str]:
     """Accepts a raw username, @handle, or instagram URL. Returns (username, canonical_url)."""
     raw = (value or "").strip()

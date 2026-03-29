@@ -59,6 +59,7 @@ from .parsers import (
     Row,
     parse_followers,
     parse_following,
+    parse_incoming_requests,
     parse_pending,
     parse_recently_unfollowed,
 )
@@ -214,7 +215,17 @@ def _ingest_one(
         unfollowed_rows = []
         missing_files.append("recently unfollowed by you (recently_unfollowed_profiles.json)")
 
-    if not any([follower_rows, following_rows, pending_rows, recent_rows, unfollowed_rows]):
+    # Incoming follow requests — the apostrophe in the IG filename is real
+    # ("follow_requests_you've_received.json"), so we glob to be defensive
+    # about minor filename quoting differences across export versions.
+    incoming_files = list(ff_dir.glob("follow_requests_you*received.json"))
+    if incoming_files:
+        incoming_rows = parse_incoming_requests(incoming_files[0])
+    else:
+        incoming_rows = []
+        missing_files.append("incoming follow requests (follow_requests_you've_received.json)")
+
+    if not any([follower_rows, following_rows, pending_rows, recent_rows, unfollowed_rows, incoming_rows]):
         raise ValueError(f"No usable Instagram export data found in: {ff_dir}")
 
     merged, sources = _merge_pending(pending_rows, recent_rows)
@@ -259,6 +270,7 @@ def _ingest_one(
     _bulk_insert(conn, "following", snapshot_id, following_rows)
     _bulk_insert_pending(conn, snapshot_id, merged, sources)
     _bulk_insert(conn, "recently_unfollowed", snapshot_id, unfollowed_rows)
+    _bulk_insert(conn, "incoming_follow_requests", snapshot_id, incoming_rows)
     conn.commit()
 
     return ImportResult(
@@ -270,6 +282,7 @@ def _ingest_one(
             "pending": sum(1 for u in sources if sources[u] in ("pending_follow_requests", "both")),
             "recent_requests": sum(1 for u in sources if sources[u] in ("recent_follow_requests", "both")),
             "recently_unfollowed": len(unfollowed_rows),
+            "incoming_requests": len(incoming_rows),
         },
         missing_files=missing_files,
     )

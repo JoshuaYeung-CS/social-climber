@@ -148,6 +148,14 @@ def home():
 
             still_follow_them = ever_unfollowed_you & curr.following
 
+            # Cumulative ever_incoming_requests: union of every snapshot's
+            # incoming set. New table, so old snapshots contribute nothing —
+            # but as new imports land, this becomes the historical record.
+            ever_incoming = {
+                r["username"]
+                for r in conn.execute("SELECT DISTINCT username FROM incoming_follow_requests").fetchall()
+            }
+
             summary = {
                 "snapshot_id": latest,
                 "followers": len(curr.followers),
@@ -156,11 +164,13 @@ def home():
                 "not_following_you_back": len(curr.following - curr.followers),
                 "feeder_accounts": len(curr.followers - curr.following),
                 "pending": len(curr.pending),
+                "incoming_requests": len(curr.incoming_requests),
                 # Cumulative (ever) counts:
                 "ever_unfollowed_you": len(ever_unfollowed_you),
                 "ever_removed_you_as_follower": len(ever_removed),
                 "ever_you_unfollowed": len(ever_self),
                 "still_follow_after_drop": len(still_follow_them),
+                "ever_incoming_requests": len(ever_incoming),
                 "disabled_tagged": len(tags_mod.list_with_flag(conn, "disabled")),
                 "unavailable_tagged": len(tags_mod.list_with_flag(conn, "unavailable")),
             }
@@ -235,13 +245,15 @@ def get_activity_log():
                 left_followers = prev_sd.followers - curr_sd.followers
                 left_following = prev_sd.following - curr_sd.following
                 buckets = [
-                    ("new_follower",       curr_sd.followers - prev_sd.followers),
-                    ("unfollowed_you",     left_followers),
-                    ("you_followed",       curr_sd.following - prev_sd.following),
-                    ("you_unfollowed",     left_following & curr_sd.recently_unfollowed),
-                    ("removed_you",        left_following - curr_sd.recently_unfollowed - curr_sd.pending),
-                    ("you_requested",      curr_sd.pending - prev_sd.pending),
-                    ("pending_resolved",   prev_sd.pending - curr_sd.pending),
+                    ("new_follower",         curr_sd.followers - prev_sd.followers),
+                    ("unfollowed_you",       left_followers),
+                    ("you_followed",         curr_sd.following - prev_sd.following),
+                    ("you_unfollowed",       left_following & curr_sd.recently_unfollowed),
+                    ("removed_you",          left_following - curr_sd.recently_unfollowed - curr_sd.pending),
+                    ("you_requested",        curr_sd.pending - prev_sd.pending),
+                    ("pending_resolved",     prev_sd.pending - curr_sd.pending),
+                    ("new_incoming_request", curr_sd.incoming_requests - prev_sd.incoming_requests),
+                    ("incoming_resolved",    prev_sd.incoming_requests - curr_sd.incoming_requests),
                 ]
                 for kind, names in buckets:
                     for u in sorted(names):
@@ -275,6 +287,7 @@ def get_timeline():
         following_count: dict[int, int] = {}
         pending_count: dict[int, int] = {}
         mutuals_count: dict[int, int] = {}
+        incoming_count: dict[int, int] = {}
         for r in conn.execute(
             "SELECT snapshot_id, COUNT(*) AS c FROM followers GROUP BY snapshot_id"
         ).fetchall():
@@ -297,6 +310,10 @@ def get_timeline():
             """
         ).fetchall():
             mutuals_count[int(r["sid"])] = int(r["c"])
+        for r in conn.execute(
+            "SELECT snapshot_id, COUNT(*) AS c FROM incoming_follow_requests GROUP BY snapshot_id"
+        ).fetchall():
+            incoming_count[int(r["snapshot_id"])] = int(r["c"])
 
         # Cumulative unfollowers: walk chronologically, accumulate the set of
         # usernames who left your followers between any two consecutive
@@ -332,6 +349,7 @@ def get_timeline():
                 "following": following_count.get(s.id, 0),
                 "mutuals": mutuals_count.get(s.id, 0),
                 "pending": pending_count.get(s.id, 0),
+                "incoming": incoming_count.get(s.id, 0),
                 "cumulative_unfollowers": cum_unfollowers_at.get(s.id, 0),
             })
         return {"snapshots": out}
@@ -515,6 +533,15 @@ def get_lists(snapshot_id: int | None = None):
         # Renamed accounts — show one row per chain, keyed by the latest username.
         chains = q.detect_renames(conn)
         sections["renamed"] = sorted({c["sequence"][-1] for c in chains})
+
+        # Cumulative incoming follow requests: union across every snapshot's
+        # `incoming_follow_requests` table, minus anyone you've ended up
+        # following back (they're no longer "outstanding requests to you").
+        ever_incoming_set = {
+            r["username"]
+            for r in conn.execute("SELECT DISTINCT username FROM incoming_follow_requests").fetchall()
+        } - sd.followers
+        sections["ever_incoming_requests"] = sorted(ever_incoming_set)
 
         # Per-username timestamp of when you started following them (from Instagram's export).
         following_ts: dict[str, int | None] = {}

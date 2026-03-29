@@ -43,6 +43,7 @@ def current_lists(s: SnapshotData) -> dict[str, list[str]]:
         "pending": sorted(s.pending),
         "recent_follow_requests": sorted(s.recent_follow_requests),
         "recently_unfollowed": sorted(s.recently_unfollowed),
+        "incoming_requests": sorted(s.incoming_requests),
     }
 
 

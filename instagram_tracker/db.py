@@ -59,6 +59,16 @@ CREATE TABLE IF NOT EXISTS recently_unfollowed (
 );
 CREATE INDEX IF NOT EXISTS idx_recently_unfollowed_username ON recently_unfollowed(username);
 
+CREATE TABLE IF NOT EXISTS incoming_follow_requests (
+    snapshot_id INTEGER NOT NULL,
+    username TEXT NOT NULL,
+    profile_url TEXT,
+    export_timestamp INTEGER,
+    PRIMARY KEY (snapshot_id, username),
+    FOREIGN KEY (snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_incoming_username ON incoming_follow_requests(username);
+
 CREATE TABLE IF NOT EXISTS profile_tags (
     username TEXT PRIMARY KEY,
     favorite INTEGER NOT NULL DEFAULT 0,

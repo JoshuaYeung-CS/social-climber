@@ -23,6 +23,7 @@ class SnapshotData:
     pending: set[str]              # current pending requests you've sent (not yet accepted)
     recent_follow_requests: set[str]
     recently_unfollowed: set[str]
+    incoming_requests: set[str]    # accounts that have requested to follow you (still pending)
 
 
 # ---------- snapshot listing ----------
@@ -88,12 +89,18 @@ def snapshot_data(conn: sqlite3.Connection, snapshot_id: int) -> SnapshotData:
     recent_requests = {r["username"] for r in pending_rows if r["source_label"] in ("recent_follow_requests", "both")}
     pending = pending - followers  # if they accepted, drop from "current pending"
     recently_unfollowed = _names(conn, "recently_unfollowed", snapshot_id)
+    incoming = _names(conn, "incoming_follow_requests", snapshot_id)
+    # Anyone you already follow back has effectively resolved their incoming
+    # request — strip them so the "they want to follow you" count isn't
+    # inflated by your-existing-followers leaking into the incoming set.
+    incoming = incoming - followers
     return SnapshotData(
         followers=followers,
         following=following,
         pending=pending,
         recent_follow_requests=recent_requests,
         recently_unfollowed=recently_unfollowed,
+        incoming_requests=incoming,
     )
 
 
