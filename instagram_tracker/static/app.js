@@ -195,23 +195,32 @@ async function doImport(file) {
       return line;
     });
     for (const s of (result.skipped || [])) {
-      const icon = s.reason === "duplicate" ? "↩" : "⚠";
-      lines.push(`<div class="warn-box">${icon} Skipped ${escapeHtml(cleanLabel(s.label))}: ${escapeHtml(s.message)}</div>`);
+      const icon = s.reason === "backfilled" ? "✓" : (s.reason === "duplicate" ? "↩" : "⚠");
+      const cls  = s.reason === "backfilled" ? "ok" : "warn-box";
+      lines.push(`<div class="${cls}">${icon} ${s.reason === "backfilled" ? "" : "Skipped "}${escapeHtml(cleanLabel(s.label))}: ${escapeHtml(s.message)}</div>`);
     }
     status.innerHTML = lines.join("");
     _historyData = null;  // invalidate so the next History view refetches
     await loadHome();
     const imported = result.imports.length;
-    const skipped = (result.skipped || []).length;
-    if (imported === 0 && skipped > 0) {
-      const reason = result.skipped[0].reason === "duplicate" ? "duplicate" : "older than existing snapshots";
-      toast(`Skipped — ${reason}`);
+    const skipped = (result.skipped || []);
+    const backfilled = skipped.filter((s) => s.reason === "backfilled").length;
+    const trueSkipped = skipped.length - backfilled;
+    if (imported === 0 && skipped.length > 0) {
+      if (backfilled > 0 && trueSkipped === 0) {
+        toast(`Backfilled ${backfilled} snapshot${backfilled === 1 ? "" : "s"}`);
+      } else {
+        const reason = skipped[0].reason === "duplicate" ? "duplicate" : "older than existing snapshots";
+        toast(`Skipped — ${reason}`);
+      }
     } else {
       const warned = result.imports.some((r) => r.missing_files && r.missing_files.length);
-      const skipNote = skipped ? `, ${skipped} skipped` : "";
-      toast(warned
-        ? `Imported, but Instagram dropped some files${skipNote}`
-        : `Imported ${imported} snapshot${imported === 1 ? "" : "s"}${skipNote}`);
+      const parts = [];
+      if (imported) parts.push(`Imported ${imported} snapshot${imported === 1 ? "" : "s"}`);
+      if (backfilled) parts.push(`backfilled ${backfilled}`);
+      if (trueSkipped) parts.push(`${trueSkipped} skipped`);
+      const msg = parts.join(", ") || "Done";
+      toast(warned ? `${msg} (some IG files missing)` : msg);
     }
   } catch (e) {
     status.innerHTML = `<div class="err">✗ ${escapeHtml(e.message)}</div>`;

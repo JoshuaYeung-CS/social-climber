@@ -240,15 +240,43 @@ def _ingest_one(
         (content_hash,),
     ).fetchone()
     if dup is not None:
+        dup_id = int(dup["id"])
+        # Backfill opportunity: if the existing snapshot is missing data from
+        # tables we didn't used to parse (e.g. incoming_follow_requests),
+        # use this zip to fill them in. Lets users re-drop their old zips to
+        # populate columns that didn't exist when the snapshot was first
+        # imported, instead of having to delete and re-import.
+        backfilled: dict[str, int] = {}
+        existing_incoming_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM incoming_follow_requests WHERE snapshot_id = ?",
+            (dup_id,),
+        ).fetchone()["c"]
+        if existing_incoming_count == 0 and incoming_rows:
+            _bulk_insert(conn, "incoming_follow_requests", dup_id, incoming_rows)
+            conn.commit()
+            backfilled["incoming_requests"] = len(incoming_rows)
+        if backfilled:
+            parts = ", ".join(f"{n} {kind}" for kind, n in backfilled.items())
+            return SkippedImport(
+                label=label,
+                reason="backfilled",
+                message=(
+                    f"Matched snapshot #{dup_id} "
+                    f"({dup['label'] or 'unlabeled'}) — backfilled {parts} from this zip. "
+                    "Older snapshots' incoming-request column is now populated."
+                ),
+                existing_snapshot_id=dup_id,
+                existing_label=dup["label"],
+            )
         return SkippedImport(
             label=label,
             reason="duplicate",
             message=(
-                f"Duplicate of snapshot #{int(dup['id'])} "
+                f"Duplicate of snapshot #{dup_id} "
                 f"({dup['label'] or 'unlabeled'}) — same followers, following, "
                 "pending, and recently-unfollowed sets. Nothing to import."
             ),
-            existing_snapshot_id=int(dup["id"]),
+            existing_snapshot_id=dup_id,
             existing_label=dup["label"],
         )
 
