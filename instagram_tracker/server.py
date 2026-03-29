@@ -444,8 +444,17 @@ def get_lists(snapshot_id: int | None = None):
         sid = _resolve(conn, snapshot_id)
         sd = q.snapshot_data(conn, sid)
         sections = diffs_mod.current_lists(sd)
-        # Combined "everyone with a current relationship" — easy to scroll/search for tagging.
-        sections["everyone"] = sorted(sd.followers | sd.following | sd.pending)
+        # Cumulative "everyone you've ever had any interaction with" — union
+        # across every snapshot's followers, following, pending,
+        # recently-unfollowed, and incoming-requests sets. Replaces the
+        # earlier "current snapshot only" definition because you wanted to
+        # be able to find anybody you've ever crossed paths with.
+        all_seen: set[str] = set()
+        for table in ("followers", "following", "pending_follow_requests",
+                      "recently_unfollowed", "incoming_follow_requests"):
+            for r in conn.execute(f"SELECT DISTINCT username FROM {table}").fetchall():
+                all_seen.add(r["username"])
+        sections["everyone"] = sorted(all_seen)
 
         prev_id = q.previous_id(conn, sid)
         if prev_id is not None:

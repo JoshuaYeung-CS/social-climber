@@ -517,7 +517,7 @@ async function showHistory(username) {
 // ---------- lists ----------
 
 const LIST_KINDS = [
-  ["everyone", "Everyone (search-friendly)"],
+  ["everyone", "Everyone you've ever interacted with"],
   ["all_followers", "All followers"],
   ["all_following", "All following"],
   ["mutuals", "Mutuals"],
@@ -531,8 +531,6 @@ const LIST_KINDS = [
   ["you_unfollowed_ever", "You ever unfollowed"],
   ["still_follow_after_drop", "You still follow people who unfollowed you"],
   ["renamed", "Renamed accounts"],
-  ["recent_follow_requests", "Recent follow requests"],
-  ["recently_unfollowed", "Recently unfollowed by you"],
   ["favorite", "★ Favorites"],
   ["want_remove", "✦ Want to remove"],
   ["watchlist", "↺ Wait-back"],
