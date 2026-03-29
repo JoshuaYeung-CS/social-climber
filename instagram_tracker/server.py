@@ -218,56 +218,146 @@ def delete_snapshot(snapshot_id: int):
 def get_activity_log():
     """Flat chronological feed: one entry per (username × event), newest
     first. Each entry is a single thing that happened between two
-    consecutive chronological snapshots — somebody followed you, you
-    followed somebody, somebody removed you, a pending request resolved.
+    consecutive chronological snapshots.
 
-    The 'they_removed_you' kind already has the pending-bounce filter
-    applied (subtract curr.pending), so IG's quirk of moving accepted
-    accounts back to pending doesn't surface here either."""
+    Two precision improvements over the snapshot-pair model:
+
+    1. Creation events (someone started following you, you followed someone,
+       you sent a request, they sent you a request) carry the EXACT IG
+       export_timestamp from the underlying row, not just the snapshot's
+       taken_at. Resolution events (unfollowed_you, you_unfollowed,
+       removed_you, request resolutions) fall back to the curr snapshot's
+       taken_at because the underlying data is gone.
+
+    2. Resolution events split based on current state so the user sees what
+       actually happened: 'they_accepted' vs 'pending_withdrawn',
+       'you_accepted' vs 'incoming_withdrawn'.
+
+    Also: skip incoming_request diffs when either side of the pair lacks
+    incoming data — otherwise a snapshot from before incoming-parsing
+    existed yields a phantom flood of 'every incoming resolved' events."""
     with db_conn() as conn:
-        snaps = q.list_snapshots(conn)  # chronological order
+        snaps = q.list_snapshots(conn)
         if len(snaps) < 2:
             return {"events": []}
 
-        # Pull taken_at for every snapshot up front.
+        # Bulk maps: snapshot_id -> taken_at, and which snapshots actually
+        # have incoming-request data populated (vs. data never collected).
         taken_at_by_id = {
             int(r["id"]): r["taken_at"]
             for r in conn.execute("SELECT id, taken_at FROM snapshots").fetchall()
         }
+        snaps_with_incoming: set[int] = {
+            int(r["snapshot_id"])
+            for r in conn.execute(
+                "SELECT DISTINCT snapshot_id FROM incoming_follow_requests"
+            ).fetchall()
+        }
+
+        # Per-table username -> export_timestamp index, keyed by snapshot_id.
+        # Used to give creation events the exact IG-recorded moment instead
+        # of the snapshot's taken_at.
+        def ts_index(table: str) -> dict[int, dict[str, int]]:
+            out: dict[int, dict[str, int]] = {}
+            for r in conn.execute(
+                f"SELECT snapshot_id, username, export_timestamp FROM {table} "
+                f"WHERE export_timestamp IS NOT NULL"
+            ).fetchall():
+                ts = int(r["export_timestamp"])
+                out.setdefault(int(r["snapshot_id"]), {})[r["username"]] = ts
+            return out
+
+        ts_followers = ts_index("followers")
+        ts_following = ts_index("following")
+        ts_pending   = ts_index("pending_follow_requests")
+        ts_incoming  = ts_index("incoming_follow_requests")
+
+        from datetime import datetime, timezone
+
+        def epoch_to_iso(epoch: int | None) -> str | None:
+            if epoch is None:
+                return None
+            try:
+                return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+            except (OSError, ValueError):
+                return None
+
+        def emit(events_list, kind, username, snapshot_id, fallback_ts, actual_epoch=None):
+            actual_iso = epoch_to_iso(actual_epoch)
+            events_list.append({
+                # Sort/display timestamp prefers the precise IG-recorded
+                # moment when we have one (creation events), otherwise
+                # falls back to the snapshot's taken_at.
+                "timestamp": actual_iso or fallback_ts,
+                "snapshot_id": snapshot_id,
+                "kind": kind,
+                "username": username,
+                # Surfacing both so the UI can render "(detected at #N <date>)"
+                # for events whose actual time predates the snapshot.
+                "snapshot_at": fallback_ts,
+                "actual_event_at": actual_iso,
+            })
 
         events: list[dict] = []
         prev_sd = None
+        prev_id = None
         for s in snaps:
             curr_sd = q.snapshot_data(conn, s.id)
-            ts = taken_at_by_id.get(s.id) or s.created_at
+            curr_ts = taken_at_by_id.get(s.id) or s.created_at
 
             if prev_sd is not None:
                 left_followers = prev_sd.followers - curr_sd.followers
                 left_following = prev_sd.following - curr_sd.following
-                buckets = [
-                    ("new_follower",         curr_sd.followers - prev_sd.followers),
-                    ("unfollowed_you",       left_followers),
-                    ("you_followed",         curr_sd.following - prev_sd.following),
-                    ("you_unfollowed",       left_following & curr_sd.recently_unfollowed),
-                    ("removed_you",          left_following - curr_sd.recently_unfollowed - curr_sd.pending),
-                    ("you_requested",        curr_sd.pending - prev_sd.pending),
-                    ("pending_resolved",     prev_sd.pending - curr_sd.pending),
-                    ("new_incoming_request", curr_sd.incoming_requests - prev_sd.incoming_requests),
-                    ("incoming_resolved",    prev_sd.incoming_requests - curr_sd.incoming_requests),
-                ]
-                for kind, names in buckets:
-                    for u in sorted(names):
-                        events.append({
-                            "timestamp": ts,
-                            "snapshot_id": s.id,
-                            "snapshot_label": s.label,
-                            "kind": kind,
-                            "username": u,
-                        })
-            prev_sd = curr_sd
 
-        # Newest first; ties stable by snapshot_id then username.
-        events.sort(key=lambda e: (e["timestamp"], e["snapshot_id"], e["username"]), reverse=True)
+                # ---------- creation events: precise timestamps ----------
+                for u in sorted(curr_sd.followers - prev_sd.followers):
+                    emit(events, "new_follower", u, s.id, curr_ts,
+                         (ts_followers.get(s.id, {})).get(u))
+                for u in sorted(curr_sd.following - prev_sd.following):
+                    emit(events, "you_followed", u, s.id, curr_ts,
+                         (ts_following.get(s.id, {})).get(u))
+                for u in sorted(curr_sd.pending - prev_sd.pending):
+                    emit(events, "you_requested", u, s.id, curr_ts,
+                         (ts_pending.get(s.id, {})).get(u))
+
+                # ---------- pending resolutions: split by outcome ----------
+                pending_left = prev_sd.pending - curr_sd.pending
+                for u in sorted(pending_left):
+                    if u in curr_sd.following:
+                        emit(events, "they_accepted", u, s.id, curr_ts)
+                    else:
+                        emit(events, "pending_withdrawn", u, s.id, curr_ts)
+
+                # ---------- incoming events: only if both sides have data ----------
+                # Suppresses the phantom 'every request resolved' flood that
+                # happens when one snapshot lacks parsed incoming-requests.
+                if s.id in snaps_with_incoming and prev_id in snaps_with_incoming:
+                    for u in sorted(curr_sd.incoming_requests - prev_sd.incoming_requests):
+                        emit(events, "new_incoming_request", u, s.id, curr_ts,
+                             (ts_incoming.get(s.id, {})).get(u))
+                    incoming_left = prev_sd.incoming_requests - curr_sd.incoming_requests
+                    for u in sorted(incoming_left):
+                        if u in curr_sd.followers:
+                            emit(events, "you_accepted", u, s.id, curr_ts)
+                        else:
+                            emit(events, "incoming_withdrawn", u, s.id, curr_ts)
+
+                # ---------- follower-side disappearances: snapshot-time ----------
+                for u in sorted(left_followers):
+                    emit(events, "unfollowed_you", u, s.id, curr_ts)
+                for u in sorted(left_following & curr_sd.recently_unfollowed):
+                    emit(events, "you_unfollowed", u, s.id, curr_ts)
+                for u in sorted(left_following - curr_sd.recently_unfollowed - curr_sd.pending):
+                    emit(events, "removed_you", u, s.id, curr_ts)
+
+            prev_sd = curr_sd
+            prev_id = s.id
+
+        # Sort newest first by the precise timestamp; tiebreak by snapshot_id then username.
+        events.sort(
+            key=lambda e: (e["timestamp"] or "", e["snapshot_id"], e["username"]),
+            reverse=True,
+        )
         return {"events": events}
 
 

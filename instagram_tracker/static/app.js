@@ -1036,21 +1036,23 @@ async function loadActivityLog(force = false) {
 
 // Per-kind label and color for the flat activity feed.
 const ACTIVITY_KIND_META = {
-  new_follower:         { label: "started following you", cls: "good"  },
-  unfollowed_you:       { label: "unfollowed you",        cls: "bad"   },
-  you_followed:         { label: "you followed",          cls: "good"  },
-  you_unfollowed:       { label: "you unfollowed",        cls: "muted" },
-  removed_you:          { label: "removed you",           cls: "bad"   },
-  you_requested:        { label: "you requested",         cls: "info"  },
-  pending_resolved:     { label: "your request resolved", cls: "muted" },
-  new_incoming_request: { label: "requested to follow you", cls: "info"  },
-  incoming_resolved:    { label: "their request resolved", cls: "muted" },
+  new_follower:         { label: "started following you",  cls: "good"  },
+  unfollowed_you:       { label: "unfollowed you",         cls: "bad"   },
+  you_followed:         { label: "you followed",           cls: "good"  },
+  you_unfollowed:       { label: "you unfollowed",         cls: "muted" },
+  removed_you:          { label: "removed you",            cls: "bad"   },
+  you_requested:        { label: "you requested",          cls: "info"  },
+  they_accepted:        { label: "they accepted you",      cls: "good"  },
+  pending_withdrawn:    { label: "your request withdrawn", cls: "muted" },
+  new_incoming_request: { label: "requested to follow you", cls: "info" },
+  you_accepted:         { label: "you accepted them",      cls: "good"  },
+  incoming_withdrawn:   { label: "their request withdrawn", cls: "muted" },
 };
 
 const ACTIVITY_KIND_FILTERS = [
   "all", "new_follower", "unfollowed_you", "you_followed", "you_unfollowed",
-  "removed_you", "you_requested", "pending_resolved",
-  "new_incoming_request", "incoming_resolved",
+  "removed_you", "you_requested", "they_accepted", "pending_withdrawn",
+  "new_incoming_request", "you_accepted", "incoming_withdrawn",
 ];
 
 // Multi-select kind filter. Empty Set means "show all kinds" (the All chip
