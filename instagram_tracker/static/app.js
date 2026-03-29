@@ -1011,117 +1011,196 @@ async function loadActivityLog(force = false) {
   }
 }
 
-const ACTIVITY_GROUPS = [
-  { key: "new_followers",       label: "New followers",       cls: "good" },
-  { key: "they_unfollowed_you", label: "They unfollowed you", cls: "bad" },
-  { key: "new_following",       label: "You followed",        cls: "good" },
-  { key: "you_unfollowed",      label: "You unfollowed",      cls: "muted" },
-  { key: "they_removed_you",    label: "They removed you",    cls: "bad" },
-  { key: "new_pending",         label: "New pending",         cls: "info" },
-  { key: "resolved_pending",    label: "Resolved pending",    cls: "muted" },
+// Per-kind label and color for the flat activity feed.
+const ACTIVITY_KIND_META = {
+  new_follower:     { label: "started following you", cls: "good", verb: "follower" },
+  unfollowed_you:   { label: "unfollowed you",        cls: "bad",  verb: "follower" },
+  you_followed:     { label: "you followed",          cls: "good", verb: "subject" },
+  you_unfollowed:   { label: "you unfollowed",        cls: "muted",verb: "subject" },
+  removed_you:      { label: "removed you",           cls: "bad",  verb: "follower" },
+  you_requested:    { label: "you requested",         cls: "info", verb: "subject" },
+  pending_resolved: { label: "pending resolved",      cls: "muted",verb: "follower" },
+};
+
+const ACTIVITY_KIND_FILTERS = [
+  "all", "new_follower", "unfollowed_you", "you_followed", "you_unfollowed",
+  "removed_you", "you_requested", "pending_resolved",
 ];
+
+let _activityKindFilter = "all";
+let _activityVisibleCap = 500;  // soft cap for initial paint; "show more" expands it
 
 function renderActivityLog() {
   const out = $("#activity-log");
   if (!out || !_activityData) return;
-  const filter = ($("#activity-filter")?.value || "").toLowerCase().trim();
+  const nameFilter = ($("#activity-filter")?.value || "").toLowerCase().trim();
+  const kindFilter = _activityKindFilter;
 
-  // Build event cards. Empty-change events are still listed (compact) so the
-  // timeline doesn't have unexplained gaps, but they collapse to a one-liner.
-  const html = [];
-  let shownCount = 0;
-  for (const ev of _activityData) {
-    if (filter) {
-      const allNames = ACTIVITY_GROUPS.flatMap((g) => ev[g.key] || []).join(" ").toLowerCase();
-      if (!allNames.includes(filter)) continue;
+  // Toolbar: chips for kind filter + total count.
+  const totalAll = _activityData.length;
+  const chips = ACTIVITY_KIND_FILTERS.map((k) => {
+    const m = k === "all" ? { label: "All", cls: "muted" } : ACTIVITY_KIND_META[k];
+    const active = k === kindFilter;
+    return `<button type="button" class="al-chip al-${m.cls}${active ? " active" : ""}" data-kind="${k}">${escapeHtml(m.label)}</button>`;
+  }).join("");
+
+  // Filter events.
+  const filtered = _activityData.filter((e) => {
+    if (kindFilter !== "all" && e.kind !== kindFilter) return false;
+    if (nameFilter && !e.username.toLowerCase().includes(nameFilter)) return false;
+    return true;
+  });
+
+  // Group by date for visual breaks (Today / Yesterday / older days).
+  const today = new Date();
+  const todayStr = today.toISOString().slice(0, 10);
+  const yest = new Date(today.getTime() - 86400 * 1000);
+  const yestStr = yest.toISOString().slice(0, 10);
+  const dayLabel = (iso) => {
+    if (!iso) return "?";
+    const d = iso.slice(0, 10);
+    if (d === todayStr) return "Today";
+    if (d === yestStr) return "Yesterday";
+    const dt = new Date(d + "T12:00:00Z");
+    if (isNaN(dt)) return d;
+    const sameYear = dt.getUTCFullYear() === today.getUTCFullYear();
+    return dt.toLocaleDateString("en-US", sameYear
+      ? { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }
+      : { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+  };
+
+  const limit = Math.min(filtered.length, _activityVisibleCap);
+  const slice = filtered.slice(0, limit);
+
+  let lastDay = "";
+  const rowHtml = slice.map((e) => {
+    const meta = ACTIVITY_KIND_META[e.kind] || { label: e.kind, cls: "muted" };
+    const t = (e.timestamp || "").slice(0, 19);
+    const day = t.slice(0, 10);
+    const time = t.slice(11, 16) || "—";
+    let header = "";
+    if (day !== lastDay) {
+      lastDay = day;
+      header = `<div class="al-day">${escapeHtml(dayLabel(t))}</div>`;
     }
-    shownCount++;
-    const timestamp = (ev.taken_at || "").replace("T", " ").slice(0, 19);
-    const groupSummaries = ACTIVITY_GROUPS
-      .filter((g) => (ev[g.key] || []).length > 0)
-      .map((g) => {
-        const n = (ev[g.key] || []).length;
-        return `<span class="al-pill al-${g.cls}"><strong>${n}</strong> ${escapeHtml(g.label)}</span>`;
-      })
-      .join("");
-    const collapsed = ev.change_count === 0;
-    const detailBlocks = ACTIVITY_GROUPS
-      .map((g) => {
-        const list = ev[g.key] || [];
-        if (!list.length) return "";
-        return `<div class="al-block al-${g.cls}-block">
-          <div class="al-block-title">${escapeHtml(g.label)} <span class="al-count">(${list.length})</span></div>
-          <div class="al-names">${list.map((u) => `<span class="al-name" data-username="${escapeAttr(u)}">${escapeHtml(u)}</span>`).join("")}</div>
-        </div>`;
-      })
-      .join("");
-    html.push(`
-      <details class="al-event${collapsed ? " al-empty" : ""}" data-snap="${ev.snapshot_id}">
-        <summary>
-          <span class="al-time">${escapeHtml(timestamp || ev.label || "")}</span>
-          ${collapsed
-            ? `<span class="muted small">no changes</span>`
-            : `<span class="al-summary-pills">${groupSummaries}</span>`
-          }
-          <span class="al-counts">F ${ev.counts.followers} · G ${ev.counts.following} · M ${ev.counts.mutuals} · P ${ev.counts.pending}</span>
-        </summary>
-        <div class="al-body">${detailBlocks || `<div class="muted small">First snapshot — nothing to compare against.</div>`}</div>
-      </details>
-    `);
-  }
-  out.innerHTML = html.length
-    ? `<div class="muted small al-meta">${shownCount} of ${_activityData.length} events</div>` + html.join("")
-    : `<div class="muted">No events match.</div>`;
+    return header + `
+      <div class="al-row">
+        <span class="al-time-cell">${escapeHtml(time)}</span>
+        <span class="al-kind-pill al-${meta.cls}">${escapeHtml(meta.label)}</span>
+        <span class="al-name" data-username="${escapeAttr(e.username)}">${escapeHtml(e.username)}</span>
+      </div>
+    `;
+  }).join("");
 
-  // Wire username taps → open account modal.
-  $$(".al-name", out).forEach((el) =>
-    el.addEventListener("click", (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      openAccountModal(el.dataset.username);
+  const more = filtered.length > limit
+    ? `<button type="button" class="ghost-btn al-more">Show ${filtered.length - limit} more</button>`
+    : "";
+
+  out.innerHTML = `
+    <div class="al-toolbar">${chips}</div>
+    <div class="muted small al-meta">${filtered.length === totalAll
+      ? `${totalAll} events`
+      : `${filtered.length} of ${totalAll} events`}</div>
+    ${rowHtml || `<div class="muted">No events match.</div>`}
+    ${more}
+  `;
+
+  $$(".al-chip", out).forEach((el) =>
+    el.addEventListener("click", () => {
+      _activityKindFilter = el.dataset.kind;
+      renderActivityLog();
     })
   );
+  $$(".al-name", out).forEach((el) =>
+    el.addEventListener("click", () => openAccountModal(el.dataset.username))
+  );
+  const moreBtn = out.querySelector(".al-more");
+  if (moreBtn) {
+    moreBtn.addEventListener("click", () => {
+      _activityVisibleCap += 500;
+      renderActivityLog();
+    });
+  }
 }
+
+// Reset the cap whenever filters change so we don't leak a huge render.
+$("#activity-filter")?.addEventListener("input", () => { _activityVisibleCap = 500; });
 
 $("#activity-filter")?.addEventListener("input", renderActivityLog);
 
-$("#history-range")?.addEventListener("change", renderHistory);
-$("#history-series")?.addEventListener("change", renderHistory);
+// Series available in the chart. Sticky checkbox state persists across renders.
+const HISTORY_SERIES = [
+  { key: "followers",              label: "Followers",              color: "#4f8cff", on: true  },
+  { key: "following",              label: "Following",              color: "#ffb454", on: true  },
+  { key: "mutuals",                label: "Mutuals",                color: "#3ecf8e", on: true  },
+  { key: "pending",                label: "Pending",                color: "#a78bfa", on: false },
+  { key: "cumulative_unfollowers", label: "Unfollowers (cumulative)", color: "#ff5e7a", on: false },
+];
+let _historyZoom = null;  // { fromIdx, toIdx } in the (range-filtered) snaps array
+
+function buildSeriesCheckboxes() {
+  const wrap = $("#history-series");
+  if (!wrap) return;
+  wrap.innerHTML = HISTORY_SERIES.map((s) =>
+    `<label class="series-chk">
+       <input type="checkbox" data-series="${s.key}"${s.on ? " checked" : ""} />
+       <span class="swatch" style="background:${s.color}"></span>${s.label}
+     </label>`
+  ).join("");
+  $$("input[data-series]", wrap).forEach((el) =>
+    el.addEventListener("change", () => {
+      const s = HISTORY_SERIES.find((x) => x.key === el.dataset.series);
+      if (s) s.on = el.checked;
+      renderHistory();
+    })
+  );
+}
+buildSeriesCheckboxes();
+
+$("#history-range")?.addEventListener("change", () => {
+  _historyZoom = null;
+  $("#history-zoom-reset").hidden = true;
+  renderHistory();
+});
+$("#history-zoom-reset")?.addEventListener("click", () => {
+  _historyZoom = null;
+  $("#history-zoom-reset").hidden = true;
+  renderHistory();
+});
 
 function renderHistory() {
   if (!_historyData) return;
   const range = $("#history-range").value;
-  const series = $("#history-series").value;
-  // Filter snapshots by range (using created_at as the timeline anchor).
+  // Filter by range (anchored on taken_at so out-of-order imports still respect "last 30 days").
   let snaps = _historyData;
   if (range !== "all") {
     const cutoff = Date.now() - parseInt(range, 10) * 86400 * 1000;
-    snaps = snaps.filter((s) => Date.parse(s.created_at) >= cutoff);
+    snaps = snaps.filter((s) => Date.parse(s.taken_at || s.created_at) >= cutoff);
+  }
+  // Apply zoom (drag-selected sub-range) on top of the date range filter.
+  if (_historyZoom && snaps.length > 0) {
+    const a = Math.max(0, Math.min(_historyZoom.fromIdx, snaps.length - 1));
+    const b = Math.max(0, Math.min(_historyZoom.toIdx, snaps.length - 1));
+    snaps = snaps.slice(Math.min(a, b), Math.max(a, b) + 1);
   }
   if (snaps.length === 0) {
     $("#history-chart").innerHTML = `<div class="muted">No snapshots in this range.</div>`;
     $("#history-detail").innerHTML = "";
     return;
   }
-  drawHistoryChart(snaps, series);
+  drawHistoryChart(snaps);
 }
 
-function drawHistoryChart(snaps, seriesPick) {
+function drawHistoryChart(snaps) {
   const W = 760, H = 280, PAD_L = 50, PAD_R = 16, PAD_T = 16, PAD_B = 40;
   const innerW = W - PAD_L - PAD_R, innerH = H - PAD_T - PAD_B;
 
-  const SERIES = [
-    { key: "followers", label: "Followers", color: "#4f8cff" },
-    { key: "following", label: "Following", color: "#ffb454" },
-    { key: "mutuals",   label: "Mutuals",   color: "#3ecf8e" },
-    { key: "pending",   label: "Pending",   color: "#a78bfa" },
-  ];
-  const visible = seriesPick === "all"
-    ? SERIES.filter((s) => s.key !== "pending")
-    : SERIES.filter((s) => s.key === seriesPick);
+  const visible = HISTORY_SERIES.filter((s) => s.on);
+  if (visible.length === 0) {
+    $("#history-chart").innerHTML = `<div class="muted">Pick at least one series above.</div>`;
+    return;
+  }
 
-  // Domain
-  const xs = snaps.map((_, i) => i);
   const allYs = visible.flatMap((s) => snaps.map((p) => p[s.key]));
   const yMin = Math.min(...allYs);
   const yMax = Math.max(...allYs);
@@ -1132,38 +1211,33 @@ function drawHistoryChart(snaps, seriesPick) {
   const xScale = (i) => PAD_L + (snaps.length === 1 ? innerW / 2 : (i / (snaps.length - 1)) * innerW);
   const yScale = (v) => PAD_T + innerH - ((v - yLo) / (yHi - yLo || 1)) * innerH;
 
-  // Y-axis ticks (5)
   const yTicks = [];
   for (let t = 0; t <= 4; t++) {
     const v = yLo + (t / 4) * (yHi - yLo);
     yTicks.push({ v: Math.round(v), y: yScale(v) });
   }
 
-  // X-axis: show ~6 evenly-spaced labels
   const xLabelCount = Math.min(6, snaps.length);
   const xLabels = [];
   for (let i = 0; i < xLabelCount; i++) {
     const idx = Math.round((i / (xLabelCount - 1 || 1)) * (snaps.length - 1));
     const s = snaps[idx];
-    xLabels.push({ x: xScale(idx), label: shortDate(s.label || s.created_at) });
+    xLabels.push({ x: xScale(idx), label: shortDate(s.taken_at || s.label || s.created_at) });
   }
 
   const linesSvg = visible.map((s) => {
-    const d = snaps.map((p, i) => `${i === 0 ? "M" : "L"} ${xScale(i).toFixed(1)} ${yScale(p[s.key]).toFixed(1)}`).join(" ");
+    const d = snaps.map((p, i) =>
+      `${i === 0 ? "M" : "L"} ${xScale(i).toFixed(1)} ${yScale(p[s.key]).toFixed(1)}`
+    ).join(" ");
     return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" />`;
   }).join("");
 
-  const dotsSvg = snaps.map((p, i) => {
-    return visible.map((s) =>
-      `<circle cx="${xScale(i).toFixed(1)}" cy="${yScale(p[s.key]).toFixed(1)}" r="3" fill="${s.color}" data-snap="${p.snapshot_id}" data-idx="${i}" class="history-dot" />`
-    ).join("");
-  }).join("");
-
-  // Invisible wider hit areas for tap targets
-  const hitsSvg = snaps.map((p, i) => {
-    const x = xScale(i);
-    return `<rect x="${(x - 12).toFixed(1)}" y="${PAD_T}" width="24" height="${innerH}" fill="transparent" data-snap="${p.snapshot_id}" data-idx="${i}" class="history-hit" />`;
-  }).join("");
+  // One small dot per data point per visible series.
+  const dotsSvg = snaps.map((p, i) =>
+    visible.map((s) =>
+      `<circle cx="${xScale(i).toFixed(1)}" cy="${yScale(p[s.key]).toFixed(1)}" r="2.5" fill="${s.color}" />`
+    ).join("")
+  ).join("");
 
   const yTicksSvg = yTicks.map((t) =>
     `<g><line x1="${PAD_L}" y1="${t.y}" x2="${W - PAD_R}" y2="${t.y}" stroke="var(--border)" stroke-width="1" />
@@ -1174,23 +1248,173 @@ function drawHistoryChart(snaps, seriesPick) {
     `<text x="${l.x}" y="${H - 14}" text-anchor="middle" font-size="11" fill="var(--muted)">${escapeHtml(l.label)}</text>`
   ).join("");
 
-  const legend = visible.map((s) =>
-    `<span class="legend-item"><span class="swatch" style="background:${s.color}"></span>${s.label}</span>`
-  ).join("");
-
   $("#history-chart").innerHTML = `
-    <div class="legend">${legend}</div>
     <svg viewBox="0 0 ${W} ${H}" class="history-svg" preserveAspectRatio="xMidYMid meet">
+      <rect class="brush-bg" x="${PAD_L}" y="${PAD_T}" width="${innerW}" height="${innerH}" fill="transparent" />
       ${yTicksSvg}
       ${linesSvg}
       ${dotsSvg}
-      ${hitsSvg}
       ${xLabelsSvg}
+      <line class="hover-line" x1="0" y1="${PAD_T}" x2="0" y2="${PAD_T + innerH}" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3" opacity="0" pointer-events="none"/>
+      <rect class="brush-rect" x="0" y="${PAD_T}" width="0" height="${innerH}" fill="var(--accent)" fill-opacity="0.15" stroke="var(--accent)" stroke-width="1" stroke-dasharray="2 2" pointer-events="none" />
     </svg>
+    <div class="hover-tooltip" hidden></div>
   `;
 
-  $$(".history-hit, .history-dot", $("#history-chart")).forEach((el) => {
-    el.addEventListener("click", () => showHistoryDetail(parseInt(el.dataset.idx, 10), snaps));
+  // Tap a data point: show that snapshot's diff in the existing detail card.
+  // Brushing (drag) zooms instead of selecting a point — small drags (<6px)
+  // are treated as taps so single clicks still work.
+  attachChartInteractions($("#history-chart"), snaps, visible, {
+    PAD_L, PAD_R, PAD_T, PAD_B, W, H, innerW, innerH, xScale, yScale,
+  });
+}
+
+function attachChartInteractions(container, snaps, visible, geom) {
+  const svg = container.querySelector("svg");
+  const hoverLine = svg.querySelector(".hover-line");
+  const brushRect = svg.querySelector(".brush-rect");
+  const tooltip = container.querySelector(".hover-tooltip");
+  let dragStart = null;  // { svgX, screenX }
+
+  const indexAtSvgX = (svgX) => {
+    const innerX = svgX - geom.PAD_L;
+    const i = Math.round((innerX / geom.innerW) * (snaps.length - 1));
+    return Math.max(0, Math.min(snaps.length - 1, i));
+  };
+
+  const eventToSvgX = (ev) => {
+    const pt = svg.createSVGPoint();
+    pt.x = ev.clientX;
+    pt.y = ev.clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return null;
+    const inv = ctm.inverse();
+    return pt.matrixTransform(inv).x;
+  };
+
+  const showTooltip = (i, clientX, clientY) => {
+    const s = snaps[i];
+    const lines = visible.map((sr) =>
+      `<div><span class="swatch" style="background:${sr.color}"></span>${escapeHtml(sr.label)} <strong>${s[sr.key]}</strong></div>`
+    ).join("");
+    tooltip.innerHTML = `
+      <div class="tt-time">${escapeHtml((s.taken_at || s.label || "").replace("T", " ").slice(0, 19))}</div>
+      ${lines}
+    `;
+    tooltip.hidden = false;
+    // Position relative to the chart container so it follows the cursor.
+    const rect = container.getBoundingClientRect();
+    const tw = tooltip.offsetWidth;
+    let left = clientX - rect.left + 10;
+    if (left + tw > rect.width - 4) left = clientX - rect.left - tw - 10;
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${clientY - rect.top - tooltip.offsetHeight - 8}px`;
+    // Position the dotted vertical line at the hovered x.
+    const x = geom.xScale(i);
+    hoverLine.setAttribute("x1", x);
+    hoverLine.setAttribute("x2", x);
+    hoverLine.setAttribute("opacity", "1");
+  };
+
+  const hideTooltip = () => {
+    tooltip.hidden = true;
+    hoverLine.setAttribute("opacity", "0");
+  };
+
+  svg.addEventListener("mousemove", (ev) => {
+    const svgX = eventToSvgX(ev);
+    if (svgX === null) return;
+    const i = indexAtSvgX(svgX);
+    showTooltip(i, ev.clientX, ev.clientY);
+    if (dragStart !== null) {
+      // Update brush rectangle while dragging.
+      const a = Math.min(dragStart.svgX, svgX);
+      const b = Math.max(dragStart.svgX, svgX);
+      brushRect.setAttribute("x", Math.max(geom.PAD_L, a));
+      brushRect.setAttribute("width", Math.min(geom.W - geom.PAD_R, b) - Math.max(geom.PAD_L, a));
+    }
+  });
+  svg.addEventListener("mouseleave", hideTooltip);
+
+  svg.addEventListener("mousedown", (ev) => {
+    const svgX = eventToSvgX(ev);
+    if (svgX === null) return;
+    dragStart = { svgX, screenX: ev.clientX };
+    brushRect.setAttribute("x", svgX);
+    brushRect.setAttribute("width", 0);
+  });
+
+  const finishDrag = (ev) => {
+    if (dragStart === null) return;
+    const svgX = eventToSvgX(ev);
+    const dx = svgX === null ? 0 : Math.abs(svgX - dragStart.svgX);
+    if (svgX !== null && dx >= 6) {
+      // Treat as a zoom gesture.
+      const a = indexAtSvgX(Math.min(dragStart.svgX, svgX));
+      const b = indexAtSvgX(Math.max(dragStart.svgX, svgX));
+      _historyZoom = { fromIdx: a, toIdx: b };
+      $("#history-zoom-reset").hidden = false;
+      dragStart = null;
+      brushRect.setAttribute("width", 0);
+      renderHistory();
+      return;
+    }
+    // Otherwise treat as a tap on the closest point.
+    if (svgX !== null) {
+      showHistoryDetail(indexAtSvgX(svgX), snaps);
+    }
+    dragStart = null;
+    brushRect.setAttribute("width", 0);
+  };
+  svg.addEventListener("mouseup", finishDrag);
+  // If the user drags off the SVG and releases, still finish.
+  document.addEventListener("mouseup", (ev) => {
+    if (dragStart !== null) finishDrag(ev);
+  }, { once: false });
+
+  // Touch support: treat single-tap as point-detail; drag as zoom.
+  let touchStart = null;
+  svg.addEventListener("touchstart", (ev) => {
+    if (ev.touches.length !== 1) return;
+    const t = ev.touches[0];
+    const fakeEv = { clientX: t.clientX, clientY: t.clientY };
+    const svgX = eventToSvgX(fakeEv);
+    if (svgX === null) return;
+    touchStart = { svgX, x: t.clientX };
+    brushRect.setAttribute("x", svgX);
+    brushRect.setAttribute("width", 0);
+  });
+  svg.addEventListener("touchmove", (ev) => {
+    if (!touchStart || ev.touches.length !== 1) return;
+    const t = ev.touches[0];
+    const svgX = eventToSvgX({ clientX: t.clientX, clientY: t.clientY });
+    if (svgX === null) return;
+    const a = Math.min(touchStart.svgX, svgX);
+    const b = Math.max(touchStart.svgX, svgX);
+    brushRect.setAttribute("x", Math.max(geom.PAD_L, a));
+    brushRect.setAttribute("width", Math.min(geom.W - geom.PAD_R, b) - Math.max(geom.PAD_L, a));
+    showTooltip(indexAtSvgX(svgX), t.clientX, t.clientY);
+  }, { passive: true });
+  svg.addEventListener("touchend", (ev) => {
+    if (!touchStart) return;
+    const t = ev.changedTouches[0];
+    const svgX = eventToSvgX({ clientX: t.clientX, clientY: t.clientY });
+    const dx = svgX === null ? 0 : Math.abs(svgX - touchStart.svgX);
+    if (svgX !== null && dx >= 12) {
+      const a = indexAtSvgX(Math.min(touchStart.svgX, svgX));
+      const b = indexAtSvgX(Math.max(touchStart.svgX, svgX));
+      _historyZoom = { fromIdx: a, toIdx: b };
+      $("#history-zoom-reset").hidden = false;
+      touchStart = null;
+      brushRect.setAttribute("width", 0);
+      renderHistory();
+      hideTooltip();
+      return;
+    }
+    if (svgX !== null) showHistoryDetail(indexAtSvgX(svgX), snaps);
+    touchStart = null;
+    brushRect.setAttribute("width", 0);
+    hideTooltip();
   });
 }
 

@@ -479,14 +479,40 @@ code {
 }
 .list-section:first-child { border-top: 0; padding-top: 4px; }
 
-.history-toolbar { display: flex; align-items: center; gap: 8px; margin: 8px 0 12px; flex-wrap: wrap; }
+.history-toolbar { display: flex; align-items: center; gap: 8px; margin: 8px 0 8px; flex-wrap: wrap; }
 .history-toolbar .full-select.inline { flex: 0 1 auto; max-width: 220px; }
-.history-chart { background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
-.history-chart .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-.history-chart .legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
-.history-svg { width: 100%; height: auto; cursor: crosshair; }
-.history-svg .history-dot { cursor: pointer; }
-.history-svg .history-hit { cursor: pointer; }
+.history-series {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.series-chk { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; user-select: none; }
+.series-chk input { margin: 0; }
+.series-chk .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.history-chart { background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; position: relative; }
+.history-svg { width: 100%; height: auto; cursor: crosshair; user-select: none; touch-action: none; }
+.hover-tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+  box-shadow: var(--shadow);
+  min-width: 120px;
+  z-index: 5;
+}
+.hover-tooltip[hidden] { display: none; }
+.hover-tooltip .tt-time { font-weight: 600; margin-bottom: 4px; color: var(--text); font-variant-numeric: tabular-nums; }
+.hover-tooltip > div { display: flex; align-items: center; gap: 6px; line-height: 1.7; }
+.hover-tooltip .swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.hover-tooltip strong { margin-left: auto; font-variant-numeric: tabular-nums; }
 .history-detail { margin-top: 14px; }
 .history-detail .history-snapshot { background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
 .history-detail h3 { margin: 0 0 8px; font-size: 14px; }
@@ -497,10 +523,70 @@ code {
 .diff-block strong { color: var(--text); }
 .diff-name { display: inline-block; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; margin: 2px 2px 0 0; font-size: 12px; }
 
-/* Activity log under History tab. Newest-first feed of every diff between
-   consecutive snapshots. Each event is a <details> for cheap native expand. */
-.activity-log { display: flex; flex-direction: column; gap: 6px; max-height: 70vh; overflow-y: auto; padding-right: 4px; }
-.activity-log .al-meta { padding: 2px 4px 6px; }
+/* Activity log under History tab. Flat per-username feed, newest-first. */
+.activity-log { display: flex; flex-direction: column; gap: 0; max-height: 70vh; overflow-y: auto; padding-right: 4px; }
+.activity-log .al-meta { padding: 4px 4px 8px; }
+.al-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 8px; position: sticky; top: 0; background: var(--bg-elev); z-index: 1; }
+.al-chip {
+  appearance: none;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.al-chip.active { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
+.al-chip.al-good.active  { color: var(--good); border-color: rgba(62, 207, 142, 0.5);  background: rgba(62, 207, 142, 0.10); }
+.al-chip.al-bad.active   { color: var(--bad);  border-color: rgba(255, 94, 122, 0.5);  background: rgba(255, 94, 122, 0.10); }
+.al-chip.al-info.active  { color: var(--accent); border-color: rgba(79, 140, 255, 0.5); background: rgba(79, 140, 255, 0.12); }
+.al-day {
+  position: sticky;
+  top: 36px;
+  background: var(--bg-elev);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 8px 4px 4px;
+  margin-top: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.al-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.al-row:last-child { border-bottom: 0; }
+.al-time-cell {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 42px;
+  flex-shrink: 0;
+}
+.al-kind-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.al-kind-pill.al-good  { color: var(--good); border-color: rgba(62, 207, 142, 0.35); background: rgba(62, 207, 142, 0.08); }
+.al-kind-pill.al-bad   { color: var(--bad);  border-color: rgba(255, 94, 122, 0.35); background: rgba(255, 94, 122, 0.08); }
+.al-kind-pill.al-info  { color: var(--accent); border-color: rgba(79, 140, 255, 0.35); background: rgba(79, 140, 255, 0.08); }
+.al-kind-pill.al-muted { color: var(--muted); }
+.al-more { width: 100%; margin-top: 8px; }
+
+/* Older details-style activity log rules (kept until a future cleanup) */
 .al-event {
   background: var(--bg-elev-2);
   border: 1px solid var(--border);

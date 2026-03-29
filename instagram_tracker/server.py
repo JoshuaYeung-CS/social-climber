@@ -206,120 +206,133 @@ def delete_snapshot(snapshot_id: int):
 
 @app.get("/api/activity-log")
 def get_activity_log():
-    """A chronological log of every change between consecutive snapshots —
-    used by the History tab's scrollable activity feed below the chart.
-    Each entry is a (prev → curr) diff with the actual usernames who joined,
-    left, requested, were removed, etc., plus the counts at curr."""
+    """Flat chronological feed: one entry per (username × event), newest
+    first. Each entry is a single thing that happened between two
+    consecutive chronological snapshots — somebody followed you, you
+    followed somebody, somebody removed you, a pending request resolved.
+
+    The 'they_removed_you' kind already has the pending-bounce filter
+    applied (subtract curr.pending), so IG's quirk of moving accepted
+    accounts back to pending doesn't surface here either."""
     with db_conn() as conn:
         snaps = q.list_snapshots(conn)  # chronological order
-        if not snaps:
+        if len(snaps) < 2:
             return {"events": []}
 
-        # Strip pending-bounces from "they removed you" — same heuristic the
-        # home alerts use. Computed once with the canonical recently_unfollowed
-        # union so we get the strict cumulative-attribution version.
-        ever_self = q.ever_self_unfollowed(conn)
+        # Pull taken_at for every snapshot up front.
+        taken_at_by_id = {
+            int(r["id"]): r["taken_at"]
+            for r in conn.execute("SELECT id, taken_at FROM snapshots").fetchall()
+        }
 
         events: list[dict] = []
         prev_sd = None
-        prev_meta = None
         for s in snaps:
             curr_sd = q.snapshot_data(conn, s.id)
-            counts = {
-                "followers": len(curr_sd.followers),
-                "following": len(curr_sd.following),
-                "mutuals":   len(curr_sd.followers & curr_sd.following),
-                "pending":   len(curr_sd.pending),
-            }
-            event: dict = {
-                "snapshot_id": s.id,
-                "label": s.label,
-                "taken_at": None,  # filled below
-                "previous_id": prev_meta.id if prev_meta else None,
-                "previous_label": prev_meta.label if prev_meta else None,
-                "counts": counts,
-            }
-            row = conn.execute(
-                "SELECT taken_at FROM snapshots WHERE id = ?", (s.id,)
-            ).fetchone()
-            if row:
-                event["taken_at"] = row["taken_at"]
+            ts = taken_at_by_id.get(s.id) or s.created_at
 
             if prev_sd is not None:
                 left_followers = prev_sd.followers - curr_sd.followers
                 left_following = prev_sd.following - curr_sd.following
-                event["new_followers"]      = sorted(curr_sd.followers - prev_sd.followers)
-                event["they_unfollowed_you"] = sorted(left_followers)
-                event["new_following"]      = sorted(curr_sd.following - prev_sd.following)
-                event["you_unfollowed"]     = sorted(left_following & curr_sd.recently_unfollowed)
-                # Apply the same pending-bounce filter as alerts.
-                event["they_removed_you"]   = sorted(
-                    left_following - curr_sd.recently_unfollowed - curr_sd.pending
-                )
-                event["new_pending"]        = sorted(curr_sd.pending - prev_sd.pending)
-                event["resolved_pending"]   = sorted(prev_sd.pending - curr_sd.pending)
-            else:
-                # First chronological snapshot — no prior to diff against.
-                event["new_followers"]      = []
-                event["they_unfollowed_you"] = []
-                event["new_following"]      = []
-                event["you_unfollowed"]     = []
-                event["they_removed_you"]   = []
-                event["new_pending"]        = []
-                event["resolved_pending"]   = []
-            event["change_count"] = sum(len(event[k]) for k in (
-                "new_followers", "they_unfollowed_you", "new_following",
-                "you_unfollowed", "they_removed_you", "new_pending", "resolved_pending",
-            ))
-            events.append(event)
+                buckets = [
+                    ("new_follower",       curr_sd.followers - prev_sd.followers),
+                    ("unfollowed_you",     left_followers),
+                    ("you_followed",       curr_sd.following - prev_sd.following),
+                    ("you_unfollowed",     left_following & curr_sd.recently_unfollowed),
+                    ("removed_you",        left_following - curr_sd.recently_unfollowed - curr_sd.pending),
+                    ("you_requested",      curr_sd.pending - prev_sd.pending),
+                    ("pending_resolved",   prev_sd.pending - curr_sd.pending),
+                ]
+                for kind, names in buckets:
+                    for u in sorted(names):
+                        events.append({
+                            "timestamp": ts,
+                            "snapshot_id": s.id,
+                            "snapshot_label": s.label,
+                            "kind": kind,
+                            "username": u,
+                        })
             prev_sd = curr_sd
-            prev_meta = s
 
-        # Newest first so the log reads top-down.
-        events.reverse()
+        # Newest first; ties stable by snapshot_id then username.
+        events.sort(key=lambda e: (e["timestamp"], e["snapshot_id"], e["username"]), reverse=True)
         return {"events": events}
 
 
 @app.get("/api/timeline")
 def get_timeline():
-    """Per-snapshot counts in chronological order. Used by the History tab to
-    draw a tappable timeline chart. Renamed from /api/history because the
-    older per-account /api/history endpoint was already on that path and the
-    two collided silently — the chart always won and the modal's 'Show full
-    history' button broke."""
+    """Per-snapshot counts in chronological order, plus a cumulative
+    'unfollowers' running total — distinct users who left your followers set
+    at any transition up to and including this snapshot. Used by the History
+    tab chart."""
     with db_conn() as conn:
-        rows = conn.execute(
+        snaps = q.list_snapshots(conn)
+        if not snaps:
+            return {"snapshots": []}
+
+        # Counts per snapshot. One pass per metric to keep the SQL simple.
+        followers_count: dict[int, int] = {}
+        following_count: dict[int, int] = {}
+        pending_count: dict[int, int] = {}
+        mutuals_count: dict[int, int] = {}
+        for r in conn.execute(
+            "SELECT snapshot_id, COUNT(*) AS c FROM followers GROUP BY snapshot_id"
+        ).fetchall():
+            followers_count[int(r["snapshot_id"])] = int(r["c"])
+        for r in conn.execute(
+            "SELECT snapshot_id, COUNT(*) AS c FROM following GROUP BY snapshot_id"
+        ).fetchall():
+            following_count[int(r["snapshot_id"])] = int(r["c"])
+        for r in conn.execute(
+            "SELECT snapshot_id, COUNT(*) AS c FROM pending_follow_requests "
+            "WHERE source_label IN ('pending_follow_requests', 'both') GROUP BY snapshot_id"
+        ).fetchall():
+            pending_count[int(r["snapshot_id"])] = int(r["c"])
+        for r in conn.execute(
             """
-            SELECT
-                s.id,
-                s.label,
-                s.created_at,
-                (SELECT COUNT(*) FROM followers f WHERE f.snapshot_id = s.id) AS followers_count,
-                (SELECT COUNT(*) FROM following g WHERE g.snapshot_id = s.id) AS following_count,
-                (SELECT COUNT(*) FROM pending_follow_requests p WHERE p.snapshot_id = s.id) AS pending_count
-            FROM snapshots s
-            ORDER BY s.id ASC
+            SELECT f.snapshot_id AS sid, COUNT(*) AS c
+            FROM followers f
+            INNER JOIN following g ON f.snapshot_id = g.snapshot_id AND f.username = g.username
+            GROUP BY f.snapshot_id
             """
-        ).fetchall()
+        ).fetchall():
+            mutuals_count[int(r["sid"])] = int(r["c"])
+
+        # Cumulative unfollowers: walk chronologically, accumulate the set of
+        # usernames who left your followers between any two consecutive
+        # snapshots, and emit the running cardinality at each step.
+        followers_by_sid: dict[int, set[str]] = {}
+        for r in conn.execute("SELECT snapshot_id, username FROM followers").fetchall():
+            followers_by_sid.setdefault(int(r["snapshot_id"]), set()).add(r["username"])
+
+        cumulative_unfollowers: set[str] = set()
+        prev_followers: set[str] | None = None
+        cum_unfollowers_at: dict[int, int] = {}
+        for s in snaps:
+            curr_followers = followers_by_sid.get(s.id, set())
+            if prev_followers is not None:
+                cumulative_unfollowers |= prev_followers - curr_followers
+            cum_unfollowers_at[s.id] = len(cumulative_unfollowers)
+            prev_followers = curr_followers
+
+        # Resolve each snapshot's taken_at from a single bulk query.
+        taken_at_by_id = {
+            int(r["id"]): r["taken_at"]
+            for r in conn.execute("SELECT id, taken_at FROM snapshots").fetchall()
+        }
+
         out = []
-        for r in rows:
-            mutuals = conn.execute(
-                """
-                SELECT COUNT(*) AS c FROM followers f
-                INNER JOIN following g
-                    ON f.snapshot_id = g.snapshot_id AND f.username = g.username
-                WHERE f.snapshot_id = ?
-                """,
-                (int(r["id"]),),
-            ).fetchone()["c"]
+        for s in snaps:
             out.append({
-                "snapshot_id": int(r["id"]),
-                "label": r["label"],
-                "created_at": r["created_at"],
-                "followers": int(r["followers_count"]),
-                "following": int(r["following_count"]),
-                "mutuals": int(mutuals),
-                "pending": int(r["pending_count"]),
+                "snapshot_id": s.id,
+                "label": s.label,
+                "created_at": s.created_at,
+                "taken_at": taken_at_by_id.get(s.id),
+                "followers": followers_count.get(s.id, 0),
+                "following": following_count.get(s.id, 0),
+                "mutuals": mutuals_count.get(s.id, 0),
+                "pending": pending_count.get(s.id, 0),
+                "cumulative_unfollowers": cum_unfollowers_at.get(s.id, 0),
             })
         return {"snapshots": out}
 

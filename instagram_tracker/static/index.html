@@ -122,15 +122,9 @@
             <option value="90">Last 90 days</option>
             <option value="365">Last year</option>
           </select>
-          <label class="muted small" style="margin-left:8px">Series:</label>
-          <select id="history-series" class="full-select inline">
-            <option value="all">Followers · Following · Mutuals</option>
-            <option value="followers">Followers only</option>
-            <option value="following">Following only</option>
-            <option value="mutuals">Mutuals only</option>
-            <option value="pending">Pending only</option>
-          </select>
+          <button type="button" id="history-zoom-reset" class="ghost-btn" hidden>Reset zoom</button>
         </div>
+        <div id="history-series" class="history-series"></div>
         <div id="history-chart" class="history-chart"></div>
         <div id="history-detail" class="history-detail"></div>
       </div>
