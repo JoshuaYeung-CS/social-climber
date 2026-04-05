@@ -41,10 +41,13 @@ _PATTERNS = [
     re.compile(r"^drive-download-.*\.zip$", re.IGNORECASE),
 ]
 
-# How often to scan the watch root. Cheap operation (just metadata listing
-# on Drive's virtual filesystem), 30s is well under the human-perceptible
-# threshold for "auto-import".
-_POLL_INTERVAL_S = 30
+# How often to scan the watch root when polling is enabled.
+# Default is conservative: cloud virtual-filesystem listing can be slow
+# (Drive's "stream files" mode took ~100s to recurse a 384-folder root in
+# benchmarking), so don't poll faster than the typical scan duration.
+# Override with IG_WATCH_INTERVAL_S=<seconds> if you've narrowed the watch
+# folder to a subfolder where listing is fast.
+_POLL_INTERVAL_S = int(os.environ.get("IG_WATCH_INTERVAL_S", "300"))
 
 
 def _looks_like_ig_zip(name: str) -> bool:
@@ -131,20 +134,88 @@ def _watcher_loop(root: Path) -> None:
             log.error("Watcher iteration failed: %s", e)
 
 
-def start_watcher_thread() -> threading.Thread | None:
-    """If IG_WATCH_FOLDER is set in the env, start a daemon thread that
-    auto-imports new IG zips dropped there. No-op otherwise."""
+def get_watch_folder() -> Path | None:
+    """Resolve IG_WATCH_FOLDER from the env into an absolute path. Returns
+    None if unset, missing, or not a directory."""
     raw = os.environ.get("IG_WATCH_FOLDER", "").strip()
     if not raw:
         return None
-    root = Path(raw).expanduser().resolve()
-    if not root.exists():
-        log.warning("IG_WATCH_FOLDER=%s does not exist; watcher not starting", root)
+    p = Path(raw).expanduser().resolve()
+    if not p.exists() or not p.is_dir():
         return None
-    if not root.is_dir():
-        log.warning("IG_WATCH_FOLDER=%s is not a directory; watcher not starting", root)
-        return None
+    return p
 
+
+def scan_once() -> dict:
+    """Run a single scan-and-import pass synchronously. Used by the manual
+    'Scan Drive folder' button on the home page so the user can trigger an
+    import on demand without paying for background polling."""
+    root = get_watch_folder()
+    if root is None:
+        return {
+            "ok": False,
+            "watch_folder": None,
+            "message": (
+                "No watch folder configured. Set IG_WATCH_FOLDER to your Drive "
+                "path (or the Meta-exports subfolder inside it) and restart."
+            ),
+            "scanned": 0,
+            "imported": 0,
+            "skipped": 0,
+        }
+    files = _scan(root)
+    imported = skipped = 0
+    details: list[dict] = []
+    for p in files:
+        try:
+            if _file_key(p)[2] < 1024:
+                continue
+        except OSError:
+            continue
+        # Even already-imported zips are safe to re-feed: ingest dedups by
+        # content_hash, so re-running this only pulls in genuine new files
+        # plus any backfill opportunities. Cheap (single SQL round-trip).
+        conn = None
+        try:
+            conn = connect(DB_PATH)
+            run = import_path(conn, p)
+            for r in run.imports:
+                imported += 1
+                details.append({"file": p.name, "outcome": "imported",
+                                "snapshot_id": r.snapshot_id, "label": r.label})
+            for s in run.skipped:
+                skipped += 1
+                details.append({"file": p.name, "outcome": s.reason,
+                                "label": s.label, "message": s.message[:200]})
+        except Exception as e:
+            details.append({"file": p.name, "outcome": "error", "message": str(e)})
+        finally:
+            if conn is not None:
+                conn.close()
+    return {
+        "ok": True,
+        "watch_folder": str(root),
+        "scanned": len(files),
+        "imported": imported,
+        "skipped": skipped,
+        "details": details,
+    }
+
+
+def start_watcher_thread() -> threading.Thread | None:
+    """If IG_WATCH_FOLDER is set AND IG_WATCH_POLL is truthy, start a daemon
+    thread that auto-imports new IG zips dropped there.
+
+    Disabled by default — the manual 'Scan Drive folder' button is cheaper
+    if your watch folder is the whole Drive root (slow to enumerate).
+    Enable polling only when you've narrowed IG_WATCH_FOLDER to a subfolder
+    where rglob is fast."""
+    if not os.environ.get("IG_WATCH_POLL"):
+        return None
+    root = get_watch_folder()
+    if root is None:
+        log.info("IG_WATCH_POLL set but IG_WATCH_FOLDER is missing/invalid; not polling")
+        return None
     t = threading.Thread(target=_watcher_loop, args=(root,), daemon=True, name="ig-watcher")
     t.start()
     return t

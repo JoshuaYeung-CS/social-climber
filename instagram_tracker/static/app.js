@@ -183,6 +183,65 @@ dropCard.addEventListener("drop", (e) => {
   if (file) doImport(file);
 });
 
+// Manual Drive-folder scan button. Shows up only if the server has
+// IG_WATCH_FOLDER configured. Click it to import any new Meta exports
+// sitting in your Drive sync folder right now — costs nothing in the
+// background, but a single recursive scan of a large Drive root can
+// take a minute or two on first click.
+async function refreshScanButton() {
+  try {
+    const data = await api.get("/api/scan-status");
+    const btn = $("#scan-drive-btn");
+    const hint = $("#scan-folder-hint");
+    if (data.watch_folder) {
+      btn.hidden = false;
+      hint.hidden = false;
+      hint.textContent = `Watching: ${data.watch_folder}`;
+    } else {
+      btn.hidden = true;
+      hint.hidden = true;
+    }
+  } catch (e) { /* server not ready, ignore */ }
+}
+refreshScanButton();
+
+$("#scan-drive-btn")?.addEventListener("click", async () => {
+  const btn = $("#scan-drive-btn");
+  const status = $("#scan-status");
+  btn.disabled = true;
+  const originalLabel = btn.textContent;
+  btn.textContent = "Scanning… (Drive listing can take a minute)";
+  status.innerHTML = `<span class="pending"><span class="spinner"></span>Scanning Drive folder…</span>`;
+  try {
+    const result = await api.post("/api/scan");
+    const lines = [];
+    if (!result.ok) {
+      lines.push(`<div class="warn-box">⚠ ${escapeHtml(result.message)}</div>`);
+    } else {
+      lines.push(`<div class="ok">Scanned ${result.scanned} zip${result.scanned === 1 ? "" : "s"} in <code>${escapeHtml(result.watch_folder)}</code> — ${result.imported} imported, ${result.skipped} skipped/backfilled</div>`);
+      for (const d of (result.details || [])) {
+        const cls = d.outcome === "imported" ? "ok"
+          : d.outcome === "backfilled" ? "ok"
+          : d.outcome === "error" ? "err" : "warn-box";
+        const verb = d.outcome === "imported" ? `Imported snapshot #${d.snapshot_id}`
+          : d.outcome === "backfilled" ? "Backfilled"
+          : d.outcome === "duplicate" ? "Duplicate"
+          : d.outcome === "out_of_order" ? "Out of order"
+          : d.outcome === "error" ? "Error" : d.outcome;
+        const detail = d.message ? ` — ${escapeHtml(d.message.slice(0, 140))}` : (d.label ? ` — ${escapeHtml(d.label)}` : "");
+        lines.push(`<div class="${cls}">${escapeHtml(verb)} <code>${escapeHtml(d.file)}</code>${detail}</div>`);
+      }
+    }
+    status.innerHTML = lines.join("");
+    await loadHome();
+  } catch (e) {
+    status.innerHTML = `<div class="err">✗ ${escapeHtml(e.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+  }
+});
+
 async function doImport(file) {
   const status = $("#import-status");
   status.innerHTML = `<span class="pending"><span class="spinner"></span>Importing ${escapeHtml(file.name)}…</span>`;

@@ -29,9 +29,27 @@ app = FastAPI(title="Instagram Tracker", version="1.0.0")
 
 @app.on_event("startup")
 def _start_background_watcher():
-    """Auto-import zips that land in IG_WATCH_FOLDER (set in the env). The
-    thread is a daemon, so it dies cleanly when uvicorn shuts down."""
+    """Auto-import zips that land in IG_WATCH_FOLDER. Disabled by default —
+    only runs if the user opts in by setting IG_WATCH_POLL=1. The button-
+    triggered /api/scan endpoint is cheaper and almost always the right
+    choice when watching a large folder like the Drive root."""
     watcher_mod.start_watcher_thread()
+
+
+@app.get("/api/scan-status")
+def scan_status():
+    """Tells the frontend whether a watch folder is configured, so the
+    'Scan Drive folder' button can disable itself if not."""
+    p = watcher_mod.get_watch_folder()
+    return {"watch_folder": str(p) if p else None}
+
+
+@app.post("/api/scan")
+def scan_now():
+    """Manually trigger a one-shot scan-and-import of the watch folder.
+    Synchronous so the response carries the result; on a slow Drive root
+    this can take a couple of minutes, but the user opted in by clicking."""
+    return watcher_mod.scan_once()
 
 
 @contextmanager
