@@ -19,11 +19,19 @@ from . import followup as followup_mod
 from . import ingest as ingest_mod
 from . import queries as q
 from . import tags as tags_mod
+from . import watcher as watcher_mod
 from .config import DB_PATH, STATIC_DIR
 from .db import connect
 from .parsers import normalize_account_input
 
 app = FastAPI(title="Instagram Tracker", version="1.0.0")
+
+
+@app.on_event("startup")
+def _start_background_watcher():
+    """Auto-import zips that land in IG_WATCH_FOLDER (set in the env). The
+    thread is a daemon, so it dies cleanly when uvicorn shuts down."""
+    watcher_mod.start_watcher_thread()
 
 
 @contextmanager
@@ -156,6 +164,17 @@ def home():
                 for r in conn.execute("SELECT DISTINCT username FROM incoming_follow_requests").fetchall()
             }
 
+            # Cumulative pending → never accepted: requests you sent that
+            # fizzled (currently neither following them nor still pending).
+            ever_pending = {
+                r["username"]
+                for r in conn.execute(
+                    "SELECT DISTINCT username FROM pending_follow_requests "
+                    "WHERE source_label IN ('pending_follow_requests', 'both')"
+                ).fetchall()
+            }
+            request_dropped = ever_pending - curr.following - curr.pending
+
             summary = {
                 "snapshot_id": latest,
                 "followers": len(curr.followers),
@@ -171,6 +190,7 @@ def home():
                 "ever_you_unfollowed": len(ever_self),
                 "still_follow_after_drop": len(still_follow_them),
                 "ever_incoming_requests": len(ever_incoming),
+                "request_dropped": len(request_dropped),
                 "disabled_tagged": len(tags_mod.list_with_flag(conn, "disabled")),
                 "unavailable_tagged": len(tags_mod.list_with_flag(conn, "unavailable")),
             }
@@ -641,6 +661,21 @@ def get_lists(snapshot_id: int | None = None):
             for r in conn.execute("SELECT DISTINCT username FROM incoming_follow_requests").fetchall()
         } - sd.followers
         sections["ever_incoming_requests"] = sorted(ever_incoming_set)
+
+        # Cumulative "you requested → never accepted": users who appeared in
+        # your `pending_follow_requests` at some snapshot but are NOT
+        # currently in following (they never accepted, or accepted then
+        # got removed) AND not currently in pending (no live request).
+        # This gives you the audit of every request that fizzled — most are
+        # private accounts who declined or never replied.
+        ever_pending_set = {
+            r["username"]
+            for r in conn.execute(
+                "SELECT DISTINCT username FROM pending_follow_requests "
+                "WHERE source_label IN ('pending_follow_requests', 'both')"
+            ).fetchall()
+        }
+        sections["request_dropped"] = sorted(ever_pending_set - sd.following - sd.pending)
 
         # Per-username timestamp of when you started following them (from Instagram's export).
         following_ts: dict[str, int | None] = {}

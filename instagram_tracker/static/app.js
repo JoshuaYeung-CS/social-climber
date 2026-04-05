@@ -106,6 +106,7 @@ async function loadHome() {
         ["You still follow them after they unfollowed you", s.still_follow_after_drop ?? 0, "still_follow_after_drop"],
         ["Requests to follow you", s.incoming_requests ?? 0, "incoming_requests"],
         ["Ever requested to follow you", s.ever_incoming_requests ?? 0, "ever_incoming_requests"],
+        ["Your requests that fizzled", s.request_dropped ?? 0, "request_dropped"],
         ["⚠ Tagged disabled", s.disabled_tagged ?? 0, "disabled"],
         ["✕ Tagged unavailable", s.unavailable_tagged ?? 0, "unavailable"],
       ];
@@ -535,6 +536,7 @@ const LIST_KINDS = [
   ["pending", "Pending requests you sent"],
   ["incoming_requests", "Requests to follow you"],
   ["ever_incoming_requests", "Ever requested to follow you"],
+  ["request_dropped", "Your requests that fizzled (never accepted)"],
   ["ever_unfollowed_you", "Ever unfollowed you"],
   ["ever_removed_you_as_follower", "Ever removed you as a follower"],
   ["you_unfollowed_ever", "You ever unfollowed"],
