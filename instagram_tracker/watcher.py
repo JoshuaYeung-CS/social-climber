@@ -32,6 +32,12 @@ from .ingest import import_path
 
 log = logging.getLogger("instagram_tracker.watcher")
 
+# Serializes scan_once() calls. Without this, two near-simultaneous button
+# clicks (or a button click + the polling thread) could race the duplicate
+# guard in ingest and produce double-imported snapshots. The unique
+# content_hash index in db.py is the second line of defence.
+_SCAN_LOCK = threading.Lock()
+
 # Filename patterns Meta uses for the artifacts we care about. Matched
 # case-insensitively against the basename. Two flavors:
 #   - .zip files (Meta's "Send to email" delivery, or a Drive download)
@@ -192,7 +198,24 @@ def get_watch_folder() -> Path | None:
 def scan_once() -> dict:
     """Run a single scan-and-import pass synchronously. Used by the manual
     'Scan Drive folder' button on the home page so the user can trigger an
-    import on demand without paying for background polling."""
+    import on demand without paying for background polling. Serialized via
+    _SCAN_LOCK so concurrent invocations can't race on the duplicate guard."""
+    if not _SCAN_LOCK.acquire(blocking=False):
+        return {
+            "ok": False,
+            "watch_folder": str(get_watch_folder()) if get_watch_folder() else None,
+            "message": "A scan is already running — wait for it to finish.",
+            "scanned": 0,
+            "imported": 0,
+            "skipped": 0,
+        }
+    try:
+        return _scan_once_locked()
+    finally:
+        _SCAN_LOCK.release()
+
+
+def _scan_once_locked() -> dict:
     root = get_watch_folder()
     if root is None:
         return {

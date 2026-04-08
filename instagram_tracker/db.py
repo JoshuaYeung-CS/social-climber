@@ -122,6 +122,16 @@ def connect(db_path: Path) -> sqlite3.Connection:
     if "taken_at" not in snap_cols:
         conn.execute("ALTER TABLE snapshots ADD COLUMN taken_at TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_taken_at ON snapshots(taken_at)")
+    # Unique partial index on content_hash defends against duplicate imports
+    # under concurrency. The duplicate guard in ingest does its own SELECT
+    # first, but two concurrent imports of the same export can both observe
+    # an empty result before either commits — the unique index turns that
+    # into a constraint violation that ingest catches and recovers from.
+    # Partial because old rows may have NULL content_hash.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_content_hash_unique "
+        "ON snapshots(content_hash) WHERE content_hash IS NOT NULL"
+    )
 
     # Backfill content_hash for snapshots imported before this column existed,
     # so the duplicate check has a complete index. One-time per-snapshot cost;

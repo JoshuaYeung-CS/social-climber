@@ -287,12 +287,34 @@ def _ingest_one(
     now_iso = utc_now_iso()
     taken_at = parse_label_to_iso(label) or now_iso
 
-    cur = conn.execute(
-        "INSERT INTO snapshots (created_at, label, source_path, content_hash, taken_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (now_iso, label, source_path, content_hash, taken_at),
-    )
-    snapshot_id = int(cur.lastrowid)
+    try:
+        cur = conn.execute(
+            "INSERT INTO snapshots (created_at, label, source_path, content_hash, taken_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (now_iso, label, source_path, content_hash, taken_at),
+        )
+        snapshot_id = int(cur.lastrowid)
+    except sqlite3.IntegrityError:
+        # Race: another concurrent import of the same export hit the unique
+        # content_hash index between our duplicate-check and this INSERT.
+        # Re-fetch the winner and report this attempt as a duplicate.
+        existing = conn.execute(
+            "SELECT id, label FROM snapshots WHERE content_hash = ? LIMIT 1",
+            (content_hash,),
+        ).fetchone()
+        if existing is not None:
+            return SkippedImport(
+                label=label,
+                reason="duplicate",
+                message=(
+                    f"Duplicate of snapshot #{int(existing['id'])} "
+                    f"({existing['label'] or 'unlabeled'}) — concurrent import "
+                    "of identical content; the other call won the race."
+                ),
+                existing_snapshot_id=int(existing["id"]),
+                existing_label=existing["label"],
+            )
+        raise  # something else — let it bubble up
 
     _bulk_insert(conn, "followers", snapshot_id, follower_rows)
     _bulk_insert(conn, "following", snapshot_id, following_rows)
