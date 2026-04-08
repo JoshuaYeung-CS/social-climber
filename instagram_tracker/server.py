@@ -147,11 +147,14 @@ def home():
                 ever_unfollowed_you |= followers_by_sid.get(old_id, set()) - followers_by_sid.get(new_id, set())
                 ever_left_following |= following_by_sid.get(old_id, set()) - following_by_sid.get(new_id, set())
             ever_self = q.ever_self_unfollowed(conn)
-            # Subtract anyone currently in pending — IG's export bounces some
-            # accounts between `following` and `pending` without any real
-            # change, and we don't want those phantom flips polluting the
-            # cumulative "they removed you as a follower" count.
-            ever_removed = ever_left_following - ever_self - curr.pending
+            # IG-bounce filter applied to BOTH sides of the cumulative count:
+            # accounts currently in pending or incoming_requests have an
+            # active relationship state, so disappearances from followers
+            # or following are likely IG-export quirks rather than real
+            # unfollows or removals.
+            ig_bounced = curr.pending | curr.incoming_requests
+            ever_removed = ever_left_following - ever_self - ig_bounced
+            ever_unfollowed_you -= ig_bounced
 
             # Strip rename chains so renames don't inflate "they unfollowed/removed you" counts.
             alias_map = q.username_alias_map(conn)
@@ -381,7 +384,12 @@ def get_activity_log():
                             emit(events, "incoming_withdrawn", u, s.id, curr_ts)
 
                 # ---------- follower-side disappearances: snapshot-time ----------
-                for u in sorted(left_followers):
+                # Apply the same IG-bounce filter as alerts: don't emit
+                # 'unfollowed_you' for an account currently in pending or
+                # incoming_requests — those states mean IG just misfiled
+                # them, not that they really unfollowed.
+                ig_bounced_curr = curr_sd.pending | curr_sd.incoming_requests
+                for u in sorted(left_followers - ig_bounced_curr):
                     emit(events, "unfollowed_you", u, s.id, curr_ts)
                 for u in sorted(left_following & curr_sd.recently_unfollowed):
                     emit(events, "you_unfollowed", u, s.id, curr_ts)
@@ -643,9 +651,13 @@ def get_lists(snapshot_id: int | None = None):
         # This guards against Instagram's per-snapshot reporting lag (where a self-initiated
         # unfollow doesn't show up in recently_unfollowed until 1+ snapshots later).
         ever_self = q.ever_self_unfollowed(conn)
-        # Suppress pending-bounces: anyone currently in pending didn't really
-        # get removed — IG's export bounced them back without a real change.
-        ever_removed_you = ever_left_following - ever_self - sd.pending
+        # IG-bounce filter on both cumulative sets: an account currently in
+        # pending or incoming_requests still has an active relationship,
+        # so a disappearance from followers/following is probably an IG
+        # export quirk, not a real unfollow/removal.
+        ig_bounced = sd.pending | sd.incoming_requests
+        ever_removed_you = ever_left_following - ever_self - ig_bounced
+        ever_unfollowed_you = ever_unfollowed_you - ig_bounced
 
         # Also exclude usernames that are part of a detected rename chain whose CURRENT
         # alias is still in your following/followers — they didn't really leave.

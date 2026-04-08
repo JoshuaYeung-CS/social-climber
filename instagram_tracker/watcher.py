@@ -42,12 +42,10 @@ _PATTERNS = [
 ]
 
 # How often to scan the watch root when polling is enabled.
-# Default is conservative: cloud virtual-filesystem listing can be slow
-# (Drive's "stream files" mode took ~100s to recurse a 384-folder root in
-# benchmarking), so don't poll faster than the typical scan duration.
-# Override with IG_WATCH_INTERVAL_S=<seconds> if you've narrowed the watch
-# folder to a subfolder where listing is fast.
-_POLL_INTERVAL_S = int(os.environ.get("IG_WATCH_INTERVAL_S", "300"))
+# Now that _scan only lists the root + known subfolders (no rglob), a poll
+# is sub-second on Drive's virtual filesystem. 60s is a reasonable default
+# that picks up new exports quickly without thrashing.
+_POLL_INTERVAL_S = int(os.environ.get("IG_WATCH_INTERVAL_S", "60"))
 
 
 def _looks_like_ig_zip(name: str) -> bool:
@@ -55,17 +53,39 @@ def _looks_like_ig_zip(name: str) -> bool:
 
 
 def _scan(root: Path) -> list[Path]:
-    """Return all current IG-zip-shaped files under root. We use rglob so any
-    nesting depth works — Meta sometimes drops into 'My Drive/Meta' or
-    'My Drive/Instagram', and we don't want the user to have to configure it."""
+    """Look for IG zips at the root and a small set of likely subfolders.
+
+    Meta drops the export zip directly into the Drive root by default,
+    so we list the root non-recursively (instant, sub-second). We also
+    peek into a few well-known subfolder names users sometimes organize
+    their exports into, but we never recurse the full tree — on a Drive
+    with hundreds of folders, an rglob across the whole filesystem
+    benchmarked at ~105s and would saturate the watcher.
+
+    If your Meta exports land in a custom subfolder, set IG_WATCH_FOLDER
+    to that subfolder directly and the root scan will hit it."""
     out: list[Path] = []
-    try:
-        for p in root.rglob("*.zip"):
-            if p.is_file() and _looks_like_ig_zip(p.name):
-                out.append(p)
-    except (OSError, PermissionError) as e:
-        log.warning("Scan of %s failed: %s", root, e)
-    return out
+    candidate_dirs = [root]
+    for sub in ("Meta", "Instagram", "Meta Exports", "Instagram Exports", "instagram", "meta"):
+        sd = root / sub
+        if sd.is_dir():
+            candidate_dirs.append(sd)
+    for d in candidate_dirs:
+        try:
+            for p in d.iterdir():
+                if p.is_file() and _looks_like_ig_zip(p.name):
+                    out.append(p)
+        except (OSError, PermissionError) as e:
+            log.warning("Scan of %s failed: %s", d, e)
+    # Dedup in case a zip appears under the root and also a subfolder we listed.
+    seen_paths: set[str] = set()
+    deduped: list[Path] = []
+    for p in out:
+        s = str(p.resolve())
+        if s not in seen_paths:
+            seen_paths.add(s)
+            deduped.append(p)
+    return deduped
 
 
 def _file_key(p: Path) -> tuple[str, int, int]:

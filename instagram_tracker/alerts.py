@@ -44,17 +44,21 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
         prev = snapshot_data(conn, previous)
         curr = snapshot_data(conn, latest)
 
-        lost_followers = (prev.followers - curr.followers) - suppressed  # they unfollowed you
+        # IG-bounce filter, applied to BOTH sides:
+        # IG occasionally drops accounts out of followers_*.json or
+        # following.json and stuffs them into pending_follow_requests.json
+        # or follow_requests_you've_received.json without a real change in
+        # relationship. If an account is currently in either of those
+        # active-relationship states, treat the disappearance as a data
+        # quirk and don't fire a 'they unfollowed' / 'they removed' alert.
+        # Verified case: snapshot #542 partial-export dropped 30 mutuals
+        # to pending; the previous snapshot 43 min earlier still had them.
+        bounced = curr.pending | curr.incoming_requests
+        lost_followers = (prev.followers - curr.followers) - suppressed - bounced
         left_following = (prev.following - curr.following) - suppressed
         # Same-snapshot rule: if it's not in the new snapshot's recently_unfollowed,
         # the user didn't initiate the unfollow — assume they removed you.
-        # Also subtract curr.pending: Instagram's export sometimes flips an
-        # account from `following` back to `pending_follow_requests` even
-        # though the underlying relationship didn't change. Without this
-        # filter, every IG-side bounce surfaces as a spurious 'removed you'
-        # alert. If the account is currently in pending, treat the
-        # disappearance from following as a data quirk, not a real removal.
-        they_removed_you = left_following - curr.recently_unfollowed - curr.pending
+        they_removed_you = left_following - curr.recently_unfollowed - bounced
         # (left_following & curr.recently_unfollowed) = you unfollowed them; not surfaced as an alert.
 
         for u in sorted(lost_followers & favorites):
