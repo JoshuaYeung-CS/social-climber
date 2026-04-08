@@ -32,13 +32,20 @@ from .ingest import import_path
 
 log = logging.getLogger("instagram_tracker.watcher")
 
-# Filename patterns Meta uses for the zips we care about. Matched
-# case-insensitively against the file name (not the full path), so a
-# zip nested in any subfolder of the watch root still hits.
-_PATTERNS = [
+# Filename patterns Meta uses for the artifacts we care about. Matched
+# case-insensitively against the basename. Two flavors:
+#   - .zip files (Meta's "Send to email" delivery, or a Drive download)
+#   - bare folders named meta-YYYY-Mon-DD-HH-MM-SS or instagram-* (Meta's
+#     "Send to Google Drive" delivery uploads extracted contents, not a
+#     zip — they show up as ordinary folders in your Drive)
+_ZIP_PATTERNS = [
     re.compile(r"^instagram-.*\.zip$", re.IGNORECASE),
     re.compile(r"^meta-.*\.zip$", re.IGNORECASE),
     re.compile(r"^drive-download-.*\.zip$", re.IGNORECASE),
+]
+_FOLDER_PATTERNS = [
+    re.compile(r"^meta-\d{4}-[A-Za-z]{3}-\d{2}-\d{2}-\d{2}-\d{2}$", re.IGNORECASE),
+    re.compile(r"^instagram-.*$", re.IGNORECASE),
 ]
 
 # How often to scan the watch root when polling is enabled.
@@ -49,21 +56,25 @@ _POLL_INTERVAL_S = int(os.environ.get("IG_WATCH_INTERVAL_S", "60"))
 
 
 def _looks_like_ig_zip(name: str) -> bool:
-    return any(p.match(name) for p in _PATTERNS)
+    return any(p.match(name) for p in _ZIP_PATTERNS)
+
+
+def _looks_like_ig_folder(name: str) -> bool:
+    return any(p.match(name) for p in _FOLDER_PATTERNS)
 
 
 def _scan(root: Path) -> list[Path]:
-    """Look for IG zips at the root and a small set of likely subfolders.
+    """Look for IG export artifacts at the root and a few likely subfolders.
 
-    Meta drops the export zip directly into the Drive root by default,
-    so we list the root non-recursively (instant, sub-second). We also
-    peek into a few well-known subfolder names users sometimes organize
-    their exports into, but we never recurse the full tree — on a Drive
-    with hundreds of folders, an rglob across the whole filesystem
-    benchmarked at ~105s and would saturate the watcher.
+    Two artifact shapes:
+      - `.zip` files (the email-delivery flow)
+      - bare `meta-YYYY-Mon-DD-HH-MM-SS/` directories (the Send-to-Drive
+        flow uploads pre-extracted contents)
 
-    If your Meta exports land in a custom subfolder, set IG_WATCH_FOLDER
-    to that subfolder directly and the root scan will hit it."""
+    Listing is non-recursive because the Drive virtual filesystem is slow
+    to enumerate large trees (105s rglob benchmark on the user's actual
+    Drive). We do peek into a handful of well-known subfolder names users
+    sometimes organize their exports into."""
     out: list[Path] = []
     candidate_dirs = [root]
     for sub in ("Meta", "Instagram", "Meta Exports", "Instagram Exports", "instagram", "meta"):
@@ -75,9 +86,13 @@ def _scan(root: Path) -> list[Path]:
             for p in d.iterdir():
                 if p.is_file() and _looks_like_ig_zip(p.name):
                     out.append(p)
+                elif p.is_dir() and _looks_like_ig_folder(p.name):
+                    # import_path handles folders too — it just finds the
+                    # `followers_and_following` subdir and ingests from there.
+                    out.append(p)
         except (OSError, PermissionError) as e:
             log.warning("Scan of %s failed: %s", d, e)
-    # Dedup in case a zip appears under the root and also a subfolder we listed.
+    # Dedup in case the same path is reachable from multiple candidate dirs.
     seen_paths: set[str] = set()
     deduped: list[Path] = []
     for p in out:
@@ -89,14 +104,26 @@ def _scan(root: Path) -> list[Path]:
 
 
 def _file_key(p: Path) -> tuple[str, int, int]:
-    """Identity tuple we use to decide if a file is 'the same' as one we've
+    """Identity tuple we use to decide if a path is 'the same' as one we've
     already processed. (path, mtime, size) — survives Drive re-syncs that
-    re-upload the same content under the same path. If the user replaces a
-    zip with new content at the same path, mtime or size will differ and
-    we'll re-import (the duplicate guard in `ingest` will then either
-    accept the new one or backfill incoming-requests as appropriate)."""
+    re-upload the same content under the same path. For folders we use the
+    inode mtime, which Drive bumps when contents change."""
     st = p.stat()
     return (str(p), int(st.st_mtime), int(st.st_size))
+
+
+def _is_drive_placeholder(p: Path) -> bool:
+    """A Drive 'stream files' placeholder is a stub the desktop app shows
+    before the actual content has streamed down. For zip files this manifests
+    as a tiny file (<1KB). Folders don't have placeholder behavior at the
+    folder level — their entries materialize as you list them — so we only
+    apply the check to files."""
+    if not p.is_file():
+        return False
+    try:
+        return p.stat().st_size < 1024
+    except OSError:
+        return True
 
 
 def _import_one(zip_path: Path) -> None:
@@ -141,12 +168,8 @@ def _watcher_loop(root: Path) -> None:
                     continue
                 if key in seen:
                     continue
-                # Drive sometimes lists a placeholder before the content has
-                # streamed down. Wait one more cycle if the file is tiny —
-                # below the smallest plausible IG export — to avoid trying
-                # to unzip an empty placeholder.
-                if key[2] < 1024:
-                    log.debug("Skipping %s (size %d, looks like a Drive placeholder)", p.name, key[2])
+                if _is_drive_placeholder(p):
+                    log.debug("Skipping %s (Drive placeholder, content not synced yet)", p.name)
                     continue
                 _import_one(p)
                 seen.add(key)
@@ -187,10 +210,9 @@ def scan_once() -> dict:
     imported = skipped = 0
     details: list[dict] = []
     for p in files:
-        try:
-            if _file_key(p)[2] < 1024:
-                continue
-        except OSError:
+        if _is_drive_placeholder(p):
+            details.append({"file": p.name, "outcome": "placeholder",
+                            "message": "Drive hasn't synced this file's content yet"})
             continue
         # Even already-imported zips are safe to re-feed: ingest dedups by
         # content_hash, so re-running this only pulls in genuine new files
