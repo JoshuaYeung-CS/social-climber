@@ -106,6 +106,7 @@ async function loadHome() {
         ["You still follow them after they unfollowed you", s.still_follow_after_drop ?? 0, "still_follow_after_drop"],
         ["Requests to follow you", s.incoming_requests ?? 0, "incoming_requests"],
         ["Ever requested to follow you", s.ever_incoming_requests ?? 0, "ever_incoming_requests"],
+        ["Incoming Request Rejected", s.incoming_request_dropped ?? 0, "incoming_request_dropped"],
         ["Follow Request Rejected", s.request_dropped ?? 0, "request_dropped"],
         ["⚠ Tagged disabled", s.disabled_tagged ?? 0, "disabled"],
         ["✕ Tagged unavailable", s.unavailable_tagged ?? 0, "unavailable"],
@@ -218,7 +219,9 @@ $("#scan-drive-btn")?.addEventListener("click", async () => {
     if (!result.ok) {
       lines.push(`<div class="warn-box">⚠ ${escapeHtml(result.message)}</div>`);
     } else {
-      lines.push(`<div class="ok">Scanned ${result.scanned} zip${result.scanned === 1 ? "" : "s"} in <code>${escapeHtml(result.watch_folder)}</code> — ${result.imported} imported, ${result.skipped} skipped/backfilled</div>`);
+      const seen = result.already_seen ?? 0;
+      const newCount = result.scanned - seen;
+      lines.push(`<div class="ok">Scanned ${result.scanned} item${result.scanned === 1 ? "" : "s"} in <code>${escapeHtml(result.watch_folder)}</code> — ${seen} already imported, ${newCount} new (${result.imported} imported, ${result.skipped} skipped/backfilled)</div>`);
       for (const d of (result.details || [])) {
         const cls = d.outcome === "imported" ? "ok"
           : d.outcome === "backfilled" ? "ok"
@@ -595,6 +598,7 @@ const LIST_KINDS = [
   ["pending", "Pending requests you sent"],
   ["incoming_requests", "Requests to follow you"],
   ["ever_incoming_requests", "Ever requested to follow you"],
+  ["incoming_request_dropped", "Incoming Request Rejected"],
   ["request_dropped", "Follow Request Rejected"],
   ["ever_unfollowed_you", "Ever unfollowed you"],
   ["ever_removed_you_as_follower", "Ever removed you as a follower"],
@@ -744,6 +748,7 @@ const SORT_DATE_HINT = {
   recent_follow_requests:       "by when you sent the request",
   incoming_requests:             "by when they requested",
   ever_incoming_requests:        "by when they requested",
+  incoming_request_dropped:      "by when they requested",
 };
 
 function refreshSortLabels(kind) {

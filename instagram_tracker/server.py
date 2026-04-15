@@ -177,13 +177,16 @@ def home():
 
             still_follow_them = ever_unfollowed_you & curr.following
 
-            # Cumulative ever_incoming_requests: union of every snapshot's
-            # incoming set. New table, so old snapshots contribute nothing —
-            # but as new imports land, this becomes the historical record.
+            # Cumulative ever_incoming_requests: every account ever observed
+            # in incoming_follow_requests, INCLUDING accounts you ended up
+            # following back. Total inbound interest across history.
             ever_incoming = {
                 r["username"]
                 for r in conn.execute("SELECT DISTINCT username FROM incoming_follow_requests").fetchall()
             }
+            # Subset: requests that never ended up as follows and aren't
+            # still pending — i.e. you declined / they cancelled / IG dropped.
+            incoming_request_dropped = ever_incoming - curr.followers - curr.incoming_requests
 
             # Cumulative pending → never accepted: requests you sent that
             # fizzled (currently neither following them nor still pending).
@@ -211,6 +214,7 @@ def home():
                 "ever_you_unfollowed": len(ever_self),
                 "still_follow_after_drop": len(still_follow_them),
                 "ever_incoming_requests": len(ever_incoming),
+                "incoming_request_dropped": len(incoming_request_dropped),
                 "request_dropped": len(request_dropped),
                 "disabled_tagged": len(tags_mod.list_with_flag(conn, "disabled")),
                 "unavailable_tagged": len(tags_mod.list_with_flag(conn, "unavailable")),
@@ -683,14 +687,19 @@ def get_lists(snapshot_id: int | None = None):
         chains = q.detect_renames(conn)
         sections["renamed"] = sorted({c["sequence"][-1] for c in chains})
 
-        # Cumulative incoming follow requests: union across every snapshot's
-        # `incoming_follow_requests` table, minus anyone you've ended up
-        # following back (they're no longer "outstanding requests to you").
+        # Cumulative incoming follow requests: every account ever observed
+        # in incoming_follow_requests across all snapshots. Includes accounts
+        # you ended up following back — total inbound interest.
         ever_incoming_set = {
             r["username"]
             for r in conn.execute("SELECT DISTINCT username FROM incoming_follow_requests").fetchall()
-        } - sd.followers
+        }
         sections["ever_incoming_requests"] = sorted(ever_incoming_set)
+        # Subset: requests that never resolved as follows and aren't still
+        # pending. Either you declined, they cancelled, or IG dropped them.
+        sections["incoming_request_dropped"] = sorted(
+            ever_incoming_set - sd.followers - sd.incoming_requests
+        )
 
         # Cumulative "you requested → never accepted": users who appeared in
         # your `pending_follow_requests` at some snapshot but are NOT

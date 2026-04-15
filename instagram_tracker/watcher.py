@@ -152,35 +152,41 @@ def _import_one(zip_path: Path) -> None:
 
 def _watcher_loop(root: Path) -> None:
     log.info("Watcher started on %s (polling every %ds)", root, _POLL_INTERVAL_S)
-    seen: set[tuple[str, int, int]] = set()
 
-    # Prime the seen-set with whatever's already there at startup — we don't
-    # want to re-import every zip on every server restart. The duplicate
-    # guard would catch them but it'd flood the log on boot.
-    for p in _scan(root):
+    def already_imported_paths() -> set[str]:
+        """Pull the set of source_paths we've already ingested from the DB
+        so the watcher doesn't re-process files on every restart. Cheap
+        (single query, no joins)."""
+        out: set[str] = set()
+        conn = None
         try:
-            seen.add(_file_key(p))
-        except OSError:
-            pass
+            conn = connect(DB_PATH)
+            for r in conn.execute(
+                "SELECT DISTINCT source_path FROM snapshots "
+                "WHERE source_path IS NOT NULL AND source_path != ''"
+            ).fetchall():
+                out.add(str(r["source_path"]))
+        except Exception as e:
+            log.warning("Failed to read previously-imported paths: %s", e)
+        finally:
+            if conn is not None:
+                conn.close()
+        return out
 
     while True:
-        time.sleep(_POLL_INTERVAL_S)
         try:
             current = _scan(root)
+            seen = already_imported_paths()
             for p in current:
-                try:
-                    key = _file_key(p)
-                except OSError:
-                    continue
-                if key in seen:
+                if str(p) in seen:
                     continue
                 if _is_drive_placeholder(p):
                     log.debug("Skipping %s (Drive placeholder, content not synced yet)", p.name)
                     continue
                 _import_one(p)
-                seen.add(key)
         except Exception as e:
             log.error("Watcher iteration failed: %s", e)
+        time.sleep(_POLL_INTERVAL_S)
 
 
 def get_watch_folder() -> Path | None:
@@ -230,16 +236,35 @@ def _scan_once_locked() -> dict:
             "skipped": 0,
         }
     files = _scan(root)
-    imported = skipped = 0
+
+    # Build a set of already-processed source paths from the DB so we can
+    # skip the work of unzipping and re-hashing zips/folders we've already
+    # ingested. snapshots.source_path is the original Drive path written at
+    # ingest time, so a path-based skip exactly matches the dedup we'd hit
+    # via content_hash anyway — but without paying for the parse + hash.
+    already_seen: set[str] = set()
+    conn0 = None
+    try:
+        conn0 = connect(DB_PATH)
+        for r in conn0.execute(
+            "SELECT DISTINCT source_path FROM snapshots "
+            "WHERE source_path IS NOT NULL AND source_path != ''"
+        ).fetchall():
+            already_seen.add(str(r["source_path"]))
+    finally:
+        if conn0 is not None:
+            conn0.close()
+
+    imported = skipped = already = 0
     details: list[dict] = []
     for p in files:
+        if str(p) in already_seen:
+            already += 1
+            continue
         if _is_drive_placeholder(p):
             details.append({"file": p.name, "outcome": "placeholder",
                             "message": "Drive hasn't synced this file's content yet"})
             continue
-        # Even already-imported zips are safe to re-feed: ingest dedups by
-        # content_hash, so re-running this only pulls in genuine new files
-        # plus any backfill opportunities. Cheap (single SQL round-trip).
         conn = None
         try:
             conn = connect(DB_PATH)
@@ -261,6 +286,7 @@ def _scan_once_locked() -> dict:
         "ok": True,
         "watch_folder": str(root),
         "scanned": len(files),
+        "already_seen": already,  # quick path-based dedup hits, no work done
         "imported": imported,
         "skipped": skipped,
         "details": details,
