@@ -207,14 +207,25 @@ def home():
 
             # Cumulative pending → never accepted: requests you sent that
             # fizzled (currently neither following them nor still pending).
-            ever_pending = {
+            ever_pending_observed = {
                 r["username"]
                 for r in conn.execute(
                     "SELECT DISTINCT username FROM pending_follow_requests "
                     "WHERE source_label IN ('pending_follow_requests', 'both')"
                 ).fetchall()
             }
-            request_dropped = ever_pending - curr.following - curr.pending
+            request_dropped = ever_pending_observed - curr.following - curr.pending
+
+            # Cumulative outgoing requests across history. Mirrors the
+            # incoming side: union of every observed pending request you've
+            # sent + every account you've ever followed (each follow implies
+            # a request was sent, even if it resolved before we started
+            # snapshotting; IG only retains the request log a few weeks).
+            ever_following = {
+                r["username"]
+                for r in conn.execute("SELECT DISTINCT username FROM following").fetchall()
+            }
+            ever_requested_outgoing = ever_pending_observed | ever_following
 
             summary = {
                 "snapshot_id": latest,
@@ -231,6 +242,7 @@ def home():
                 "ever_you_unfollowed": len(ever_self),
                 "still_follow_after_drop": len(still_follow_them),
                 "ever_incoming_requests": len(ever_incoming),
+                "ever_requested_outgoing": len(ever_requested_outgoing),
                 "incoming_request_dropped": len(incoming_request_dropped),
                 "request_dropped": len(request_dropped),
                 "disabled_tagged": len(tags_mod.list_with_flag(conn, "disabled")),
@@ -724,6 +736,22 @@ def get_lists(snapshot_id: int | None = None):
         sections["incoming_request_dropped"] = sorted(
             ever_incoming_observed - sd.followers - sd.incoming_requests
         )
+
+        # Cumulative outgoing — mirror of ever_incoming. Union of every
+        # pending request you've sent + every account you've ever followed
+        # (each follow implies a request happened at some point).
+        ever_pending_outgoing = {
+            r["username"]
+            for r in conn.execute(
+                "SELECT DISTINCT username FROM pending_follow_requests "
+                "WHERE source_label IN ('pending_follow_requests', 'both')"
+            ).fetchall()
+        }
+        ever_following_set = {
+            r["username"]
+            for r in conn.execute("SELECT DISTINCT username FROM following").fetchall()
+        }
+        sections["ever_requested_outgoing"] = sorted(ever_pending_outgoing | ever_following_set)
 
         # Cumulative "you requested → never accepted": users who appeared in
         # your `pending_follow_requests` at some snapshot but are NOT

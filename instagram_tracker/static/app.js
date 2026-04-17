@@ -107,6 +107,7 @@ async function loadHome() {
         ["Requests to follow you", s.incoming_requests ?? 0, "incoming_requests"],
         ["Ever requested to follow you", s.ever_incoming_requests ?? 0, "ever_incoming_requests"],
         ["Incoming Request Rejected", s.incoming_request_dropped ?? 0, "incoming_request_dropped"],
+        ["Ever requested to follow", s.ever_requested_outgoing ?? 0, "ever_requested_outgoing"],
         ["Follow Request Rejected", s.request_dropped ?? 0, "request_dropped"],
         ["⚠ Tagged disabled", s.disabled_tagged ?? 0, "disabled"],
         ["✕ Tagged unavailable", s.unavailable_tagged ?? 0, "unavailable"],
@@ -599,6 +600,7 @@ const LIST_KINDS = [
   ["incoming_requests", "Requests to follow you"],
   ["ever_incoming_requests", "Ever requested to follow you"],
   ["incoming_request_dropped", "Incoming Request Rejected"],
+  ["ever_requested_outgoing", "Ever requested to follow"],
   ["request_dropped", "Follow Request Rejected"],
   ["ever_unfollowed_you", "Ever unfollowed you"],
   ["ever_removed_you_as_follower", "Ever removed you as a follower"],
@@ -749,6 +751,7 @@ const SORT_DATE_HINT = {
   incoming_requests:             "by when they requested",
   ever_incoming_requests:        "by when they requested",
   incoming_request_dropped:      "by when they requested",
+  ever_requested_outgoing:       "by when you started following them",
 };
 
 function refreshSortLabels(kind) {
