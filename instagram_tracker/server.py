@@ -177,16 +177,33 @@ def home():
 
             still_follow_them = ever_unfollowed_you & curr.following
 
-            # Cumulative ever_incoming_requests: every account ever observed
-            # in incoming_follow_requests, INCLUDING accounts you ended up
-            # following back. Total inbound interest across history.
-            ever_incoming = {
+            # Cumulative ever_incoming_requests: total inbound interest across
+            # the full snapshot history. Defined as the union of:
+            #   - every account ever observed in incoming_follow_requests
+            #     (the small set IG actually exports — only currently-pending
+            #     requests at the moment of each export)
+            #   - every account ever observed in your followers across all
+            #     snapshots (each of those followers requested to follow you
+            #     at some point, even if that request resolved before we
+            #     started snapshotting; IG just doesn't keep the request log
+            #     once you accept)
+            # This is the broadest approximation we can make from the export
+            # data — IG only retains a few weeks of the request itself, but
+            # the resulting follow is permanent in followers_*.json.
+            ever_incoming_observed = {
                 r["username"]
                 for r in conn.execute("SELECT DISTINCT username FROM incoming_follow_requests").fetchall()
             }
-            # Subset: requests that never ended up as follows and aren't
-            # still pending — i.e. you declined / they cancelled / IG dropped.
-            incoming_request_dropped = ever_incoming - curr.followers - curr.incoming_requests
+            ever_followed_you = {
+                r["username"]
+                for r in conn.execute("SELECT DISTINCT username FROM followers").fetchall()
+            }
+            ever_incoming = ever_incoming_observed | ever_followed_you
+            # Subset that didn't end up as a follow and isn't still pending —
+            # i.e. they requested but you declined / they cancelled / IG
+            # dropped. Computed from the OBSERVED set only, since the
+            # follower-derived set by definition resulted in a follow.
+            incoming_request_dropped = ever_incoming_observed - curr.followers - curr.incoming_requests
 
             # Cumulative pending → never accepted: requests you sent that
             # fizzled (currently neither following them nor still pending).
@@ -687,18 +704,25 @@ def get_lists(snapshot_id: int | None = None):
         chains = q.detect_renames(conn)
         sections["renamed"] = sorted({c["sequence"][-1] for c in chains})
 
-        # Cumulative incoming follow requests: every account ever observed
-        # in incoming_follow_requests across all snapshots. Includes accounts
-        # you ended up following back — total inbound interest.
-        ever_incoming_set = {
+        # Cumulative incoming follow requests: total inbound interest across
+        # the full snapshot history. Union of observed incoming + every
+        # account that has ever been a follower (since each follower
+        # requested you at some point — IG just trims the request log
+        # once it resolves into a follow).
+        ever_incoming_observed = {
             r["username"]
             for r in conn.execute("SELECT DISTINCT username FROM incoming_follow_requests").fetchall()
         }
-        sections["ever_incoming_requests"] = sorted(ever_incoming_set)
-        # Subset: requests that never resolved as follows and aren't still
-        # pending. Either you declined, they cancelled, or IG dropped them.
+        ever_followed_you_set = {
+            r["username"]
+            for r in conn.execute("SELECT DISTINCT username FROM followers").fetchall()
+        }
+        sections["ever_incoming_requests"] = sorted(ever_incoming_observed | ever_followed_you_set)
+        # Subset that didn't end up as a follow — declined, cancelled, or
+        # silently dropped. Computed from the OBSERVED set only because the
+        # follower-derived ones by definition resulted in a follow.
         sections["incoming_request_dropped"] = sorted(
-            ever_incoming_set - sd.followers - sd.incoming_requests
+            ever_incoming_observed - sd.followers - sd.incoming_requests
         )
 
         # Cumulative "you requested → never accepted": users who appeared in
