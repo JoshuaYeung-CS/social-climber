@@ -27,6 +27,33 @@ from .parsers import normalize_account_input
 app = FastAPI(title="Instagram Tracker", version="1.0.0")
 
 
+# In-process cache for the heavy read endpoints. Keyed on a monotonic
+# `_data_version` int that ticks every time something writes — imports,
+# tag toggles, snapshot deletes, queue mutations. A cache hit returns the
+# stored response dict immediately; on the version mismatch we fall
+# through and recompute. Without this, every interaction (tag click,
+# modal close) re-runs ~140 snapshots' worth of cumulative diffs.
+_data_version = 0
+_cache: dict[str, tuple[int, object]] = {}
+
+
+def _bump_data_version():
+    global _data_version
+    _data_version += 1
+    _cache.clear()
+
+
+def _cached(key: str, compute):
+    """Return the cached response for `key` if its stored version matches
+    the current _data_version, else compute, store, return."""
+    entry = _cache.get(key)
+    if entry is not None and entry[0] == _data_version:
+        return entry[1]
+    result = compute()
+    _cache[key] = (_data_version, result)
+    return result
+
+
 @app.on_event("startup")
 def _start_background_watcher():
     """Auto-import zips that land in IG_WATCH_FOLDER. Disabled by default —
@@ -49,7 +76,10 @@ def scan_now():
     """Manually trigger a one-shot scan-and-import of the watch folder.
     Synchronous so the response carries the result; on a slow Drive root
     this can take a couple of minutes, but the user opted in by clicking."""
-    return watcher_mod.scan_once()
+    result = watcher_mod.scan_once()
+    if result.get("imported") or result.get("skipped"):
+        _bump_data_version()
+    return result
 
 
 @contextmanager
@@ -116,7 +146,11 @@ def health():
 
 @app.get("/api/home")
 def home():
-    """Single endpoint that powers the home screen."""
+    """Single endpoint that powers the home screen. Cached on _data_version."""
+    return _cached("home", _home_compute)
+
+
+def _home_compute():
     with db_conn() as conn:
         snaps = q.list_snapshots(conn)
         latest = q.latest_id(conn)
@@ -286,11 +320,16 @@ def get_snapshots():
 def delete_snapshot(snapshot_id: int):
     with db_conn() as conn:
         q.delete_snapshot(conn, snapshot_id)
-        return {"deleted": snapshot_id}
+    _bump_data_version()
+    return {"deleted": snapshot_id}
 
 
 @app.get("/api/activity-log")
 def get_activity_log():
+    return _cached("activity_log", _activity_log_compute)
+
+
+def _activity_log_compute():
     """Flat chronological feed: one entry per (username × event), newest
     first. Each entry is a single thing that happened between two
     consecutive chronological snapshots.
@@ -443,6 +482,10 @@ def get_activity_log():
 
 @app.get("/api/timeline")
 def get_timeline():
+    return _cached("timeline", _timeline_compute)
+
+
+def _timeline_compute():
     """Per-snapshot counts in chronological order, plus a cumulative
     'unfollowers' running total — distinct users who left your followers set
     at any transition up to and including this snapshot. Used by the History
@@ -556,6 +599,8 @@ async def import_export(
 
         with db_conn() as conn:
             run = ingest_mod.import_path(conn, import_target, label)
+        if run.imports or run.skipped:
+            _bump_data_version()
 
         return {
             "imports": [
@@ -608,6 +653,18 @@ def get_diff(old: int | None = None, new: int | None = None):
 
 @app.get("/api/lists")
 def get_lists(snapshot_id: int | None = None):
+    """Cached only when called with the default snapshot_id (the common case
+    powering the Lists view). Custom snapshot_id requests bypass cache."""
+    if snapshot_id is None:
+        return _cached("lists", _lists_compute_default)
+    return _lists_compute(snapshot_id)
+
+
+def _lists_compute_default():
+    return _lists_compute(None)
+
+
+def _lists_compute(snapshot_id: int | None):
     from datetime import datetime, timezone
 
     with db_conn() as conn:
@@ -1185,7 +1242,9 @@ def update_tag(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail=f"Need account and a valid flag ({valid}).")
     username, profile_url = normalize_account_input(account)
     with db_conn() as conn:
-        return tags_mod.set_flag(conn, username, flag, value, profile_url)
+        result = tags_mod.set_flag(conn, username, flag, value, profile_url)
+    _bump_data_version()
+    return result
 
 
 # ---------- static frontend ----------

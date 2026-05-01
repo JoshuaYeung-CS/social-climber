@@ -467,7 +467,9 @@ function bindTagToggles(root, username, currentTags) {
         btn.classList.toggle("active", result[flag]);
         toast(`${flag} ${result[flag] ? "added" : "removed"}`);
         modalTaggedDirty = true;
-        loadHome();
+        // Don't reload home synchronously — bucket counts on the home tab
+        // aren't visible from inside the modal, and reloading mid-toggle
+        // adds a noticeable delay. closeModal handles the refresh on exit.
       } catch (e) {
         toast(`Failed: ${e.message}`);
       }
@@ -975,7 +977,9 @@ async function loadLists() {
             const result = await api.post("/api/tags", { account: row.dataset.username, flag, value: willBe });
             btn.classList.toggle("on", !!result[flag]);
             toast(`${flag.replace("_", " ")} ${result[flag] ? "added" : "removed"}`);
-            loadHome();
+            // No loadHome here — user is on Lists, not Home; bucket-count
+            // tiles aren't visible. They'll refresh next time the user
+            // navigates back. Saves a ~1s wait per tag click.
             const currentKind = select.value;
             const BUCKETS = ["favorite", "want_remove", "watchlist", "disabled", "unavailable"];
             // If we just removed from the bucket we're viewing, drop the row.
