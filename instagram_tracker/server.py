@@ -199,14 +199,13 @@ def home():
                 for r in conn.execute("SELECT DISTINCT username FROM followers").fetchall()
             }
             ever_incoming = ever_incoming_observed | ever_followed_you
-            # Subset that didn't end up as a follow and isn't still pending —
-            # i.e. they requested but you declined / they cancelled / IG
-            # dropped. Computed from the OBSERVED set only, since the
-            # follower-derived set by definition resulted in a follow.
-            incoming_request_dropped = ever_incoming_observed - curr.followers - curr.incoming_requests
+            # Strict "incoming request rejected" — appeared in incoming at
+            # some snapshot AND never made it into your followers across
+            # any snapshot. Excluding ever_followed_you is what makes this
+            # a real rejected list rather than "you accepted, then later
+            # removed them as a follower".
+            incoming_request_dropped = ever_incoming_observed - ever_followed_you - curr.incoming_requests
 
-            # Cumulative pending → never accepted: requests you sent that
-            # fizzled (currently neither following them nor still pending).
             ever_pending_observed = {
                 r["username"]
                 for r in conn.execute(
@@ -214,18 +213,20 @@ def home():
                     "WHERE source_label IN ('pending_follow_requests', 'both')"
                 ).fetchall()
             }
-            request_dropped = ever_pending_observed - curr.following - curr.pending
-
-            # Cumulative outgoing requests across history. Mirrors the
-            # incoming side: union of every observed pending request you've
-            # sent + every account you've ever followed (each follow implies
-            # a request was sent, even if it resolved before we started
-            # snapshotting; IG only retains the request log a few weeks).
             ever_following = {
                 r["username"]
                 for r in conn.execute("SELECT DISTINCT username FROM following").fetchall()
             }
+            # Cumulative outgoing requests across history. Union of every
+            # observed pending request + every account ever in following
+            # (each follow implies a request happened at some point — IG
+            # only retains the request log a few weeks).
             ever_requested_outgoing = ever_pending_observed | ever_following
+            # Strict "request fizzled" — sent a request that NEVER ended
+            # up in the following set. Excluding ever_following is what
+            # makes this a real "rejected" list rather than a "you
+            # followed-then-unfollowed" list.
+            request_dropped = ever_pending_observed - ever_following - curr.pending
 
             summary = {
                 "snapshot_id": latest,
@@ -730,11 +731,12 @@ def get_lists(snapshot_id: int | None = None):
             for r in conn.execute("SELECT DISTINCT username FROM followers").fetchall()
         }
         sections["ever_incoming_requests"] = sorted(ever_incoming_observed | ever_followed_you_set)
-        # Subset that didn't end up as a follow — declined, cancelled, or
-        # silently dropped. Computed from the OBSERVED set only because the
-        # follower-derived ones by definition resulted in a follow.
+        # Strict "incoming rejected" — observed in incoming at some snapshot
+        # AND never made it into followers across any snapshot. Without
+        # excluding ever_followed_you_set, accounts you accepted and later
+        # removed would appear here, which isn't what "rejected" means.
         sections["incoming_request_dropped"] = sorted(
-            ever_incoming_observed - sd.followers - sd.incoming_requests
+            ever_incoming_observed - ever_followed_you_set - sd.incoming_requests
         )
 
         # Cumulative outgoing — mirror of ever_incoming. Union of every
@@ -753,20 +755,15 @@ def get_lists(snapshot_id: int | None = None):
         }
         sections["ever_requested_outgoing"] = sorted(ever_pending_outgoing | ever_following_set)
 
-        # Cumulative "you requested → never accepted": users who appeared in
-        # your `pending_follow_requests` at some snapshot but are NOT
-        # currently in following (they never accepted, or accepted then
-        # got removed) AND not currently in pending (no live request).
-        # This gives you the audit of every request that fizzled — most are
-        # private accounts who declined or never replied.
-        ever_pending_set = {
-            r["username"]
-            for r in conn.execute(
-                "SELECT DISTINCT username FROM pending_follow_requests "
-                "WHERE source_label IN ('pending_follow_requests', 'both')"
-            ).fetchall()
-        }
-        sections["request_dropped"] = sorted(ever_pending_set - sd.following - sd.pending)
+        # Cumulative "you requested → never accepted": appeared in your
+        # pending_follow_requests at some snapshot AND never made it into
+        # the following set across any snapshot. Excluding ever_following
+        # is what makes this a real rejected list — without it, anyone
+        # you followed-and-then-unfollowed would show up here as if their
+        # request had been rejected.
+        sections["request_dropped"] = sorted(
+            ever_pending_outgoing - ever_following_set - sd.pending
+        )
 
         # Per-username timestamp of when you started following them (from Instagram's export).
         following_ts: dict[str, int | None] = {}
