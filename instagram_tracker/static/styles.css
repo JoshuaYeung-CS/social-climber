@@ -706,6 +706,23 @@ textarea {
   margin-bottom: 12px;
 }
 .row-tags { display: flex; gap: 4px; flex-shrink: 0; }
+.row-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: transparent;
+  text-decoration: none;
+  flex-shrink: 0;
+  font-size: 14px;
+  transition: color 100ms ease, border-color 100ms ease, background 100ms ease;
+}
+.row-open:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.row-open:active { transform: scale(0.95); }
 .row-tag {
   appearance: none;
   background: transparent;

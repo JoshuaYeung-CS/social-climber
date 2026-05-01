@@ -849,6 +849,12 @@ function renderListRow(item) {
   const aliasList = (item.aliases && item.aliases.length > 0) ? item.aliases : [item.username];
   const haystack = aliasList.map((a) => String(a).toLowerCase()).join("|");
 
+  // Direct-open link to the IG profile so the user doesn't have to go
+  // row -> modal -> link. Stops propagation so it doesn't also fire the
+  // row-click that opens the modal.
+  const igUrl = `https://www.instagram.com/${encodeURIComponent(item.username)}/`;
+  const openLink = `<a class="row-open" href="${igUrl}" target="_blank" rel="noopener" title="Open ${escapeAttr(item.username)} on Instagram">↗</a>`;
+
   return `
     <div class="list-row${rowClass ? " " + rowClass : ""}" data-username="${escapeAttr(item.username)}" data-search="${escapeAttr(haystack)}">
       <div class="username-block">
@@ -856,6 +862,7 @@ function renderListRow(item) {
         ${sub ? `<span class="sub">${sub}</span>` : ""}
       </div>
       ${chip ? `<span class="${chipClass}">${chip}</span>` : ""}
+      ${openLink}
       <span class="row-tags">${tagButtons}</span>
     </div>`;
 }
@@ -957,6 +964,8 @@ async function loadLists() {
     applyListSearch();
     $$(".list-row", out).forEach((row) => {
       row.addEventListener("click", () => openAccountModal(row.dataset.username));
+      const openLink = row.querySelector(".row-open");
+      if (openLink) openLink.addEventListener("click", (e) => e.stopPropagation());
       $$(".row-tag", row).forEach((btn) => {
         btn.addEventListener("click", async (e) => {
           e.stopPropagation();
