@@ -386,6 +386,25 @@ def _activity_log_compute():
         ts_pending   = ts_index("pending_follow_requests")
         ts_incoming  = ts_index("incoming_follow_requests")
 
+        # Latest-snapshot state used as a "ground truth" check for the
+        # accept/withdraw split. IG's export sometimes shows a request
+        # disappearing from incoming a snapshot before the user appears in
+        # followers (or vice versa for pending → following). At the moment
+        # of the gap, the per-snapshot diff would call it a withdrawal,
+        # but if the user is currently a follower / followed account, the
+        # truth is "you accepted, IG just split the transition across two
+        # snapshots." Using the latest snapshot as the tiebreaker fixes
+        # the false-withdrawal flood that produced ~20 phantom events for
+        # accounts that are now mutuals.
+        latest = q.latest_id(conn)
+        if latest is not None:
+            latest_sd = q.snapshot_data(conn, latest)
+            latest_followers_set = latest_sd.followers
+            latest_following_set = latest_sd.following
+        else:
+            latest_followers_set = set()
+            latest_following_set = set()
+
         from datetime import datetime, timezone
 
         def epoch_to_iso(epoch: int | None) -> str | None:
@@ -435,9 +454,19 @@ def _activity_log_compute():
                          (ts_pending.get(s.id, {})).get(u))
 
                 # ---------- pending resolutions: split by outcome ----------
+                # An account leaving curr.pending could mean (a) they
+                # accepted you and you now follow them, or (b) the request
+                # was withdrawn / you cancelled / IG dropped it. Use BOTH
+                # the snapshot-at-the-time state AND the latest snapshot
+                # state, since IG sometimes splits the transition: you
+                # accept at moment T, IG removes them from pending at
+                # snapshot S, but doesn't add them to following until
+                # snapshot S+1. Without the latest-snapshot fallback, S→S+1
+                # gets labeled as a withdrawal even though you actually
+                # accepted.
                 pending_left = prev_sd.pending - curr_sd.pending
                 for u in sorted(pending_left):
-                    if u in curr_sd.following:
+                    if u in curr_sd.following or u in latest_following_set:
                         emit(events, "they_accepted", u, s.id, curr_ts)
                     else:
                         emit(events, "pending_withdrawn", u, s.id, curr_ts)
@@ -451,7 +480,10 @@ def _activity_log_compute():
                              (ts_incoming.get(s.id, {})).get(u))
                     incoming_left = prev_sd.incoming_requests - curr_sd.incoming_requests
                     for u in sorted(incoming_left):
-                        if u in curr_sd.followers:
+                        # Same latest-snapshot fallback as the pending side —
+                        # IG sometimes splits "you accepted" across two
+                        # snapshots so the per-transition view sees a gap.
+                        if u in curr_sd.followers or u in latest_followers_set:
                             emit(events, "you_accepted", u, s.id, curr_ts)
                         else:
                             emit(events, "incoming_withdrawn", u, s.id, curr_ts)
