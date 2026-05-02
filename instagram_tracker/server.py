@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -25,6 +26,19 @@ from .db import connect
 from .parsers import normalize_account_input
 
 app = FastAPI(title="Instagram Tracker", version="1.0.0")
+
+# CORS allowlist for the companion browser extension. The local UI lives at
+# 127.0.0.1 and is same-origin (no CORS needed), but the extension's content
+# scripts run on instagram.com / accountscenter.instagram.com etc., so they
+# need explicit permission to call this server. Only extension-origin schemes
+# and the local UI itself are allowed — no wildcard for the open web.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"^(chrome-extension|moz-extension|safari-web-extension)://.*$",
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type"],
+)
 
 
 # In-process cache for the heavy read endpoints. Two version counters
@@ -1548,6 +1562,26 @@ def _lookup_compute(username: str, profile_url: str):
         tags = tags_mod.get_tags(conn, username)
         aliases = q.username_alias_map(conn).get(username, [])
         privacy = q.privacy_status_bulk(conn, [username]).get(username, "unknown")
+
+        # Current-snapshot relationship state — needed by the browser
+        # extension overlay so it can render "mutual" / "doesn't follow back"
+        # without making a second request.
+        latest = q.latest_id(conn)
+        currently_following = currently_follower = currently_pending = currently_incoming = False
+        if latest is not None:
+            sd = q.snapshot_data(conn, latest)
+            currently_following = username in sd.following
+            currently_follower = username in sd.followers
+            currently_pending = username in sd.pending
+            currently_incoming = username in sd.incoming_requests
+
+        current_state = {
+            "currently_following": currently_following,
+            "currently_follower": currently_follower,
+            "currently_pending": currently_pending,
+            "currently_incoming_request": currently_incoming,
+        }
+
         if summary is None:
             return {
                 "username": username,
@@ -1556,8 +1590,16 @@ def _lookup_compute(username: str, profile_url: str):
                 "tags": tags,
                 "aliases": aliases,
                 "privacy": privacy,
+                **current_state,
             }
-        return {**summary, "found": True, "tags": tags, "aliases": aliases, "privacy": privacy}
+        return {
+            **summary,
+            "found": True,
+            "tags": tags,
+            "aliases": aliases,
+            "privacy": privacy,
+            **current_state,
+        }
 
 
 @app.get("/api/renames")

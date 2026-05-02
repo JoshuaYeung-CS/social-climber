@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="popup.css" />
+  <title>IG Tracker</title>
+</head>
+<body>
+  <header class="head">
+    <h1>IG Tracker</h1>
+    <span class="status" id="status">checking…</span>
+  </header>
+
+  <section class="card">
+    <h2>Run export</h2>
+    <p class="muted">Opens Meta's data-export page and auto-fills it with your saved preferences (JSON, followers + following, all time, Google Drive). You handle the password if it asks.</p>
+    <button class="primary" id="run-export">Run export</button>
+  </section>
+
+  <section class="card">
+    <h2>Quick links</h2>
+    <a class="link-row" id="open-tracker" href="#">Open tracker home →</a>
+    <a class="link-row" id="open-lists" href="#">Open lists →</a>
+    <a class="link-row" id="open-imports" href="#">Open imports →</a>
+  </section>
+
+  <section class="card">
+    <h2>Settings</h2>
+    <label class="row">
+      <span>Tracker URL</span>
+      <input type="text" id="tracker-url" placeholder="http://127.0.0.1:8000" />
+    </label>
+    <label class="row">
+      <span>Save IG password (opt-in, used only on the verify-password screen)</span>
+      <input type="password" id="ig-password" autocomplete="off" placeholder="(leave empty for manual entry)" />
+    </label>
+    <label class="row check">
+      <input type="checkbox" id="autosubmit-google" />
+      <span>Auto-click "Continue" on Google OAuth</span>
+    </label>
+    <label class="row check">
+      <input type="checkbox" id="show-overlay" checked />
+      <span>Show profile overlay on instagram.com</span>
+    </label>
+    <button class="secondary" id="save-settings">Save settings</button>
+  </section>
+
+  <footer class="foot">
+    <span>v1.0 · all data stays local</span>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

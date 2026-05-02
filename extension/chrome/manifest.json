@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "IG Tracker companion",
+  "version": "1.0.0",
+  "description": "Auto-fills the Instagram data export wizard and overlays your local IG Tracker history on profile pages.",
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://www.instagram.com/*",
+    "https://accountscenter.instagram.com/*",
+    "https://accounts.google.com/*",
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "IG Tracker",
+    "default_icon": {
+      "16": "icons/16.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.instagram.com/*"],
+      "js": ["content/ig-profile.js"],
+      "css": ["content/ig-profile.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://accountscenter.instagram.com/*",
+        "https://www.instagram.com/accounts/center/*"
+      ],
+      "js": ["content/meta-export.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://accounts.google.com/*"],
+      "js": ["content/google-oauth.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

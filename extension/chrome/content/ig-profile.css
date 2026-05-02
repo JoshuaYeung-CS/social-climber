@@ -1,0 +1,138 @@
+/* Profile overlay styles. Pinned to the top-right of any IG profile page,
+   sized to coexist with IG's own UI without colliding. Uses our own colors
+   so it visually identifies as the tracker, not as IG. */
+
+.igtracker-overlay {
+  position: fixed;
+  top: 76px;        /* clear IG's sticky header */
+  right: 16px;
+  width: 290px;
+  z-index: 2147483646;   /* one below the absolute max so IG modals can still cover it */
+  background: #18181b;
+  color: #f1f1f3;
+  border: 1px solid #2a2a30;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+  /* IG sometimes uses very dark themes; the border + shadow keep it visible. */
+}
+.igtracker-overlay.collapsed {
+  width: auto;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+.igt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: linear-gradient(180deg, rgba(79, 140, 255, 0.15), transparent);
+  border-bottom: 1px solid #2a2a30;
+}
+.igt-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8f8f99;
+  font-weight: 600;
+  flex: 1;
+}
+.igt-icon {
+  background: transparent;
+  border: 0;
+  color: #8f8f99;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.igt-icon:hover { background: rgba(255, 255, 255, 0.08); color: #f1f1f3; }
+.igt-body {
+  padding: 10px 12px;
+}
+.igt-username {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+.igt-rel {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+.igt-rel-good    { color: #3ecf8e; background: rgba(62, 207, 142, 0.10); border: 1px solid rgba(62, 207, 142, 0.3); }
+.igt-rel-warn    { color: #ffb454; background: rgba(255, 180, 84, 0.10); border: 1px solid rgba(255, 180, 84, 0.3); }
+.igt-rel-info    { color: #4f8cff; background: rgba(79, 140, 255, 0.10); border: 1px solid rgba(79, 140, 255, 0.3); }
+.igt-rel-pending { color: #a78bfa; background: rgba(167, 139, 250, 0.10); border: 1px solid rgba(167, 139, 250, 0.3); }
+.igt-rel-muted   { color: #8f8f99; background: rgba(143, 143, 153, 0.06); border: 1px solid #2a2a30; }
+.igt-muted { color: #8f8f99; }
+.igt-lines {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 10px;
+  color: #8f8f99;
+}
+.igt-lines li {
+  padding: 2px 0;
+  border-left: 2px solid #2a2a30;
+  padding-left: 8px;
+  margin-bottom: 2px;
+}
+.igt-tags {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.igt-tag {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid #2a2a30;
+  color: #8f8f99;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: all 100ms ease;
+}
+.igt-tag:hover { border-color: #4f8cff; color: #f1f1f3; }
+.igt-tag.on { background: #4f8cff; border-color: #4f8cff; color: white; }
+.igt-link {
+  display: inline-block;
+  font-size: 11px;
+  color: #8f8f99;
+  text-decoration: none;
+}
+.igt-link:hover { color: #4f8cff; }
+.igt-pill {
+  background: #18181b;
+  color: #f1f1f3;
+  border: 1px solid #2a2a30;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+.igt-pill:hover { border-color: #4f8cff; color: #4f8cff; }
+
+/* IG forces some annoying global styles; reset what we need to. */
+.igtracker-overlay,
+.igtracker-overlay * {
+  box-sizing: border-box;
+}
+.igtracker-overlay button {
+  font-family: inherit;
+}
