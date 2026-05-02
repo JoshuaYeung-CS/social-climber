@@ -981,6 +981,32 @@ code {
   background: rgba(255,255,255,0.25);
   color: white;
 }
+/* Intersection-active pill: dashed violet outline + ∩ glyph badge so it
+   reads visually as "combined with the primary list" rather than primary
+   itself. Coexists with .active (rare — primary can't also be intersected
+   per the click logic — but the styles compose correctly if it ever does). */
+.kind-pill.intersect {
+  border-color: var(--violet);
+  border-style: dashed;
+  background: rgba(167, 139, 250, 0.10);
+  color: var(--violet);
+  position: relative;
+  padding-right: 22px;
+}
+.kind-pill.intersect::after {
+  content: "∩";
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--violet);
+}
+.kind-pill.intersect .kind-count {
+  background: rgba(167, 139, 250, 0.20);
+  color: var(--violet);
+}
 
 /* ---------- collapsed scan / import details ---------- */
 .scan-details {

@@ -1506,13 +1506,17 @@ def _lists_apply_overlay(pure: dict) -> dict:
         if t.get("disabled") or t.get("unavailable") or t.get("random_request")
     }
     annotated: dict[str, list[dict]] = {}
-    # Non-bucket: copy pre-built rows and override tag fields with current state.
+    # Parallel "full" view that doesn't apply suppressed_set — used by the
+    # frontend's cross-list intersection feature, where the user explicitly
+    # wants to see suppressed-tagged users (e.g. "show me everyone I follow
+    # who is tagged unavailable"). Same row data, but bucket-tagged accounts
+    # remain in the non-bucket sections instead of being filtered out.
+    sections_full: dict[str, list[dict]] = {}
     for kind, usernames in pure["non_bucket_sections"].items():
         rows_for_kind = pure["non_bucket_rows"].get(kind, {})
         out = []
+        out_full = []
         for u in usernames:
-            if u in suppressed:
-                continue
             base = rows_for_kind.get(u)
             if base is None:
                 continue
@@ -1520,13 +1524,18 @@ def _lists_apply_overlay(pure: dict) -> dict:
             user_flags = flagged.get(u, {})
             for f in _TAG_FLAGS:
                 row[f] = user_flags.get(f, False)
-            out.append(row)
+            out_full.append(row)
+            if u not in suppressed:
+                out.append(row)
         annotated[kind] = out
+        sections_full[kind] = out_full
     # Bucket sections: rebuild from current tags using cached context.
     ctx = pure["ctx"]
     for flag in _TAG_FLAGS:
         usernames = sorted(u for u, t in flagged.items() if t.get(flag))
-        annotated[flag] = [_build_bucket_row(ctx, flagged, u, flag) for u in usernames]
+        bucket_rows = [_build_bucket_row(ctx, flagged, u, flag) for u in usernames]
+        annotated[flag] = bucket_rows
+        sections_full[flag] = bucket_rows
     # NFB sort.
     if "not_following_you_back" in annotated:
         def nfb_key(r):
@@ -1545,6 +1554,7 @@ def _lists_apply_overlay(pure: dict) -> dict:
         "snapshot_id": pure["snapshot_id"],
         "previous_snapshot_id": pure["prev_id"],
         "sections": annotated,
+        "sections_full": sections_full,
     }
 
 

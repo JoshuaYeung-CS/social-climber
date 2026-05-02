@@ -671,6 +671,11 @@ const LIST_GROUPS = [
   { label: "Tags",     kinds: ["favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"] },
 ];
 
+// Cross-list intersection: cmd/ctrl+click (or long-press on touch) a pill
+// to add it to the active set. The list view then shows accounts present
+// in ALL selected lists. Plain click resets to single-list mode.
+const _intersectKinds = new Set();
+
 function buildListKindPills() {
   const wrap = $("#list-pills");
   if (!wrap) return;
@@ -697,24 +702,69 @@ function buildListKindPills() {
     </div>`;
   }).join("");
   wrap.innerHTML = html;
-  $$(".kind-pill", wrap).forEach((btn) =>
-    btn.addEventListener("click", () => {
+  $$(".kind-pill", wrap).forEach((btn) => {
+    let touchTimer = null;
+
+    const togglePillInIntersection = (k) => {
+      if (k === select.value) {
+        // Combining with itself is meaningless; do nothing.
+        return;
+      }
+      if (_intersectKinds.has(k)) _intersectKinds.delete(k);
+      else _intersectKinds.add(k);
+      refreshActivePill();
+      loadLists();
+    };
+
+    btn.addEventListener("click", (e) => {
       const k = btn.dataset.kind;
-      if (select.value === k) return;  // already showing
+      // Cmd/Ctrl+click → add/remove from intersection set (don't change primary).
+      if (e.metaKey || e.ctrlKey) {
+        e.preventDefault();
+        togglePillInIntersection(k);
+        return;
+      }
+      // Plain click → reset to single-list mode for this kind.
+      _intersectKinds.clear();
+      if (select.value === k) {
+        // Already primary AND no intersection — nothing changed visually.
+        refreshActivePill();
+        return;
+      }
       select.value = k;
       // Programmatic value sets don't fire 'change' — dispatch manually
       // so the existing wiring (search reset, select-mode exit, loadLists)
       // runs the same way it would for a dropdown change.
       select.dispatchEvent(new Event("change"));
-    })
-  );
+    });
+
+    // Long-press on touch (~280ms) is the mobile equivalent of cmd-click.
+    btn.addEventListener("touchstart", (e) => {
+      const k = btn.dataset.kind;
+      touchTimer = setTimeout(() => {
+        touchTimer = null;
+        e.preventDefault();
+        // Haptic feedback on iOS where supported.
+        if (navigator.vibrate) navigator.vibrate(15);
+        togglePillInIntersection(k);
+      }, 280);
+    }, { passive: true });
+    const cancelTouch = () => {
+      if (touchTimer) { clearTimeout(touchTimer); touchTimer = null; }
+    };
+    btn.addEventListener("touchend", cancelTouch);
+    btn.addEventListener("touchmove", cancelTouch);
+    btn.addEventListener("touchcancel", cancelTouch);
+  });
   refreshActivePill();
 }
 
 function refreshActivePill() {
   const active = select.value;
   $$(".kind-pill").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.kind === active);
+    const k = btn.dataset.kind;
+    btn.classList.toggle("active", k === active);
+    btn.classList.toggle("intersect", _intersectKinds.has(k));
   });
 }
 
@@ -1220,9 +1270,41 @@ async function loadLists() {
     refreshSortLabels(kind);
     const out = $("#list-output");
     out.dataset.listKind = kind;
-    let items = sections[kind] || [];
+    // For intersection, prefer the unsuppressed sections_full so that
+    // suppressed-tagged users (disabled / unavailable / random_request) can
+    // legitimately match a bucket pill. Without this, "all_following ∩
+    // unavailable" would always be empty because all_following has those
+    // users stripped out.
+    const fullSections = data.sections_full || sections;
+    const baseSections = _intersectKinds.size ? fullSections : sections;
+    let items = baseSections[kind] || [];
+
+    // Apply the cross-list intersection: keep only rows whose username
+    // is present in EVERY pill the user combined in. Username sets always
+    // come from the unsuppressed full view so bucket-pill matches surface
+    // even when the primary list normally filters them out.
+    const secondaryUsernameSets = [..._intersectKinds]
+      .filter((k) => k !== kind && Array.isArray(fullSections[k]))
+      .map((k) => new Set(fullSections[k].map((r) => r.username)));
+    if (secondaryUsernameSets.length) {
+      items = items.filter((r) => secondaryUsernameSets.every((s) => s.has(r.username)));
+    }
+
+    // Surface the intersection in the sort caption so the count makes sense.
+    const captionEl = $("#sort-caption");
+    if (captionEl) {
+      const baseCaption = SORT_DATE_HINT[kind] ? `(${SORT_DATE_HINT[kind]})` : "";
+      if (_intersectKinds.size) {
+        const labelOf = (k) => (LIST_KINDS.find(([key]) => key === k) || [, k])[1];
+        const combined = [...(_intersectKinds)].map(labelOf).join(" + ");
+        captionEl.textContent = `${baseCaption} · ∩ ${combined} (${items.length})`.trim();
+      } else {
+        captionEl.textContent = baseCaption;
+      }
+    }
+
     if (items.length === 0) {
-      out.innerHTML = `<div class="muted">(none — 0 entries)</div>`;
+      out.innerHTML = `<div class="muted">(none — 0 in intersection)</div>`;
       searchCount.hidden = true;
       return;
     }
