@@ -271,7 +271,7 @@ def _home_compute():
                 "followers": len(curr.followers),
                 "following": len(curr.following),
                 "mutuals": len(curr.followers & curr.following),
-                "not_following_you_back": len(curr.following - curr.followers),
+                "not_following_you_back": len(curr.following - curr.followers - curr.incoming_requests),
                 "feeder_accounts": len(curr.followers - curr.following),
                 "pending": len(curr.pending),
                 "incoming_requests": len(curr.incoming_requests - suppressed_home),
@@ -993,8 +993,11 @@ def _lists_compute(snapshot_id: int | None):
             in_fol = u in sd.following
             in_back = u in sd.followers
             in_pend = u in sd.pending
+            in_inc = u in sd.incoming_requests
             if in_fol and in_back:
                 return ("mutual", "good")
+            if in_fol and in_inc:
+                return ("requesting to follow back", "pending")
             if in_fol and not in_back:
                 return ("doesn't follow back", "warn")
             if in_back and not in_fol:
