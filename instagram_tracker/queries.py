@@ -6,6 +6,7 @@ memory — much faster than re-fetching per snapshot in a loop.
 
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 
 @dataclass(frozen=True)
@@ -444,10 +445,28 @@ def recently_unfollowed_by_snapshot(conn: sqlite3.Connection) -> dict[int, set[s
 def privacy_status_bulk(conn: sqlite3.Connection, usernames: list[str]) -> dict[str, str]:
     """For each username, infer likely_private / likely_public / unknown.
 
-    Logic: if we ever saw the username in pending/recent_follow_requests *before*
-    we saw them in following, you sent a request and they accepted -> likely private.
-    If they appear in following with no prior pending evidence -> likely public.
-    If we don't have enough observation history -> unknown.
+    Three sources of evidence, applied in order:
+
+      1. Per-row export_timestamp evidence (most precise).
+         IG records the exact second of every follow + every pending request.
+         If a pending observation's timestamp precedes the follow timestamp,
+         a request was needed → likely_private. If we have *snapshot coverage*
+         (i.e. some snapshot was taken before the follow's exact second) and
+         saw no pending across that period, no request was needed →
+         likely_public.
+
+      2. Snapshot-position evidence (fallback when timestamps missing).
+         Compare the chronological position of the user's first appearance
+         in `pending_follow_requests` vs `following`. Pending earlier →
+         likely_private; following earlier with no pending → likely_public.
+
+      3. Same-snapshot ambiguity (sharpened from the prior version).
+         When pending and following both first appear in the *same* snapshot
+         (and that snapshot isn't the chronologically first one — i.e. we
+         had earlier coverage), the pending entry caught a request that
+         IG accepted between the two file-generation moments. This happens
+         only for private accounts; public follows never produce a pending
+         entry. Treat as likely_private rather than the prior "unknown".
 
     Comparisons are by chronological position (taken_at) — never by raw
     snapshot_id, so out-of-order imports don't lie about who came first.
@@ -455,55 +474,114 @@ def privacy_status_bulk(conn: sqlite3.Connection, usernames: list[str]) -> dict[
     if not usernames:
         return {}
 
-    # Chronological position of every snapshot id.
-    snap_order: dict[int, int] = {
-        int(r["id"]): i
-        for i, r in enumerate(
-            conn.execute(
-                "SELECT id FROM snapshots ORDER BY taken_at ASC, id ASC"
-            ).fetchall()
-        )
-    }
-    if not snap_order:
+    snap_rows = conn.execute(
+        "SELECT id, taken_at FROM snapshots ORDER BY taken_at ASC, id ASC"
+    ).fetchall()
+    if not snap_rows:
         return {}
+    snap_order: dict[int, int] = {int(r["id"]): i for i, r in enumerate(snap_rows)}
+    earliest_taken_at = snap_rows[0]["taken_at"]
 
     placeholders = ",".join("?" * len(usernames))
 
-    def first_chrono(table: str) -> dict[str, int]:
-        out: dict[str, int] = {}
-        for r in conn.execute(
-            f"SELECT username, snapshot_id FROM {table} WHERE username IN ({placeholders})",
-            usernames,
-        ).fetchall():
-            sid = int(r["snapshot_id"])
-            pos = snap_order.get(sid)
-            if pos is None:
-                continue
-            u = r["username"]
-            if u not in out or pos < out[u]:
-                out[u] = pos
-        return out
+    # 1) Most-recent follow timestamp from `following` (the canonical "when
+    #    they followed" — IG's per-row export_timestamp). MAX collapses
+    #    multiple snapshots-per-user into one anchor point.
+    follow_ts: dict[str, int] = {}
+    for r in conn.execute(
+        f"""
+        SELECT username, MAX(export_timestamp) AS ts
+        FROM following
+        WHERE username IN ({placeholders}) AND export_timestamp IS NOT NULL
+        GROUP BY username
+        """,
+        usernames,
+    ).fetchall():
+        if r["ts"] is not None:
+            follow_ts[r["username"]] = int(r["ts"])
 
-    first_following = first_chrono("following")
-    first_pending = first_chrono("pending_follow_requests")
+    # 2) Earliest pending observation per user — both timestamp and
+    #    chronological snapshot position. Two views because the pending row
+    #    might not have a timestamp on older imports.
+    first_pending_ts: dict[str, int] = {}
+    first_pending_pos: dict[str, int] = {}
+    for r in conn.execute(
+        f"""
+        SELECT username, export_timestamp, snapshot_id
+        FROM pending_follow_requests
+        WHERE username IN ({placeholders})
+        """,
+        usernames,
+    ).fetchall():
+        u = r["username"]
+        if r["export_timestamp"] is not None:
+            ts = int(r["export_timestamp"])
+            if u not in first_pending_ts or ts < first_pending_ts[u]:
+                first_pending_ts[u] = ts
+        pos = snap_order.get(int(r["snapshot_id"]))
+        if pos is not None and (u not in first_pending_pos or pos < first_pending_pos[u]):
+            first_pending_pos[u] = pos
+
+    # 3) First chronological appearance in following (snapshot position).
+    first_following_pos: dict[str, int] = {}
+    for r in conn.execute(
+        f"SELECT username, snapshot_id FROM following WHERE username IN ({placeholders})",
+        usernames,
+    ).fetchall():
+        u = r["username"]
+        pos = snap_order.get(int(r["snapshot_id"]))
+        if pos is not None and (u not in first_following_pos or pos < first_following_pos[u]):
+            first_following_pos[u] = pos
+
+    def has_pre_follow_coverage(ft: int) -> bool:
+        """True iff our earliest snapshot was taken before the follow happened —
+        meaning we'd have seen a pending entry if there was one."""
+        if not earliest_taken_at:
+            return False
+        ft_iso = datetime.fromtimestamp(ft, tz=timezone.utc).isoformat()
+        # Both ISO 8601, lexically comparable.
+        return earliest_taken_at < ft_iso
 
     out: dict[str, str] = {}
     for u in usernames:
-        ff = first_following.get(u)
-        fp = first_pending.get(u)
-        if ff is None:
-            out[u] = "unknown"
-            continue
-        if ff == 0:
-            # Already in following at the chronologically-first snapshot — never observed the transition.
-            out[u] = "unknown"
-            continue
-        if fp is not None and fp < ff:
+        ft = follow_ts.get(u)
+        pt = first_pending_ts.get(u)
+
+        # Strongest signal: the per-row timestamps say the request preceded the follow.
+        if ft is not None and pt is not None and pt <= ft:
             out[u] = "likely_private"
-        elif fp is not None and fp == ff:
-            out[u] = "unknown"
-        else:
+            continue
+
+        ff_pos = first_following_pos.get(u)
+        fp_pos = first_pending_pos.get(u)
+
+        # Snapshot-order evidence (used when timestamps are missing or
+        # when timestamps alone don't decide).
+        if ff_pos is not None and fp_pos is not None:
+            if fp_pos < ff_pos:
+                out[u] = "likely_private"
+                continue
+            if fp_pos == ff_pos and ff_pos > 0:
+                # Pending and following first appeared in the same snapshot
+                # we observed — pending caught a request that IG resolved
+                # between file generation. Public follows never appear in
+                # pending → this is private with high confidence.
+                out[u] = "likely_private"
+                continue
+
+        # No pending evidence. Now decide between likely_public and unknown.
+        if ft is not None and has_pre_follow_coverage(ft):
+            # Snapshots from before the follow happened, no pending observed → public.
             out[u] = "likely_public"
+            continue
+        if ff_pos is not None and ff_pos > 0:
+            # No timestamp, but snapshot-position evidence shows they appeared
+            # in following at a non-first snapshot — same coverage argument
+            # in coarser form.
+            out[u] = "likely_public"
+            continue
+
+        out[u] = "unknown"
     return out
 
 
