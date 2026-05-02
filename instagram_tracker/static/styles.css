@@ -837,6 +837,69 @@ code {
 .bulk-toolbar .bulk-btn[disabled] { opacity: 0.5; cursor: not-allowed; }
 .bulk-toolbar .bulk-cancel { margin-left: auto; color: var(--muted); }
 
+/* ---------- privacy filter chips on Lists view ---------- */
+.filter-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.filter-chips .filter-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.filter-chip {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 100ms ease;
+}
+.filter-chip:hover { border-color: var(--accent); color: var(--text); }
+.filter-chip.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.filter-chip:not(.active) { opacity: 0.55; text-decoration: line-through; }
+.filter-chip .filter-count {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0 5px;
+  background: var(--bg-elev);
+  border-radius: 999px;
+  min-width: 14px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.filter-chip.active .filter-count {
+  background: var(--accent);
+  color: white;
+}
+.filter-chip-clear {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 4px 8px;
+}
+.filter-chip-clear:hover { color: var(--accent); }
+
 /* ---------- list-kind picker (replaces the dropdown) ---------- */
 .list-pills {
   display: flex;

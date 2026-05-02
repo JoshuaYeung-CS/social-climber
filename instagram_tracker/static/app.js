@@ -735,12 +735,25 @@ function applyListSearch() {
   const sections = $$(".list-section", out);
   if (rows.length === 0) {
     searchCount.hidden = true;
+    if (typeof updateFilterCounts === "function") updateFilterCounts(rows);
     return;
   }
+  // Active privacy filters: which dataset.privacy values are allowed.
+  const allowedPrivacy = new Set();
+  $$(".filter-chip.active").forEach((c) => {
+    const m = (c.dataset.filter || "").match(/^privacy:(.+)$/);
+    if (m) allowedPrivacy.add(m[1]);
+  });
+  // If all three filters are off, treat it as "show everything" rather than
+  // hiding the entire list — saves the user from a blank-list state.
+  const filterOn = allowedPrivacy.size > 0 && allowedPrivacy.size < 3;
+
   let visible = 0;
   for (const row of rows) {
     const hay = row.dataset.search || (row.dataset.username || "").toLowerCase();
-    const show = q === "" || hay.includes(q);
+    const matchesQuery = q === "" || hay.includes(q);
+    const matchesPrivacy = !filterOn || allowedPrivacy.has(row.dataset.privacy || "unknown");
+    const show = matchesQuery && matchesPrivacy;
     row.style.display = show ? "" : "none";
     if (show) visible++;
   }
@@ -757,7 +770,11 @@ function applyListSearch() {
     }
     sec.style.display = anyVisible ? "" : "none";
   }
-  if (q === "") {
+  // Counts on the privacy filter chips (always reflect the unfiltered set
+  // so the user sees the totals available, not what's currently shown).
+  if (typeof updateFilterCounts === "function") updateFilterCounts(rows);
+
+  if (q === "" && !filterOn) {
     searchCount.hidden = true;
   } else {
     searchCount.hidden = false;
@@ -768,6 +785,39 @@ function applyListSearch() {
 }
 
 searchInput.addEventListener("input", applyListSearch);
+
+// Privacy filter chips. Each chip toggles its own state; the filter
+// applies after all chips are evaluated. "Clear filters" reactivates
+// all chips so everything shows.
+function updateFilterCounts(rows) {
+  const counts = { likely_private: 0, likely_public: 0, unknown: 0 };
+  rows.forEach((r) => {
+    const p = r.dataset.privacy || "unknown";
+    counts[p] = (counts[p] || 0) + 1;
+  });
+  $$("[data-filter-count]").forEach((el) => {
+    const m = (el.dataset.filterCount || "").match(/^privacy:(.+)$/);
+    if (m) el.textContent = (counts[m[1]] || 0).toString();
+  });
+  // Show "Clear filters" when at least one chip is off.
+  const allOn = $$(".filter-chip").every((c) => c.classList.contains("active"));
+  const clear = $("#filter-clear");
+  if (clear) clear.hidden = allOn;
+}
+
+$$(".filter-chip").forEach((chip) =>
+  chip.addEventListener("click", () => {
+    chip.classList.toggle("active");
+    applyListSearch();
+  })
+);
+const _filterClearBtn = $("#filter-clear");
+if (_filterClearBtn) {
+  _filterClearBtn.addEventListener("click", () => {
+    $$(".filter-chip").forEach((c) => c.classList.add("active"));
+    applyListSearch();
+  });
+}
 searchInput.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     searchInput.value = "";
@@ -1045,8 +1095,11 @@ function renderListRow(item) {
   // .list-output is in select-mode and this row has aria-selected="true").
   const checkbox = `<span class="row-check" aria-hidden="true"></span>`;
 
+  // Privacy bucket for filter chips. unknown when we have no inference yet.
+  const privacy = item.privacy || "unknown";
+
   return `
-    <div class="list-row${rowClass ? " " + rowClass : ""}" data-username="${escapeAttr(item.username)}" data-search="${escapeAttr(haystack)}" data-rel="${escapeAttr(rel)}">
+    <div class="list-row${rowClass ? " " + rowClass : ""}" data-username="${escapeAttr(item.username)}" data-search="${escapeAttr(haystack)}" data-rel="${escapeAttr(rel)}" data-privacy="${escapeAttr(privacy)}">
       ${checkbox}
       <div class="username-block">
         <span class="username">${escapeHtml(item.username)}</span>

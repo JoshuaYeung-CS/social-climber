@@ -82,6 +82,13 @@
           <button type="button" id="list-search-clear" class="search-clear" aria-label="Clear search" hidden>×</button>
         </div>
         <div id="search-count" class="search-count" hidden></div>
+        <div id="filter-chips" class="filter-chips">
+          <span class="filter-label">Show:</span>
+          <button type="button" class="filter-chip active" data-filter="privacy:likely_private">🔒 Private <span class="filter-count" data-filter-count="privacy:likely_private">0</span></button>
+          <button type="button" class="filter-chip active" data-filter="privacy:likely_public">🌐 Public <span class="filter-count" data-filter-count="privacy:likely_public">0</span></button>
+          <button type="button" class="filter-chip active" data-filter="privacy:unknown">? Unknown <span class="filter-count" data-filter-count="privacy:unknown">0</span></button>
+          <button type="button" class="filter-chip-clear" id="filter-clear" hidden>Clear filters</button>
+        </div>
         <div class="sort-row">
           <label class="muted small">Sort:</label>
           <select id="list-sort" class="full-select inline">
