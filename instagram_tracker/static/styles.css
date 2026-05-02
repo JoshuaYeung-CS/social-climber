@@ -761,6 +761,24 @@ code {
 .list-row[data-rel="stopped"] { border-left-color: var(--muted);  --rel-tint: rgba(143, 143, 153, 0.06); }
 .list-row[data-rel="muted"]   { border-left-color: var(--border); --rel-tint: transparent; }
 
+/* not_following_you_back: everyone has the same relationship state, so the
+   left stripe doesn't differentiate. Replace it with a full outline coloured
+   by privacy — instantly tells you which one-way follows are public-and-might-
+   reciprocate vs private-and-probably-won't. */
+.list-output[data-list-kind="not_following_you_back"] .list-row {
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+}
+.list-output[data-list-kind="not_following_you_back"] .list-row[data-privacy="likely_private"] {
+  border-color: rgba(244, 114, 182, 0.55);
+}
+.list-output[data-list-kind="not_following_you_back"] .list-row[data-privacy="likely_public"] {
+  border-color: rgba(62, 207, 142, 0.55);
+}
+.list-output[data-list-kind="not_following_you_back"] .list-row[data-privacy="unknown"] {
+  border-color: var(--border);
+}
+
 /* ---------- multi-select mode ---------- */
 .list-row .row-check {
   width: 0;

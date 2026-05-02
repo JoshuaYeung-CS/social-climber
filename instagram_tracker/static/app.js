@@ -1195,6 +1195,7 @@ async function loadLists() {
     const kind = select.value || "everyone";
     refreshSortLabels(kind);
     const out = $("#list-output");
+    out.dataset.listKind = kind;
     let items = sections[kind] || [];
     if (items.length === 0) {
       out.innerHTML = `<div class="muted">(none — 0 entries)</div>`;
