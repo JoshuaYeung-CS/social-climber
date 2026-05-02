@@ -823,6 +823,11 @@ def _lists_compute(snapshot_id: int | None):
             for r in conn.execute("SELECT DISTINCT username FROM followers").fetchall()
         }
         sections["ever_incoming_requests"] = sorted(ever_incoming_observed | ever_followed_you_set)
+        # "Real requests": everyone observed in incoming_follow_requests across
+        # all snapshots, with random-request-tagged accounts removed downstream
+        # by the suppressed_set filter. The complement of the random_request
+        # bucket — what's left to triage once the noise is tagged out.
+        sections["real_requests"] = sorted(ever_incoming_observed)
         # Strict "incoming rejected" — observed in incoming at some snapshot
         # AND never made it into followers across any snapshot. Without
         # excluding ever_followed_you_set, accounts you accepted and later
