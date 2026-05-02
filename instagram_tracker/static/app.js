@@ -111,7 +111,7 @@ async function loadHome() {
         ["Follow Request Rejected", s.request_dropped ?? 0, "request_dropped"],
         ["⚠ Tagged disabled", s.disabled_tagged ?? 0, "disabled"],
         ["✕ Tagged unavailable", s.unavailable_tagged ?? 0, "unavailable"],
-        ["🎲 Tagged random", s.random_request_tagged ?? 0, "random_request"],
+        ["🎲 Tagged random requests", s.random_request_tagged ?? 0, "random_request"],
       ];
       for (const [label, value, listKind] of stats) {
         const div = document.createElement("div");
@@ -475,7 +475,7 @@ function renderTagToggles(tags) {
       <button class="tag-toggle ${tags.watchlist ? "active" : ""}" data-flag="watchlist">↺ Wait-back</button>
       <button class="tag-toggle ${tags.disabled ? "active" : ""}" data-flag="disabled">⚠ Disabled</button>
       <button class="tag-toggle ${tags.unavailable ? "active" : ""}" data-flag="unavailable">✕ Unavailable</button>
-      <button class="tag-toggle ${tags.random_request ? "active" : ""}" data-flag="random_request">🎲 Random</button>
+      <button class="tag-toggle ${tags.random_request ? "active" : ""}" data-flag="random_request">🎲 Random request</button>
     </div>
   `;
 }
@@ -876,7 +876,7 @@ function renderBulkToolbar() {
     ${tagBtn("watchlist", "↺", "Wait-back")}
     ${tagBtn("disabled", "⚠", "Disabled")}
     ${tagBtn("unavailable", "✕", "Unavailable")}
-    ${tagBtn("random_request", "🎲", "Random")}
+    ${tagBtn("random_request", "🎲", "Random request")}
     <button type="button" class="bulk-btn" data-bulk="open">Open all in tabs</button>
     <button type="button" class="bulk-btn" data-bulk="queue">Add to follow queue</button>
     <button type="button" class="bulk-btn bulk-cancel" data-bulk="cancel">Cancel</button>

@@ -274,7 +274,7 @@ def _home_compute():
                 "not_following_you_back": len(curr.following - curr.followers),
                 "feeder_accounts": len(curr.followers - curr.following),
                 "pending": len(curr.pending),
-                "incoming_requests": len(curr.incoming_requests),
+                "incoming_requests": len(curr.incoming_requests - suppressed_home),
                 # Cumulative (ever) counts:
                 "ever_unfollowed_you": len(ever_unfollowed_you),
                 "ever_removed_you_as_follower": len(ever_removed),
