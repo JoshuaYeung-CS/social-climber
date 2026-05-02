@@ -958,21 +958,23 @@ function goToList(kind, push = true) {
   loadLists();
 }
 
-// Pick the "when did this happen" date for a row, used for chronological sorts.
-// Server populates the right field per list-kind context, so we just walk a
-// fallback chain: most-meaningful event date first. Returns "" so missing
-// values sort to the end naturally.
+// Pick the "when did this happen" instant for a row, used for chronological
+// sorts. Returns milliseconds since epoch (numeric) so same-day events sort
+// by exact second rather than collapsing to date precision. Server populates
+// per-row exact timestamps (*_ts, unix seconds) where IG provides them; fall
+// back to ISO date strings (snapshot-label precision) when not.
 function rowDateKey(r) {
-  return (
-    r.unfollowed_by_you_at ||
-    r.removed_you_at ||
-    r.last_followed_you_at ||
-    r.mutual_since_at ||
-    r.followed_at ||
-    r.first_followed_you_at ||
-    r.pending_since_at ||
-    ""
-  );
+  const exact = r.unfollowed_by_you_ts ?? r.last_followed_you_ts ??
+                r.followed_ts ?? r.first_followed_you_ts ??
+                r.pending_ts ?? r.incoming_ts ?? r.unfollowed_ts ??
+                r.followers_ts;
+  if (typeof exact === "number") return exact * 1000;
+  const iso = r.unfollowed_by_you_at || r.removed_you_at || r.last_followed_you_at ||
+              r.mutual_since_at || r.followed_at || r.first_followed_you_at ||
+              r.pending_since_at;
+  if (!iso) return null;
+  const d = new Date(iso + (iso.length === 10 ? "T12:00:00Z" : ""));
+  return isNaN(d) ? null : d.getTime();
 }
 
 // Each list has its own "what date is sorting by?" — surfaced as a small
@@ -1027,10 +1029,10 @@ function applySort(items, mode) {
   arr.sort((a, b) => {
     const ad = rowDateKey(a);
     const bd = rowDateKey(b);
-    if (!ad && !bd) return a.username.localeCompare(b.username);
-    if (!ad) return 1;
-    if (!bd) return -1;
-    const cmp = reverse ? bd.localeCompare(ad) : ad.localeCompare(bd);
+    if (ad == null && bd == null) return a.username.localeCompare(b.username);
+    if (ad == null) return 1;
+    if (bd == null) return -1;
+    const cmp = reverse ? bd - ad : ad - bd;
     return cmp || a.username.localeCompare(b.username);
   });
   return arr;
@@ -1043,17 +1045,27 @@ function renderListRow(item) {
   let chipClass = "timing";
   let rowClass = "";
 
-  // Build sub-line: chronological story of the relationship.
+  // Build sub-line: chronological story of the relationship. Prefer the
+  // exact unix-second timestamp (*_ts) IG provides; fall back to the
+  // date-precision ISO string when only a snapshot label is available.
   const parts = [];
-  if (item.followed_at) parts.push(`you followed ${escapeHtml(fmtDate(item.followed_at))}`);
+  if (item.followed_ts) parts.push(`you followed ${escapeHtml(fmtDateTime(item.followed_ts))}`);
+  else if (item.followed_at) parts.push(`you followed ${escapeHtml(fmtDate(item.followed_at))}`);
+  if (item.followers_ts) parts.push(`they followed you ${escapeHtml(fmtDateTime(item.followers_ts))}`);
+  if (item.pending_ts) parts.push(`you requested ${escapeHtml(fmtDateTime(item.pending_ts))}`);
+  else if (item.pending_since_at && !item.pending_ts) parts.push(`requested ${escapeHtml(fmtDate(item.pending_since_at))}`);
+  if (item.incoming_ts) parts.push(`they requested ${escapeHtml(fmtDateTime(item.incoming_ts))}`);
+  if (item.unfollowed_ts) parts.push(`you unfollowed ${escapeHtml(fmtDateTime(item.unfollowed_ts))}`);
   if (item.mutual_since_at) parts.push(`mutual since ${escapeHtml(fmtDate(item.mutual_since_at))}`);
-  if (item.pending_since_at) parts.push(`requested ${escapeHtml(fmtDate(item.pending_since_at))}`);
   if (item.history_status === "re-engaged") parts.push(`<span class="info-tag">re-engaged</span>`);
   if (item.privacy === "likely_private") parts.push(`<span class="privacy-tag privacy-private">🔒 likely private</span>`);
   else if (item.privacy === "likely_public") parts.push(`<span class="privacy-tag privacy-public">🌐 likely public</span>`);
   if (item.aliases && item.aliases.length > 1) parts.push(`<span class="info-tag">renamed: ${escapeHtml(item.aliases.join(' → '))}</span>`);
   if (item.ever_followed_you === false) parts.push(`<span class="never">never followed back</span>`);
-  else if (item.ever_followed_you === true && item.last_followed_you_at) parts.push(`stopped following you on ${escapeHtml(fmtDate(item.last_followed_you_at))}`);
+  else if (item.ever_followed_you === true) {
+    if (item.last_followed_you_ts) parts.push(`stopped following you on ${escapeHtml(fmtDateTime(item.last_followed_you_ts))}`);
+    else if (item.last_followed_you_at) parts.push(`stopped following you on ${escapeHtml(fmtDate(item.last_followed_you_at))}`);
+  }
   sub = parts.join(" · ");
 
   // Right-side chip: unified status pill from the relationship field.
@@ -1168,6 +1180,18 @@ function fmtDate(iso) {
   return d.toLocaleDateString("en-US", sameYear
     ? { month: "short", day: "numeric", timeZone: "UTC" }
     : { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+}
+
+// Render an exact unix timestamp (seconds) as "May 2, 4:21 PM" — local
+// timezone. Falls back gracefully when ts is missing or invalid.
+function fmtDateTime(ts) {
+  if (ts == null) return "";
+  const d = new Date(ts * 1000);
+  if (isNaN(d)) return "";
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleString("en-US", sameYear
+    ? { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }
+    : { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 // kept for backward compat where called from older code paths

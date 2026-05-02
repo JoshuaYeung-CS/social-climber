@@ -870,13 +870,51 @@ def _lists_compute(snapshot_id: int | None):
             ever_pending_outgoing - ever_following_set - sd.pending
         )
 
-        # Per-username timestamp of when you started following them (from Instagram's export).
+        # Per-username exact timestamps from Instagram's export. IG records
+        # the moment of every follow / request to the second; these maps let
+        # rows render "you followed Apr 30 · 3:14 PM" instead of just the date,
+        # and let chronological sorts break ties precisely.
         following_ts: dict[str, int | None] = {}
         for r in conn.execute(
             "SELECT username, export_timestamp FROM following WHERE snapshot_id = ?",
             (sid,),
         ).fetchall():
             following_ts[r["username"]] = r["export_timestamp"]
+
+        followers_ts: dict[str, int | None] = {}
+        for r in conn.execute(
+            "SELECT username, export_timestamp FROM followers WHERE snapshot_id = ?",
+            (sid,),
+        ).fetchall():
+            followers_ts[r["username"]] = r["export_timestamp"]
+
+        pending_ts: dict[str, int | None] = {}
+        for r in conn.execute(
+            "SELECT username, export_timestamp FROM pending_follow_requests "
+            "WHERE snapshot_id = ? AND source_label IN ('pending_follow_requests', 'both')",
+            (sid,),
+        ).fetchall():
+            pending_ts[r["username"]] = r["export_timestamp"]
+
+        incoming_ts: dict[str, int | None] = {}
+        for r in conn.execute(
+            "SELECT username, export_timestamp FROM incoming_follow_requests WHERE snapshot_id = ?",
+            (sid,),
+        ).fetchall():
+            incoming_ts[r["username"]] = r["export_timestamp"]
+
+        unfollowed_ts: dict[str, int | None] = {}
+        for r in conn.execute(
+            "SELECT username, export_timestamp FROM recently_unfollowed WHERE snapshot_id = ?",
+            (sid,),
+        ).fetchall():
+            unfollowed_ts[r["username"]] = r["export_timestamp"]
+
+        # Historical exact-ts maps populated below, after the chrono sid maps
+        # are computed (they need first_in_followers_sid etc. as input).
+        first_followed_you_ts: dict[str, int | None] = {}
+        last_followed_you_ts:  dict[str, int | None] = {}
+        last_unfollowed_ts:    dict[str, int | None] = {}
 
         now = datetime.now(timezone.utc)
 
@@ -958,6 +996,31 @@ def _lists_compute(snapshot_id: int | None):
         first_in_followers_sid = _per_user_sid_chrono(conn, "followers",            all_usernames, "first")
         last_in_following_sid  = _per_user_sid_chrono(conn, "following",            all_usernames, "last")
         last_unfollow_sid      = _per_user_sid_chrono(conn, "recently_unfollowed",  all_usernames, "last")
+
+        # Per-row exact timestamps from historical snapshots — sharpen the
+        # "they first/last followed you" and "you unfollowed them" fields from
+        # snapshot-label precision (a date) to per-row precision (the actual
+        # second IG recorded). Bulk-fetch in one query per table to avoid the
+        # per-username SELECT loop.
+        def _bulk_exact_ts(table: str, sid_map: dict[str, int]) -> dict[str, int]:
+            if not sid_map:
+                return {}
+            keys = list(sid_map.items())
+            placeholders = ",".join("(?,?)" for _ in keys)
+            params: list = []
+            for u, sid_v in keys:
+                params.extend([u, sid_v])
+            rows = conn.execute(
+                f"SELECT username, export_timestamp FROM {table} "
+                f"WHERE (username, snapshot_id) IN (VALUES {placeholders}) "
+                f"AND export_timestamp IS NOT NULL",
+                params,
+            ).fetchall()
+            return {r["username"]: r["export_timestamp"] for r in rows}
+
+        first_followed_you_ts = _bulk_exact_ts("followers",           first_in_followers_sid)
+        last_followed_you_ts  = _bulk_exact_ts("followers",           last_in_followers_sid)
+        last_unfollowed_ts    = _bulk_exact_ts("recently_unfollowed", last_unfollow_sid)
 
         # "Last followed you" date: kinds where the row is someone who used to
         # follow you and stopped. Pulls from last_in_followers_sid.
@@ -1081,19 +1144,31 @@ def _lists_compute(snapshot_id: int | None):
             chain = alias_map.get(u)
             if chain:
                 row["aliases"] = chain
-            # When you started following them.
+            # When you started following them (exact, from IG export).
             ts = following_ts.get(u)
             if ts:
                 followed_at = datetime.fromtimestamp(ts, tz=timezone.utc)
                 row["followed_ts"] = ts
                 row["followed_at"] = followed_at.date().isoformat()
                 row["days_since"] = (now - followed_at).days
-            # When you became mutual (first overlap).
+            # When they followed you (exact, from current followers row).
+            if u in followers_ts and followers_ts[u]:
+                row["followers_ts"] = followers_ts[u]
+            # When you sent the request (exact).
+            if u in pending_ts and pending_ts[u]:
+                row["pending_ts"] = pending_ts[u]
+            # When they sent the request to you (exact).
+            if u in incoming_ts and incoming_ts[u]:
+                row["incoming_ts"] = incoming_ts[u]
+            # When you unfollowed them (exact, from recently_unfollowed).
+            if u in unfollowed_ts and unfollowed_ts[u]:
+                row["unfollowed_ts"] = unfollowed_ts[u]
+            # When you became mutual (first overlap — coarse, snapshot-bound).
             if u in mutual_since_sid:
                 d, ago = days_ago_for_sid(mutual_since_sid[u])
                 row["mutual_since_at"] = d
                 row["mutual_since_days_ago"] = ago
-            # When pending request first appeared.
+            # When pending request first appeared (coarse).
             if u in pending_since_sid:
                 d, ago = days_ago_for_sid(pending_since_sid[u])
                 row["pending_since_at"] = d
@@ -1111,10 +1186,16 @@ def _lists_compute(snapshot_id: int | None):
                     row["last_followed_you_at"] = None
                     row["last_followed_you_days_ago"] = None
                 else:
-                    meta = snap_meta.get(last_sid, {})
-                    d = parse_label_date(meta.get("label"))
+                    # Prefer the per-row export timestamp (exact second IG
+                    # recorded) over the snapshot label (date-precise).
+                    exact_ts = last_followed_you_ts.get(u)
+                    if exact_ts:
+                        d = datetime.fromtimestamp(exact_ts, tz=timezone.utc)
+                        row["last_followed_you_ts"] = exact_ts
+                    else:
+                        d = parse_label_date(snap_meta.get(last_sid, {}).get("label"))
                     row["ever_followed_you"] = True
-                    row["last_followed_you_at"] = d.date().isoformat() if d else meta.get("label")
+                    row["last_followed_you_at"] = d.date().isoformat() if d else None
                     row["last_followed_you_days_ago"] = (now - d).days if d else None
                     row["last_followed_you_snapshot_id"] = last_sid
 
@@ -1124,10 +1205,15 @@ def _lists_compute(snapshot_id: int | None):
             if kind in LAST_FOLLOWED_YOU_KINDS and "last_followed_you_at" not in row:
                 last_sid = last_in_followers_sid.get(u)
                 if last_sid is not None:
-                    meta = snap_meta.get(last_sid, {})
-                    d = parse_label_date(meta.get("label"))
-                    row["last_followed_you_at"] = d.date().isoformat() if d else meta.get("label")
-                    row["last_followed_you_days_ago"] = (now - d).days if d else None
+                    exact_ts = last_followed_you_ts.get(u)
+                    if exact_ts:
+                        d = datetime.fromtimestamp(exact_ts, tz=timezone.utc)
+                        row["last_followed_you_ts"] = exact_ts
+                    else:
+                        d = parse_label_date(snap_meta.get(last_sid, {}).get("label"))
+                    if d:
+                        row["last_followed_you_at"] = d.date().isoformat()
+                        row["last_followed_you_days_ago"] = (now - d).days
             if kind in LAST_IN_FOLLOWING_KINDS:
                 last_sid = last_in_following_sid.get(u)
                 if last_sid is not None:
@@ -1137,16 +1223,26 @@ def _lists_compute(snapshot_id: int | None):
             if kind in YOU_UNFOLLOWED_KINDS:
                 last_sid = last_unfollow_sid.get(u)
                 if last_sid is not None:
-                    meta = snap_meta.get(last_sid, {})
-                    d = parse_label_date(meta.get("label"))
-                    row["unfollowed_by_you_at"] = d.date().isoformat() if d else meta.get("label")
-                    row["unfollowed_by_you_days_ago"] = (now - d).days if d else None
+                    exact_ts = last_unfollowed_ts.get(u)
+                    if exact_ts:
+                        d = datetime.fromtimestamp(exact_ts, tz=timezone.utc)
+                        row["unfollowed_by_you_ts"] = exact_ts
+                    else:
+                        d = parse_label_date(snap_meta.get(last_sid, {}).get("label"))
+                    if d:
+                        row["unfollowed_by_you_at"] = d.date().isoformat()
+                        row["unfollowed_by_you_days_ago"] = (now - d).days
             if kind in FIRST_FOLLOWED_YOU_KINDS:
                 first_sid = first_in_followers_sid.get(u)
                 if first_sid is not None:
-                    meta = snap_meta.get(first_sid, {})
-                    d = parse_label_date(meta.get("label"))
-                    row["first_followed_you_at"] = d.date().isoformat() if d else meta.get("label")
+                    exact_ts = first_followed_you_ts.get(u)
+                    if exact_ts:
+                        d = datetime.fromtimestamp(exact_ts, tz=timezone.utc)
+                        row["first_followed_you_ts"] = exact_ts
+                    else:
+                        d = parse_label_date(snap_meta.get(first_sid, {}).get("label"))
+                    if d:
+                        row["first_followed_you_at"] = d.date().isoformat()
 
             return row
 
