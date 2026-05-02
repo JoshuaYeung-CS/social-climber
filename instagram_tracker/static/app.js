@@ -316,35 +316,44 @@ async function doImport(file) {
 
 // ---------- lookup ----------
 
-$("#check-go").addEventListener("click", runCheck);
-$("#check-input").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey && $("#check-input").value.split(/\n/).filter((l) => l.trim()).length <= 1) {
-    e.preventDefault();
-    runCheck();
-  }
-});
+// Two flows: pure lookup (no side effects) vs add-to-queue (current behaviour).
+// The user gets to decide which by which button they hit.
+function bindCheckFlow({ inputId, buttonId, resultId, saveToQueue }) {
+  const input = $(`#${inputId}`);
+  const button = $(`#${buttonId}`);
+  if (!input || !button) return;
+  button.addEventListener("click", () => runCheck({ inputId, resultId, saveToQueue }));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && input.value.split(/\n/).filter((l) => l.trim()).length <= 1) {
+      e.preventDefault();
+      runCheck({ inputId, resultId, saveToQueue });
+    }
+  });
+}
 
-async function runCheck() {
-  const text = $("#check-input").value;
+bindCheckFlow({ inputId: "lookup-input", buttonId: "lookup-go", resultId: "lookup-result", saveToQueue: false });
+bindCheckFlow({ inputId: "queue-input",  buttonId: "queue-go",  resultId: "queue-result",  saveToQueue: true  });
+
+async function runCheck({ inputId, resultId, saveToQueue }) {
+  const text = $(`#${inputId}`).value;
   const lines = text.split(/\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
   if (lines.length === 0) return;
 
-  const out = $("#check-result");
+  const out = $(`#${resultId}`);
   if (lines.length === 1) {
-    // Single account: full detail view.
-    await openAccount(lines[0]);
+    await openAccount(lines[0], { resultId, saveToQueue });
   } else {
     try {
-      const data = await api.post("/api/filter-list", { text });
+      const data = await api.post("/api/filter-list", { text, save_to_queue: saveToQueue });
       out.innerHTML = renderBulkResult(data);
       if (data.queue_added) {
         toast(`Added ${data.queue_added} to follow queue (${data.queue_total} total)`);
+        loadQueue();
       }
-      loadQueue();
       $$(".clickable-name", out).forEach((el) =>
         el.addEventListener("click", () => openAccountModal(el.dataset.username))
       );
-      const copyBtn = $("#copy-pruned");
+      const copyBtn = out.querySelector("#copy-pruned");
       if (copyBtn) {
         copyBtn.addEventListener("click", async () => {
           try {
@@ -403,15 +412,14 @@ function renderBulkResult(data) {
   `;
 }
 
-async function openAccount(account) {
+async function openAccount(account, { resultId = "lookup-result", saveToQueue = false } = {}) {
   try {
     const data = await api.get(`/api/lookup?account=${encodeURIComponent(account)}`);
-    const result = $("#check-result");
+    const result = $(`#${resultId}`);
     result.innerHTML = renderLookup(data);
     bindTagToggles(result, data.username, data.tags);
 
-    // Single-account check: if truly never seen, queue them up like a bulk new entry.
-    if (data.found === false) {
+    if (saveToQueue && data.found === false) {
       try {
         const r = await api.post("/api/followup/add", {
           username: data.username,
@@ -423,7 +431,6 @@ async function openAccount(account) {
           loadQueue();
         }
       } catch (e) {
-        // Non-fatal — lookup still shows.
         console.warn("Couldn't add to queue:", e);
       }
     }
@@ -1944,6 +1951,6 @@ loadHome();
   if (!target) return;
   window.history.replaceState({}, "", window.location.pathname);
   showView("check");
-  $("#check-input").value = target;
-  openAccount(target);
+  $("#lookup-input").value = target;
+  openAccount(target, { resultId: "lookup-result", saveToQueue: false });
 })();
