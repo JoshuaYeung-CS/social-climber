@@ -722,10 +722,15 @@ def get_diff(old: int | None = None, new: int | None = None):
 
 @app.get("/api/lists")
 def get_lists(snapshot_id: int | None = None):
-    """Cached only when called with the default snapshot_id (the common case
-    powering the Lists view). Custom snapshot_id requests bypass cache."""
+    """Default snapshot_id uses a two-phase cache: the heavy snapshot-derived
+    data (helpers, chronological maps, non-bucket rows) is cached on
+    snapshot_version; the cheap tag overlay (bucket sections, tag flags,
+    suppression filter, sort) runs every request. A tag toggle invalidates
+    only the overlay, so the next request stays in the few-tens-of-ms range
+    instead of recomputing all 169 snapshots' worth of cumulative diffs."""
     if snapshot_id is None:
-        return _cached("lists", _lists_compute_default)
+        pure = _cached("lists_pure", _lists_pure_compute_default, deps=_DEPS_SNAPSHOT_ONLY)
+        return _lists_apply_overlay(pure)
     return _lists_compute(snapshot_id)
 
 
@@ -733,7 +738,25 @@ def _lists_compute_default():
     return _lists_compute(None)
 
 
-def _lists_compute(snapshot_id: int | None):
+def _lists_pure_compute_default():
+    return _lists_pure_compute(None)
+
+
+def _lists_pure_compute(snapshot_id: int | None):
+    """Tag-independent half of the Lists computation. Returns a context dict
+    with everything needed to assemble the final response, plus pre-built
+    non-bucket rows (without tag fields). The overlay step applies tags."""
+    return _lists_compute(snapshot_id, _pure_only=True)
+
+
+def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
+    """Single source of truth for the Lists endpoint. When _pure_only=True,
+    skips tag-dependent work (bucket sections, suppressed_set filter, tag
+    fields on rows, bucket priority sort) and returns a pure context dict
+    that the overlay function can finalise on a per-request basis. When
+    _pure_only=False, computes everything inline and returns the final
+    response — used by the custom-snapshot-id codepath which is uncached
+    and infrequent."""
     from datetime import datetime, timezone
 
     with db_conn() as conn:
@@ -774,9 +797,11 @@ def _lists_compute(snapshot_id: int | None):
             sections["you_unfollowed"] = []
             sections["they_removed_you_as_follower"] = []
 
-        # Bucket lists.
-        for flag in ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"):
-            sections[flag] = sorted(r["username"] for r in tags_mod.list_with_flag(conn, flag))
+        # Bucket lists. Skipped in pure mode — overlay rebuilds them from
+        # current tags so a tag toggle doesn't invalidate the snapshot cache.
+        if not _pure_only:
+            for flag in ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"):
+                sections[flag] = sorted(r["username"] for r in tags_mod.list_with_flag(conn, flag))
 
         # ---- Cumulative / historical lists across ALL snapshots ----
         followers_by_sid = q.followers_by_snapshot(conn)
@@ -1003,7 +1028,9 @@ def _lists_compute(snapshot_id: int | None):
         }
         BUCKET_KINDS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"}
 
-        flagged = tags_mod.all_flagged_usernames(conn)
+        # Tag state — empty in pure mode so pre-built rows have tag fields = False;
+        # overlay attaches the real values per request.
+        flagged = {} if _pure_only else tags_mod.all_flagged_usernames(conn)
 
         reengaged = q.detect_reengagements(conn)
 
@@ -1277,6 +1304,50 @@ def _lists_compute(snapshot_id: int | None):
 
             return row
 
+        if _pure_only:
+            # Pre-build non-bucket rows with empty tag fields. Pack helpers
+            # so the overlay can rebuild bucket rows on demand without
+            # re-querying the snapshot data.
+            non_bucket_rows: dict[str, dict[str, dict]] = {}
+            for kind, usernames in sections.items():
+                non_bucket_rows[kind] = {u: build_row(u, kind) for u in usernames}
+            return {
+                "_pure": True,
+                "snapshot_id": sid,
+                "prev_id": prev_id,
+                "non_bucket_sections": dict(sections),
+                "non_bucket_rows": non_bucket_rows,
+                # build_row helpers — overlay calls a re-implementation that
+                # pulls these fields. Sets are converted to frozensets at the
+                # boundary so cache mutation is impossible.
+                "ctx": {
+                    "sd_followers": frozenset(sd.followers),
+                    "sd_following": frozenset(sd.following),
+                    "sd_pending": frozenset(sd.pending),
+                    "sd_incoming_requests": frozenset(sd.incoming_requests),
+                    "reengaged": frozenset(reengaged),
+                    "privacy_map": privacy_map,
+                    "alias_map": alias_map,
+                    "snap_meta": snap_meta,
+                    "following_ts": following_ts,
+                    "followers_ts": followers_ts,
+                    "pending_ts": pending_ts,
+                    "incoming_ts": incoming_ts,
+                    "unfollowed_ts": unfollowed_ts,
+                    "mutual_since_sid": mutual_since_sid,
+                    "pending_since_sid": pending_since_sid,
+                    "last_followers_sid": last_followers_sid,
+                    "last_in_followers_sid": last_in_followers_sid,
+                    "first_in_followers_sid": first_in_followers_sid,
+                    "last_in_following_sid": last_in_following_sid,
+                    "last_unfollow_sid": last_unfollow_sid,
+                    "last_followed_you_ts": last_followed_you_ts,
+                    "first_followed_you_ts": first_followed_you_ts,
+                    "last_unfollowed_ts": last_unfollowed_ts,
+                    "now_iso": now.isoformat(),
+                },
+            }
+
         # Exclude disabled- or unavailable-tagged accounts from every non-bucket list.
         # Once you've tagged something as gone, you don't want to keep seeing it in
         # the follower / following / unfollow analyses — only in its bucket.
@@ -1313,6 +1384,154 @@ def _lists_compute(snapshot_id: int | None):
                 )
 
         return {"snapshot_id": sid, "previous_snapshot_id": prev_id, "sections": annotated}
+
+
+_TAG_FLAGS = ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request")
+_BUCKET_KINDS_SET = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"}
+_BUCKET_PRIORITY = {"action": 0, "warn": 1, "pending": 2, "stopped": 3, "good": 4, "": 5}
+
+
+def _build_bucket_row(ctx: dict, flagged: dict, u: str, kind: str) -> dict:
+    """Re-implementation of build_row for bucket kinds, working from the
+    cached pure context instead of closure variables. Bucket lists are small
+    (typically <100 rows) so this runs once per bucket per request."""
+    from datetime import datetime, timezone
+    in_fol = u in ctx["sd_following"]
+    in_back = u in ctx["sd_followers"]
+    in_pend = u in ctx["sd_pending"]
+    in_inc = u in ctx["sd_incoming_requests"]
+
+    # Relationship label.
+    if in_fol and in_back:
+        rel, rel_kind = "mutual", "good"
+    elif in_fol and in_inc:
+        rel, rel_kind = "requesting to follow back", "pending"
+    elif in_fol and not in_back:
+        rel, rel_kind = "doesn't follow back", "warn"
+    elif in_back and not in_fol:
+        rel, rel_kind = "follows you only", "info"
+    elif in_pend:
+        rel, rel_kind = "request pending", "info"
+    else:
+        rel, rel_kind = "no current relation", "muted"
+
+    # Bucket status.
+    if kind == "watchlist":
+        bs = ("you've unfollowed", "stopped") if not in_fol else (("now follows back ✓", "good") if in_back else ("still waiting", "pending"))
+    elif kind == "want_remove":
+        bs = ("already unfollowed ✓", "good") if not in_fol else ("still following", "action")
+    elif kind == "favorite":
+        if not in_fol and not in_back:
+            bs = ("neither follows", "warn")
+        elif not in_fol:
+            bs = ("you don't follow them", "stopped")
+        elif not in_back:
+            bs = ("doesn't follow back", "warn")
+        else:
+            bs = ("mutual", "good")
+    elif kind == "disabled":
+        bs = ("⚠ BACK ONLINE", "action") if (in_fol or in_back or in_pend) else ("still gone", "good")
+    elif kind == "unavailable":
+        bs = ("✕ PAGE BACK", "action") if (in_fol or in_back or in_pend) else ("still gone", "good")
+    elif kind == "random_request":
+        bs = ("now connected — tag stale", "warn") if (in_back or in_fol) else ("flagged random request", "muted")
+    else:
+        bs = ("", "")
+
+    row = {
+        "username": u,
+        "currently_following": in_fol,
+        "currently_follower": in_back,
+        "currently_pending": in_pend,
+        "relationship": rel,
+        "relationship_kind": rel_kind,
+        "bucket_status": bs[0],
+        "bucket_status_kind": bs[1],
+    }
+    # Tag flags from current state.
+    for f in _TAG_FLAGS:
+        row[f] = flagged.get(u, {}).get(f, False)
+    # Optional context fields when present.
+    if u in ctx["reengaged"]:
+        row["history_status"] = "re-engaged"
+    priv = ctx["privacy_map"].get(u)
+    if priv and priv != "unknown":
+        row["privacy"] = priv
+    chain = ctx["alias_map"].get(u)
+    if chain:
+        row["aliases"] = chain
+    ts = ctx["following_ts"].get(u)
+    if ts:
+        followed_at = datetime.fromtimestamp(ts, tz=timezone.utc)
+        now = datetime.fromisoformat(ctx["now_iso"])
+        row["followed_ts"] = ts
+        row["followed_at"] = followed_at.date().isoformat()
+        row["days_since"] = (now - followed_at).days
+    if ctx["followers_ts"].get(u):
+        row["followers_ts"] = ctx["followers_ts"][u]
+    if ctx["pending_ts"].get(u):
+        row["pending_ts"] = ctx["pending_ts"][u]
+    if ctx["incoming_ts"].get(u):
+        row["incoming_ts"] = ctx["incoming_ts"][u]
+    if ctx["unfollowed_ts"].get(u):
+        row["unfollowed_ts"] = ctx["unfollowed_ts"][u]
+    return row
+
+
+def _lists_apply_overlay(pure: dict) -> dict:
+    """Tag overlay: filters non-bucket sections by current suppressed_set,
+    attaches current tag flags to pre-built rows, builds bucket sections
+    from current tags, sorts. Runs every request — must be cheap."""
+    if not pure.get("_pure"):
+        # Custom-snapshot path returns a fully-finalised response — pass through.
+        return pure
+    with db_conn() as conn:
+        flagged = tags_mod.all_flagged_usernames(conn)
+    suppressed = {
+        u for u, t in flagged.items()
+        if t.get("disabled") or t.get("unavailable") or t.get("random_request")
+    }
+    annotated: dict[str, list[dict]] = {}
+    # Non-bucket: copy pre-built rows and override tag fields with current state.
+    for kind, usernames in pure["non_bucket_sections"].items():
+        rows_for_kind = pure["non_bucket_rows"].get(kind, {})
+        out = []
+        for u in usernames:
+            if u in suppressed:
+                continue
+            base = rows_for_kind.get(u)
+            if base is None:
+                continue
+            row = dict(base)
+            user_flags = flagged.get(u, {})
+            for f in _TAG_FLAGS:
+                row[f] = user_flags.get(f, False)
+            out.append(row)
+        annotated[kind] = out
+    # Bucket sections: rebuild from current tags using cached context.
+    ctx = pure["ctx"]
+    for flag in _TAG_FLAGS:
+        usernames = sorted(u for u, t in flagged.items() if t.get(flag))
+        annotated[flag] = [_build_bucket_row(ctx, flagged, u, flag) for u in usernames]
+    # NFB sort.
+    if "not_following_you_back" in annotated:
+        def nfb_key(r):
+            if not r.get("ever_followed_you"):
+                return (1, r["username"])
+            days = r.get("last_followed_you_days_ago")
+            return (0, days if days is not None else 1_000_000, r["username"])
+        annotated["not_following_you_back"].sort(key=nfb_key)
+    # Bucket priority sort.
+    for bk in _BUCKET_KINDS_SET:
+        if bk in annotated:
+            annotated[bk].sort(
+                key=lambda r: (_BUCKET_PRIORITY.get(r.get("bucket_status_kind", ""), 9), r["username"])
+            )
+    return {
+        "snapshot_id": pure["snapshot_id"],
+        "previous_snapshot_id": pure["prev_id"],
+        "sections": annotated,
+    }
 
 
 # ---------- per-account lookup ----------
