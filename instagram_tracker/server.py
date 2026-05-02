@@ -210,7 +210,10 @@ def _home_compute():
             ever_unfollowed_you -= suppressed_home
             ever_removed -= suppressed_home
 
-            still_follow_them = ever_unfollowed_you & curr.following
+            # Drop anyone who's now following you back — they re-followed, so
+            # they're no longer "an unfollower you still follow". History is
+            # still in the activity log.
+            still_follow_them = (ever_unfollowed_you & curr.following) - curr.followers
 
             # Cumulative ever_incoming_requests: total inbound interest across
             # the full snapshot history. Defined as the union of:
@@ -799,8 +802,13 @@ def _lists_compute(snapshot_id: int | None):
 
         sections["ever_unfollowed_you"] = sorted(ever_unfollowed_you)
         sections["ever_removed_you_as_follower"] = sorted(ever_removed_you)
-        # Subset of ever_unfollowed_you that you still follow.
-        sections["still_follow_after_drop"] = sorted(ever_unfollowed_you & sd.following)
+        # Subset of ever_unfollowed_you that you still follow AND who aren't
+        # currently following you back. Once they re-follow (mutual again),
+        # they fall off this list — the unfollow event itself stays in the
+        # activity log, which is what preserves the history.
+        sections["still_follow_after_drop"] = sorted(
+            (ever_unfollowed_you & sd.following) - sd.followers
+        )
 
         # Cumulative "you unfollowed" — anyone who ever appeared in your recently_unfollowed.
         sections["you_unfollowed_ever"] = sorted(ever_self)
