@@ -1312,3 +1312,77 @@ textarea {
   margin-right: 6px;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ----------------------------------------------------------------- */
+/* Phone (portrait) layout: ≤ 480px viewport width.                   */
+/* List rows reflow to a stacked layout so long usernames and the     */
+/* full sub-line stay readable, while keeping all info present (chip, */
+/* open-link, every tag toggle). At wider sizes — phone landscape,    */
+/* tablets, desktop — the original single-line layout is unchanged.   */
+/* ----------------------------------------------------------------- */
+@media (max-width: 480px) {
+  .list-row {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    padding: 10px 12px;
+    gap: 6px 8px;
+  }
+  .list-row .username-block {
+    flex: 1 1 0;
+    order: 1;
+    min-width: 0;
+  }
+  .list-row .username {
+    white-space: normal;       /* allow long handles to wrap rather than truncate */
+    word-break: break-word;
+    line-height: 1.3;
+    font-size: 15px;
+  }
+  .list-row .username-block .sub {
+    white-space: normal;       /* multi-line sub-line is fine on phone */
+    line-height: 1.45;
+    font-size: 12px;
+  }
+  /* Keep the status chip on the first row, right side. */
+  .list-row .timing {
+    order: 2;
+    align-self: flex-start;
+    flex-shrink: 0;
+    font-size: 11px;
+    max-width: 45%;            /* don't let a long bucket-status push the username off */
+    white-space: normal;       /* allow chip text to wrap if it's a long status */
+    text-align: right;
+  }
+  /* Open-link + tag toggles wrap to a second visual row, right-aligned. */
+  .list-row .row-open {
+    order: 3;
+    margin-left: auto;
+    width: 30px;
+    height: 30px;
+  }
+  .list-row .row-tags {
+    order: 4;
+    flex: 0 1 auto;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .list-row .row-tag {
+    width: 30px;
+    height: 30px;             /* slightly larger tap target */
+    font-size: 15px;
+  }
+
+  /* Tighter list-output padding so the rows have more horizontal room. */
+  .list-output { padding: 0; }
+
+  /* Tabs/header — keep them readable without sideways scroll on a 390px screen. */
+  .tabs { gap: 0; }
+  .tabs .tab { padding: 10px 12px; font-size: 14px; }
+  .topbar { padding: 10px 12px; }
+  .brand { font-size: 16px; }
+
+  /* Card padding tighter on phone so list cards aren't half-padding. */
+  .card { padding: 14px 12px; }
+}
