@@ -135,12 +135,23 @@ async function loadHome() {
       for (const a of all) {
         const li = document.createElement("li");
         li.className = a.severity || "normal";
+        const igHref = `https://www.instagram.com/${encodeURIComponent(a.username || "")}/`;
         li.innerHTML = `<span>${escapeHtml(a.message)}</span>`;
-        const btn = document.createElement("button");
-        btn.className = "open-btn";
-        btn.textContent = "Open";
-        btn.addEventListener("click", () => openAccountModal(a.username));
-        li.appendChild(btn);
+        // Direct IG link, then "Details" for the modal — gives one tap to
+        // jump to the profile without going through the detail view first.
+        const linkBtn = document.createElement("a");
+        linkBtn.className = "open-btn open-link";
+        linkBtn.href = igHref;
+        linkBtn.target = "_blank";
+        linkBtn.rel = "noopener";
+        linkBtn.textContent = "↗";
+        linkBtn.title = "Open on Instagram";
+        const detailBtn = document.createElement("button");
+        detailBtn.className = "open-btn";
+        detailBtn.textContent = "Details";
+        detailBtn.addEventListener("click", () => openAccountModal(a.username));
+        li.appendChild(linkBtn);
+        li.appendChild(detailBtn);
         alertsList.appendChild(li);
       }
     }
@@ -635,7 +646,66 @@ function buildListKindOptions() {
     o.textContent = label;
     select.appendChild(o);
   });
+  buildListKindPills();
 }
+
+// Visible list picker. Group the 19+ kinds so the user can scan them
+// fast instead of opening a long dropdown. Each pill gets a count
+// once loadLists has data.
+const LIST_GROUPS = [
+  { label: "Current",  kinds: ["everyone", "all_followers", "all_following", "mutuals", "not_following_you_back", "feeder_accounts", "pending", "incoming_requests", "renamed"] },
+  { label: "History",  kinds: ["ever_unfollowed_you", "ever_removed_you_as_follower", "you_unfollowed_ever", "still_follow_after_drop"] },
+  { label: "Requests", kinds: ["ever_incoming_requests", "incoming_request_dropped", "ever_requested_outgoing", "request_dropped"] },
+  { label: "Tags",     kinds: ["favorite", "want_remove", "watchlist", "disabled", "unavailable"] },
+];
+
+function buildListKindPills() {
+  const wrap = $("#list-pills");
+  if (!wrap) return;
+  const labelOf = (k) => {
+    const ent = LIST_KINDS.find(([key]) => key === k);
+    return ent ? ent[1] : k;
+  };
+  // Strip leading icon from "★ Favorites" etc. for a cleaner pill — the
+  // group already says "Tags" — and short-trim long labels.
+  const display = (l) => {
+    const stripped = l.replace(/^[★✦↺⚠✕]\s*/, "");
+    return stripped;
+  };
+  const html = LIST_GROUPS.map((g) => {
+    const pills = g.kinds
+      .filter((k) => LIST_KINDS.some(([key]) => key === k))
+      .map((k) => `<button type="button" class="kind-pill" data-kind="${k}">
+        <span class="kind-name">${escapeHtml(display(labelOf(k)))}</span>
+        <span class="kind-count" data-pill-count="${k}"></span>
+      </button>`).join("");
+    return `<div class="kind-group">
+      <div class="kind-group-label">${escapeHtml(g.label)}</div>
+      <div class="kind-group-pills">${pills}</div>
+    </div>`;
+  }).join("");
+  wrap.innerHTML = html;
+  $$(".kind-pill", wrap).forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const k = btn.dataset.kind;
+      if (select.value === k) return;  // already showing
+      select.value = k;
+      // Programmatic value sets don't fire 'change' — dispatch manually
+      // so the existing wiring (search reset, select-mode exit, loadLists)
+      // runs the same way it would for a dropdown change.
+      select.dispatchEvent(new Event("change"));
+    })
+  );
+  refreshActivePill();
+}
+
+function refreshActivePill() {
+  const active = select.value;
+  $$(".kind-pill").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.kind === active);
+  });
+}
+
 buildListKindOptions();
 select.addEventListener("change", () => {
   // Reset the search when switching lists — different lists, different content.
@@ -1040,7 +1110,7 @@ async function loadLists() {
   try {
     const data = await api.get("/api/lists");
     const sections = data.sections || {};
-    // Update dropdown labels with counts so totals are visible at a glance.
+    // Counts on the (hidden) select for fallback consumers.
     [...select.options].forEach((opt) => {
       const base = LIST_KINDS.find(([k]) => k === opt.value);
       if (base) {
@@ -1048,6 +1118,13 @@ async function loadLists() {
         opt.textContent = `${base[1]} (${count})`;
       }
     });
+    // Counts on the visible pills.
+    $$("[data-pill-count]").forEach((el) => {
+      const k = el.dataset.pillCount;
+      const count = (sections[k] || []).length;
+      el.textContent = count.toString();
+    });
+    refreshActivePill();
     const kind = select.value || "everyone";
     refreshSortLabels(kind);
     const out = $("#list-output");
@@ -1346,6 +1423,7 @@ function renderActivityLog() {
         <span class="al-time-cell">${escapeHtml(time)}</span>
         <span class="al-kind-pill al-${meta.cls}">${escapeHtml(meta.label)}</span>
         <span class="al-name" data-username="${escapeAttr(e.username)}">${escapeHtml(e.username)}</span>
+        <a class="al-open" href="https://www.instagram.com/${encodeURIComponent(e.username)}/" target="_blank" rel="noopener" title="Open on Instagram" onclick="event.stopPropagation()">↗</a>
       </div>
     `;
   }).join("");
@@ -1712,7 +1790,7 @@ async function showHistoryDetail(idx, snaps) {
         if (!list || !list.length) return "";
         const shown = list.slice(0, max);
         const more = list.length > max ? ` <span class="muted">+${list.length - max} more</span>` : "";
-        return `<div class="diff-block"><strong>${title}</strong> (${list.length})<div>${shown.map((u) => `<span class="diff-name">${escapeHtml(u)}</span>`).join(" ")}${more}</div></div>`;
+        return `<div class="diff-block"><strong>${title}</strong> (${list.length})<div>${shown.map((u) => `<span class="diff-name" data-username="${escapeAttr(u)}">${escapeHtml(u)}<a class="diff-link" href="https://www.instagram.com/${encodeURIComponent(u)}/" target="_blank" rel="noopener" title="Open on Instagram">↗</a></span>`).join(" ")}${more}</div></div>`;
       };
       diffHtml = `
         ${block("New followers", sec.new_followers)}

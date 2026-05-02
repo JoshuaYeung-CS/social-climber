@@ -85,7 +85,12 @@ body {
   z-index: 9;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  /* Hide the horizontal scrollbar visually — it's only needed on
+     extremely narrow viewports and looks ugly when always-show
+     scrollbars are set in the OS. Scroll still works via touch. */
+  scrollbar-width: none;
 }
+.tabs::-webkit-scrollbar { display: none; }
 .tab {
   flex: 1 0 auto;
   padding: 12px 14px;
@@ -670,6 +675,39 @@ code {
   transition: background 100ms ease, border-color 100ms ease;
 }
 .al-name:hover { background: var(--accent-soft); border-color: var(--accent); }
+.al-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: transparent;
+  text-decoration: none;
+  font-size: 11px;
+  flex-shrink: 0;
+  transition: all 100ms ease;
+}
+.al-open:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+
+.diff-name { display: inline-flex; align-items: center; gap: 4px; }
+.diff-link {
+  font-size: 10px;
+  color: var(--muted);
+  text-decoration: none;
+  margin-left: 2px;
+}
+.diff-link:hover { color: var(--accent); }
+
+.open-link {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none !important;
+  margin-right: 4px;
+}
 
 /* Clickable past-alias links inside the rename banner of the account modal. */
 .alias-link {
@@ -798,6 +836,68 @@ code {
 .bulk-toolbar .bulk-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
 .bulk-toolbar .bulk-btn[disabled] { opacity: 0.5; cursor: not-allowed; }
 .bulk-toolbar .bulk-cancel { margin-left: auto; color: var(--muted); }
+
+/* ---------- list-kind picker (replaces the dropdown) ---------- */
+.list-pills {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+.kind-group { display: flex; flex-direction: column; gap: 6px; }
+.kind-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 0 2px;
+}
+.kind-group-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.kind-pill {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 12px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 100ms ease;
+}
+.kind-pill:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.kind-pill.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  box-shadow: 0 1px 4px rgba(79, 140, 255, 0.4);
+}
+.kind-pill .kind-count {
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--bg-elev);
+  color: var(--muted);
+  padding: 1px 7px;
+  border-radius: 999px;
+  min-width: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.kind-pill.active .kind-count {
+  background: rgba(255,255,255,0.25);
+  color: white;
+}
 
 /* ---------- collapsed scan / import details ---------- */
 .scan-details {
