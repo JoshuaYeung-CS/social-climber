@@ -27,30 +27,58 @@ from .parsers import normalize_account_input
 app = FastAPI(title="Instagram Tracker", version="1.0.0")
 
 
-# In-process cache for the heavy read endpoints. Keyed on a monotonic
-# `_data_version` int that ticks every time something writes — imports,
-# tag toggles, snapshot deletes, queue mutations. A cache hit returns the
-# stored response dict immediately; on the version mismatch we fall
-# through and recompute. Without this, every interaction (tag click,
-# modal close) re-runs ~140 snapshots' worth of cumulative diffs.
-_data_version = 0
-_cache: dict[str, tuple[int, object]] = {}
+# In-process cache for the heavy read endpoints. Two version counters
+# instead of one: `_snapshot_version` ticks on imports / snapshot deletes
+# (anything that changes the underlying snapshot data); `_tag_version`
+# ticks on tag toggles. Endpoints that don't read tags at all (timeline,
+# activity-log) only depend on snapshot_version, so a tag click no longer
+# invalidates them — saves ~hundreds of ms of cumulative-diff recompute
+# per click.
+_snapshot_version = 0
+_tag_version = 0
+_cache: dict[str, tuple[tuple[int, int], object]] = {}
+
+# Each cached endpoint declares which version counters its result depends
+# on. A "snapshot" dep means tag writes don't invalidate; "tag" means tag
+# writes do. The cache key always stores the full (snap_v, tag_v) tuple
+# but the comparison only checks the deps that matter.
+_DEPS_SNAPSHOT_ONLY = ("snapshot",)
+_DEPS_BOTH = ("snapshot", "tag")
 
 
-def _bump_data_version():
-    global _data_version
-    _data_version += 1
-    _cache.clear()
+def _bump_snapshot_version():
+    global _snapshot_version
+    _snapshot_version += 1
+    _cache.clear()  # everything depends on snapshot, so wipe everything
 
 
-def _cached(key: str, compute):
-    """Return the cached response for `key` if its stored version matches
-    the current _data_version, else compute, store, return."""
+def _bump_tag_version():
+    global _tag_version
+    _tag_version += 1
+    # Selectively drop entries that depend on tags. Snapshot-only entries
+    # (timeline, activity-log) survive intact.
+    for k in list(_cache.keys()):
+        if "tag" in _CACHE_DEPS.get(k, _DEPS_BOTH):
+            _cache.pop(k, None)
+
+
+# Static map of cache-key → deps. Set when an endpoint registers itself.
+_CACHE_DEPS: dict[str, tuple[str, ...]] = {}
+
+
+def _cached(key: str, compute, deps: tuple[str, ...] = _DEPS_BOTH):
+    """Return the cached response for `key` if its stored version still
+    matches the relevant counters, else compute, store, return."""
+    _CACHE_DEPS[key] = deps
     entry = _cache.get(key)
-    if entry is not None and entry[0] == _data_version:
-        return entry[1]
+    if entry is not None:
+        cached_versions = entry[0]
+        snap_match = "snapshot" not in deps or cached_versions[0] == _snapshot_version
+        tag_match = "tag" not in deps or cached_versions[1] == _tag_version
+        if snap_match and tag_match:
+            return entry[1]
     result = compute()
-    _cache[key] = (_data_version, result)
+    _cache[key] = ((_snapshot_version, _tag_version), result)
     return result
 
 
@@ -78,7 +106,7 @@ def scan_now():
     this can take a couple of minutes, but the user opted in by clicking."""
     result = watcher_mod.scan_once()
     if result.get("imported") or result.get("skipped"):
-        _bump_data_version()
+        _bump_snapshot_version()
     return result
 
 
@@ -146,7 +174,7 @@ def health():
 
 @app.get("/api/home")
 def home():
-    """Single endpoint that powers the home screen. Cached on _data_version."""
+    """Single endpoint that powers the home screen. Cached on snapshot+tag versions."""
     return _cached("home", _home_compute)
 
 
@@ -326,13 +354,15 @@ def get_snapshots():
 def delete_snapshot(snapshot_id: int):
     with db_conn() as conn:
         q.delete_snapshot(conn, snapshot_id)
-    _bump_data_version()
+    _bump_snapshot_version()
     return {"deleted": snapshot_id}
 
 
 @app.get("/api/activity-log")
 def get_activity_log():
-    return _cached("activity_log", _activity_log_compute)
+    # Activity log doesn't read tags — only snapshot data. Tag writes
+    # don't need to invalidate it.
+    return _cached("activity_log", _activity_log_compute, deps=_DEPS_SNAPSHOT_ONLY)
 
 
 def _activity_log_compute():
@@ -520,7 +550,8 @@ def _activity_log_compute():
 
 @app.get("/api/timeline")
 def get_timeline():
-    return _cached("timeline", _timeline_compute)
+    # Timeline is pure snapshot counts — no tag dependency.
+    return _cached("timeline", _timeline_compute, deps=_DEPS_SNAPSHOT_ONLY)
 
 
 def _timeline_compute():
@@ -638,7 +669,7 @@ async def import_export(
         with db_conn() as conn:
             run = ingest_mod.import_path(conn, import_target, label)
         if run.imports or run.skipped:
-            _bump_data_version()
+            _bump_snapshot_version()
 
         return {
             "imports": [
@@ -1289,6 +1320,10 @@ def _lists_compute(snapshot_id: int | None):
 @app.get("/api/lookup")
 def lookup(account: str):
     username, profile_url = normalize_account_input(account)
+    return _cached(f"lookup:{username}", lambda: _lookup_compute(username, profile_url))
+
+
+def _lookup_compute(username: str, profile_url: str):
     with db_conn() as conn:
         summary = q.ever_summary(conn, username)
         tags = tags_mod.get_tags(conn, username)
@@ -1399,7 +1434,7 @@ def update_tag(payload: dict = Body(...)):
     username, profile_url = normalize_account_input(account)
     with db_conn() as conn:
         result = tags_mod.set_flag(conn, username, flag, value, profile_url)
-    _bump_data_version()
+    _bump_tag_version()
     return result
 
 

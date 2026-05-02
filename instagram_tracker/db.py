@@ -6,6 +6,10 @@ from datetime import datetime, timezone
 SCHEMA = """
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+PRAGMA temp_store = MEMORY;
+PRAGMA cache_size = -32000;        -- 32 MB page cache (negative = KB)
+PRAGMA mmap_size = 268435456;      -- 256 MB memory-mapped I/O
 
 CREATE TABLE IF NOT EXISTS snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,10 +105,30 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+_INITIALIZED_PATHS: set[str] = set()
+_FAST_PRAGMAS = (
+    "PRAGMA synchronous = NORMAL;"
+    "PRAGMA temp_store = MEMORY;"
+    "PRAGMA cache_size = -32000;"
+    "PRAGMA mmap_size = 268435456;"
+)
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+
+    # Per-process schema/migration is one-shot: the SCHEMA + ALTERs are
+    # idempotent but each connection still pays ~5-15ms parsing/executing
+    # them. After first init, every subsequent connection just sets the
+    # connection-local fast pragmas and returns. Saves the cost on every
+    # FastAPI request, which opens a fresh connection.
+    key = str(db_path)
+    if key in _INITIALIZED_PATHS:
+        conn.executescript(_FAST_PRAGMAS)
+        return conn
+
     conn.executescript(SCHEMA)
 
     # Idempotent column adds for older databases.
@@ -175,6 +199,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
             conn.execute("UPDATE snapshots SET taken_at = ? WHERE id = ?", (ts, int(r["id"])))
 
     conn.commit()
+    _INITIALIZED_PATHS.add(key)
     return conn
 
 
