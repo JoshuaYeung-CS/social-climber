@@ -308,15 +308,24 @@ def _home_compute():
             # followed-then-unfollowed" list.
             request_dropped = ever_pending_observed - ever_following - curr.pending
 
+            # Active-relationship counts: subtract suppressed_home so that
+            # accounts the user has tagged disabled / unavailable / random
+            # don't pad the "active" totals. Same rule the Lists view applies
+            # to its non-bucket sections — keeps home and lists in sync.
+            active_followers = curr.followers - suppressed_home
+            active_following = curr.following - suppressed_home
+            active_pending = curr.pending - suppressed_home
+            active_incoming = curr.incoming_requests - suppressed_home
+
             summary = {
                 "snapshot_id": latest,
-                "followers": len(curr.followers),
-                "following": len(curr.following),
-                "mutuals": len(curr.followers & curr.following),
-                "not_following_you_back": len(curr.following - curr.followers - curr.incoming_requests),
-                "feeder_accounts": len(curr.followers - curr.following),
-                "pending": len(curr.pending),
-                "incoming_requests": len(curr.incoming_requests - suppressed_home),
+                "followers": len(active_followers),
+                "following": len(active_following),
+                "mutuals": len(active_followers & active_following),
+                "not_following_you_back": len(active_following - active_followers - active_incoming),
+                "feeder_accounts": len(active_followers - active_following),
+                "pending": len(active_pending),
+                "incoming_requests": len(active_incoming),
                 # Cumulative (ever) counts:
                 "ever_unfollowed_you": len(ever_unfollowed_you),
                 "ever_removed_you_as_follower": len(ever_removed),
