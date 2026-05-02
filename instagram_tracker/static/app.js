@@ -111,6 +111,7 @@ async function loadHome() {
         ["Follow Request Rejected", s.request_dropped ?? 0, "request_dropped"],
         ["⚠ Tagged disabled", s.disabled_tagged ?? 0, "disabled"],
         ["✕ Tagged unavailable", s.unavailable_tagged ?? 0, "unavailable"],
+        ["🎲 Tagged random", s.random_request_tagged ?? 0, "random_request"],
       ];
       for (const [label, value, listKind] of stats) {
         const div = document.createElement("div");
@@ -161,6 +162,7 @@ async function loadHome() {
     $("#count-watchlist").textContent = data.bucket_counts.watchlist;
     $("#count-disabled").textContent = data.bucket_counts.disabled ?? 0;
     $("#count-unavailable").textContent = data.bucket_counts.unavailable ?? 0;
+    $("#count-random_request").textContent = data.bucket_counts.random_request ?? 0;
   } catch (e) {
     console.error(e);
     toast(`Couldn't load home: ${e.message}`);
@@ -473,6 +475,7 @@ function renderTagToggles(tags) {
       <button class="tag-toggle ${tags.watchlist ? "active" : ""}" data-flag="watchlist">↺ Wait-back</button>
       <button class="tag-toggle ${tags.disabled ? "active" : ""}" data-flag="disabled">⚠ Disabled</button>
       <button class="tag-toggle ${tags.unavailable ? "active" : ""}" data-flag="unavailable">✕ Unavailable</button>
+      <button class="tag-toggle ${tags.random_request ? "active" : ""}" data-flag="random_request">🎲 Random</button>
     </div>
   `;
 }
@@ -635,6 +638,7 @@ const LIST_KINDS = [
   ["watchlist", "↺ Wait-back"],
   ["disabled", "⚠ Disabled"],
   ["unavailable", "✕ Unavailable (page not found)"],
+  ["random_request", "🎲 Random requests"],
 ];
 
 const select = $("#list-kind");
@@ -656,7 +660,7 @@ const LIST_GROUPS = [
   { label: "Current",  kinds: ["everyone", "all_followers", "all_following", "mutuals", "not_following_you_back", "feeder_accounts", "pending", "incoming_requests", "renamed"] },
   { label: "History",  kinds: ["ever_unfollowed_you", "ever_removed_you_as_follower", "you_unfollowed_ever", "still_follow_after_drop"] },
   { label: "Requests", kinds: ["ever_incoming_requests", "incoming_request_dropped", "ever_requested_outgoing", "request_dropped"] },
-  { label: "Tags",     kinds: ["favorite", "want_remove", "watchlist", "disabled", "unavailable"] },
+  { label: "Tags",     kinds: ["favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"] },
 ];
 
 function buildListKindPills() {
@@ -871,6 +875,7 @@ function renderBulkToolbar() {
     ${tagBtn("watchlist", "↺", "Wait-back")}
     ${tagBtn("disabled", "⚠", "Disabled")}
     ${tagBtn("unavailable", "✕", "Unavailable")}
+    ${tagBtn("random_request", "🎲", "Random")}
     <button type="button" class="bulk-btn" data-bulk="open">Open all in tabs</button>
     <button type="button" class="bulk-btn" data-bulk="queue">Add to follow queue</button>
     <button type="button" class="bulk-btn bulk-cancel" data-bulk="cancel">Cancel</button>
@@ -1073,6 +1078,7 @@ function renderListRow(item) {
     ${tagBtn("watchlist", "↺", item.watchlist)}
     ${tagBtn("disabled", "⚠", item.disabled)}
     ${tagBtn("unavailable", "✕", item.unavailable)}
+    ${tagBtn("random_request", "🎲", item.random_request)}
   `;
 
   // Searchable haystack: current username + any past aliases (rename chain),
@@ -1253,14 +1259,14 @@ async function loadLists() {
             // tiles aren't visible. They'll refresh next time the user
             // navigates back. Saves a ~1s wait per tag click.
             const currentKind = select.value;
-            const BUCKETS = ["favorite", "want_remove", "watchlist", "disabled", "unavailable"];
+            const BUCKETS = ["favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"];
             // If we just removed from the bucket we're viewing, drop the row.
             if (!result[flag] && currentKind === flag) {
               row.remove();
             }
             // If we just tagged disabled or unavailable ON while viewing a non-bucket
             // list, drop the row (server excludes these from non-bucket lists).
-            if ((flag === "disabled" || flag === "unavailable") && result[flag] && !BUCKETS.includes(currentKind)) {
+            if ((flag === "disabled" || flag === "unavailable" || flag === "random_request") && result[flag] && !BUCKETS.includes(currentKind)) {
               row.remove();
             }
           } catch (err) {

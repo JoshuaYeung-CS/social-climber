@@ -205,6 +205,7 @@ def _home_compute():
             suppressed_home = (
                 {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
                 | {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
+                | {r["username"] for r in tags_mod.list_with_flag(conn, "random_request")}
             )
             ever_unfollowed_you -= suppressed_home
             ever_removed -= suppressed_home
@@ -282,6 +283,7 @@ def _home_compute():
                 "request_dropped": len(request_dropped),
                 "disabled_tagged": len(tags_mod.list_with_flag(conn, "disabled")),
                 "unavailable_tagged": len(tags_mod.list_with_flag(conn, "unavailable")),
+                "random_request_tagged": len(tags_mod.list_with_flag(conn, "random_request")),
             }
 
         bucket_counts = {
@@ -290,6 +292,7 @@ def _home_compute():
             "watchlist": len(tags_mod.list_with_flag(conn, "watchlist")),
             "disabled": len(tags_mod.list_with_flag(conn, "disabled")),
             "unavailable": len(tags_mod.list_with_flag(conn, "unavailable")),
+            "random_request": len(tags_mod.list_with_flag(conn, "random_request")),
         }
 
         return {
@@ -738,7 +741,7 @@ def _lists_compute(snapshot_id: int | None):
             sections["they_removed_you_as_follower"] = []
 
         # Bucket lists.
-        for flag in ("favorite", "want_remove", "watchlist", "disabled", "unavailable"):
+        for flag in ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"):
             sections[flag] = sorted(r["username"] for r in tags_mod.list_with_flag(conn, flag))
 
         # ---- Cumulative / historical lists across ALL snapshots ----
@@ -916,7 +919,7 @@ def _lists_compute(snapshot_id: int | None):
             "all_followers",
             "feeder_accounts",
         }
-        BUCKET_KINDS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable"}
+        BUCKET_KINDS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"}
 
         flagged = tags_mod.all_flagged_usernames(conn)
 
@@ -1020,6 +1023,13 @@ def _lists_compute(snapshot_id: int | None):
                 if in_fol or in_back or in_pend:
                     return ("✕ PAGE BACK", "action")
                 return ("still gone", "good")
+            if kind == "random_request":
+                # If a random-request-tagged account became a real follower (you
+                # accepted) or you ended up following them, they probably weren't
+                # actually a random request — surface so you can clear the tag.
+                if in_back or in_fol:
+                    return ("now connected — tag stale", "warn")
+                return ("flagged random request", "muted")
             return ("", "")
 
         def parse_label_date(label: str | None) -> datetime | None:
@@ -1039,6 +1049,7 @@ def _lists_compute(snapshot_id: int | None):
                 "watchlist": flagged.get(u, {}).get("watchlist", False),
                 "disabled": flagged.get(u, {}).get("disabled", False),
                 "unavailable": flagged.get(u, {}).get("unavailable", False),
+                "random_request": flagged.get(u, {}).get("random_request", False),
                 "currently_following": u in sd.following,
                 "currently_follower": u in sd.followers,
                 "currently_pending": u in sd.pending,
@@ -1129,6 +1140,7 @@ def _lists_compute(snapshot_id: int | None):
         suppressed_set = (
             {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
             | {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
+            | {r["username"] for r in tags_mod.list_with_flag(conn, "random_request")}
         )
         for kind in list(sections.keys()):
             if kind in BUCKET_KINDS:

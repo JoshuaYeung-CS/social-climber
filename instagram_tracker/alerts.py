@@ -39,6 +39,7 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
     suppressed = (
         {r["username"] for r in list_with_flag(conn, "disabled")}
         | {r["username"] for r in list_with_flag(conn, "unavailable")}
+        | {r["username"] for r in list_with_flag(conn, "random_request")}
     )
     if previous is not None:
         prev = snapshot_data(conn, previous)
@@ -145,6 +146,7 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
     for flag, icon, label in (
         ("disabled", "⚠", "disabled"),
         ("unavailable", "✕", "unavailable"),
+        ("random_request", "🎲", "random request"),
     ):
         to_unflag: list[str] = []
         for entry in list_with_flag(conn, flag):

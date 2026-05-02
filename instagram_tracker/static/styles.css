@@ -275,6 +275,8 @@ code {
 .bucket-btn[data-flag="disabled"] .count { color: var(--warn); }
 .bucket-btn[data-flag="unavailable"] { border-color: rgba(167, 139, 250, 0.35); background: rgba(167, 139, 250, 0.08); color: var(--violet); }
 .bucket-btn[data-flag="unavailable"] .count { color: var(--violet); }
+.bucket-btn[data-flag="random_request"]         { border-color: rgba(244, 114, 182, 0.35); background: rgba(244, 114, 182, 0.08); color: var(--pink); }
+.bucket-btn[data-flag="random_request"] .count  { color: var(--pink); }
 
 .lookup-form { display: flex; gap: 8px; flex-wrap: wrap; }
 .lookup-form input {

@@ -81,6 +81,8 @@ CREATE TABLE IF NOT EXISTS profile_tags (
     disabled_added_at TEXT,
     unavailable INTEGER NOT NULL DEFAULT 0,
     unavailable_added_at TEXT,
+    random_request INTEGER NOT NULL DEFAULT 0,
+    random_request_added_at TEXT,
     notes TEXT,
     profile_url TEXT,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -115,6 +117,10 @@ def connect(db_path: Path) -> sqlite3.Connection:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN unavailable INTEGER NOT NULL DEFAULT 0")
     if "unavailable_added_at" not in cols:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN unavailable_added_at TEXT")
+    if "random_request" not in cols:
+        conn.execute("ALTER TABLE profile_tags ADD COLUMN random_request INTEGER NOT NULL DEFAULT 0")
+    if "random_request_added_at" not in cols:
+        conn.execute("ALTER TABLE profile_tags ADD COLUMN random_request_added_at TEXT")
 
     snap_cols = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
     if "content_hash" not in snap_cols:
