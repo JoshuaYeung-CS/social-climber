@@ -216,27 +216,30 @@ $("#scan-drive-btn")?.addEventListener("click", async () => {
   status.innerHTML = `<span class="pending"><span class="spinner"></span>Scanning Drive folder…</span>`;
   try {
     const result = await api.post("/api/scan");
-    const lines = [];
     if (!result.ok) {
-      lines.push(`<div class="warn-box">⚠ ${escapeHtml(result.message)}</div>`);
+      status.innerHTML = `<div class="warn-box">⚠ ${escapeHtml(result.message)}</div>`;
     } else {
       const seen = result.already_seen ?? 0;
       const newCount = result.scanned - seen;
-      lines.push(`<div class="ok">Scanned ${result.scanned} item${result.scanned === 1 ? "" : "s"} in <code>${escapeHtml(result.watch_folder)}</code> — ${seen} already imported, ${newCount} new (${result.imported} imported, ${result.skipped} skipped/backfilled)</div>`);
-      for (const d of (result.details || [])) {
-        const cls = d.outcome === "imported" ? "ok"
-          : d.outcome === "backfilled" ? "ok"
-          : d.outcome === "error" ? "err" : "warn-box";
-        const verb = d.outcome === "imported" ? `Imported snapshot #${d.snapshot_id}`
-          : d.outcome === "backfilled" ? "Backfilled"
-          : d.outcome === "duplicate" ? "Duplicate"
-          : d.outcome === "out_of_order" ? "Out of order"
-          : d.outcome === "error" ? "Error" : d.outcome;
-        const detail = d.message ? ` — ${escapeHtml(d.message.slice(0, 140))}` : (d.label ? ` — ${escapeHtml(d.label)}` : "");
-        lines.push(`<div class="${cls}">${escapeHtml(verb)} <code>${escapeHtml(d.file)}</code>${detail}</div>`);
+      const errors = (result.details || []).filter((d) => d.outcome === "error").length;
+      // Concise summary line; full per-file details collapsed under a toggle.
+      const summary = `<div class="ok">✓ ${result.imported} imported · ${result.skipped} skipped/backfilled · ${seen} already known${errors ? ` · <span class="err">${errors} errors</span>` : ""}</div>`;
+      let detailHtml = "";
+      if ((result.details || []).length > 0) {
+        const items = result.details.map((d) => {
+          const cls = d.outcome === "imported" || d.outcome === "backfilled" ? "ok"
+            : d.outcome === "error" ? "err" : "muted";
+          const verb = d.outcome === "imported" ? `+${d.snapshot_id}`
+            : d.outcome === "backfilled" ? "↺"
+            : d.outcome === "duplicate" ? "↩"
+            : d.outcome === "out_of_order" ? "⏪"
+            : d.outcome === "error" ? "✗" : d.outcome;
+          return `<div class="scan-item ${cls}"><span class="scan-verb">${escapeHtml(verb)}</span> <code>${escapeHtml(d.file)}</code></div>`;
+        }).join("");
+        detailHtml = `<details class="scan-details"><summary class="muted small">Show ${result.details.length} per-file detail${result.details.length === 1 ? "" : "s"}</summary><div class="scan-detail-list">${items}</div></details>`;
       }
+      status.innerHTML = summary + detailHtml;
     }
-    status.innerHTML = lines.join("");
     await loadHome();
   } catch (e) {
     status.innerHTML = `<div class="err">✗ ${escapeHtml(e.message)}</div>`;
@@ -251,40 +254,47 @@ async function doImport(file) {
   status.innerHTML = `<span class="pending"><span class="spinner"></span>Importing ${escapeHtml(file.name)}…</span>`;
   try {
     const result = await api.upload(file);
-    const lines = result.imports.map((r) => {
-      let line = `<div class="ok">✓ Imported snapshot #${r.snapshot_id} (${escapeHtml(cleanLabel(r.label))}) — ${r.counts.followers} followers, ${r.counts.following} following</div>`;
+    const skipped = (result.skipped || []);
+    const imported = result.imports.length;
+    const backfilledCount = skipped.filter((s) => s.reason === "backfilled").length;
+    const trueSkippedCount = skipped.length - backfilledCount;
+    const missingFiles = result.imports.some((r) => r.missing_files && r.missing_files.length);
+
+    const summary = `<div class="ok">✓ ${imported} imported · ${backfilledCount} backfilled · ${trueSkippedCount} skipped${missingFiles ? ` · <span class="warn-box">some IG files missing</span>` : ""}</div>`;
+
+    // Per-entry details, collapsed under a click-to-expand toggle.
+    const items = [];
+    for (const r of result.imports) {
+      items.push(`<div class="scan-item ok"><span class="scan-verb">+${r.snapshot_id}</span> <code>${escapeHtml(cleanLabel(r.label))}</code> — ${r.counts.followers}F/${r.counts.following}G</div>`);
       if (r.missing_files && r.missing_files.length) {
-        line += `<div class="warn-box">⚠ Instagram's export was missing the following file${r.missing_files.length === 1 ? "" : "s"}:<ul>${r.missing_files.map((f) => `<li>${escapeHtml(f)}</li>`).join("")}</ul>That data will be empty for this snapshot. Try re-requesting the export from Instagram if you need it.</div>`;
+        items.push(`<div class="scan-item muted">  ⚠ missing files: ${r.missing_files.map((f) => escapeHtml(f)).join(", ")}</div>`);
       }
-      return line;
-    });
-    for (const s of (result.skipped || [])) {
-      const icon = s.reason === "backfilled" ? "✓" : (s.reason === "duplicate" ? "↩" : "⚠");
-      const cls  = s.reason === "backfilled" ? "ok" : "warn-box";
-      lines.push(`<div class="${cls}">${icon} ${s.reason === "backfilled" ? "" : "Skipped "}${escapeHtml(cleanLabel(s.label))}: ${escapeHtml(s.message)}</div>`);
     }
-    status.innerHTML = lines.join("");
+    for (const s of skipped) {
+      const verb = s.reason === "backfilled" ? "↺" : (s.reason === "duplicate" ? "↩" : "⚠");
+      const cls = s.reason === "backfilled" ? "ok" : "muted";
+      items.push(`<div class="scan-item ${cls}"><span class="scan-verb">${verb}</span> <code>${escapeHtml(cleanLabel(s.label))}</code> — ${escapeHtml(s.message.slice(0, 100))}</div>`);
+    }
+    const detailHtml = items.length
+      ? `<details class="scan-details"><summary class="muted small">Show ${items.length} per-file detail${items.length === 1 ? "" : "s"}</summary><div class="scan-detail-list">${items.join("")}</div></details>`
+      : "";
+    status.innerHTML = summary + detailHtml;
     _historyData = null;  // invalidate so the next History view refetches
     await loadHome();
-    const imported = result.imports.length;
-    const skipped = (result.skipped || []);
-    const backfilled = skipped.filter((s) => s.reason === "backfilled").length;
-    const trueSkipped = skipped.length - backfilled;
     if (imported === 0 && skipped.length > 0) {
-      if (backfilled > 0 && trueSkipped === 0) {
-        toast(`Backfilled ${backfilled} snapshot${backfilled === 1 ? "" : "s"}`);
+      if (backfilledCount > 0 && trueSkippedCount === 0) {
+        toast(`Backfilled ${backfilledCount} snapshot${backfilledCount === 1 ? "" : "s"}`);
       } else {
         const reason = skipped[0].reason === "duplicate" ? "duplicate" : "older than existing snapshots";
         toast(`Skipped — ${reason}`);
       }
     } else {
-      const warned = result.imports.some((r) => r.missing_files && r.missing_files.length);
       const parts = [];
       if (imported) parts.push(`Imported ${imported} snapshot${imported === 1 ? "" : "s"}`);
-      if (backfilled) parts.push(`backfilled ${backfilled}`);
-      if (trueSkipped) parts.push(`${trueSkipped} skipped`);
+      if (backfilledCount) parts.push(`backfilled ${backfilledCount}`);
+      if (trueSkippedCount) parts.push(`${trueSkippedCount} skipped`);
       const msg = parts.join(", ") || "Done";
-      toast(warned ? `${msg} (some IG files missing)` : msg);
+      toast(missingFiles ? `${msg} (some IG files missing)` : msg);
     }
   } catch (e) {
     status.innerHTML = `<div class="err">✗ ${escapeHtml(e.message)}</div>`;
@@ -631,6 +641,9 @@ select.addEventListener("change", () => {
   // Reset the search when switching lists — different lists, different content.
   searchInput.value = "";
   searchClear.hidden = true;
+  // Drop any in-flight selection too — selecting "_carrotro11" on the rejected
+  // list shouldn't carry over to the mutuals list.
+  if (typeof setSelectMode === "function") setSelectMode(false);
   loadLists();
 });
 
@@ -698,6 +711,103 @@ searchClear.addEventListener("click", (e) => {
   applyListSearch();
   searchInput.focus();
 });
+
+// ---------- multi-select for bulk actions ----------
+const _selectedUsernames = new Set();
+let _selectMode = false;
+const _selectToggleBtn = $("#list-select-toggle");
+const _bulkToolbar = $("#bulk-toolbar");
+
+function setSelectMode(on) {
+  _selectMode = !!on;
+  const out = $("#list-output");
+  if (out) out.classList.toggle("select-mode", _selectMode);
+  if (_selectToggleBtn) {
+    _selectToggleBtn.classList.toggle("active", _selectMode);
+    _selectToggleBtn.textContent = _selectMode ? "Done" : "Select";
+  }
+  if (!_selectMode) {
+    _selectedUsernames.clear();
+    if (out) $$(".list-row[aria-selected='true']", out).forEach((r) => r.removeAttribute("aria-selected"));
+  }
+  renderBulkToolbar();
+}
+
+function renderBulkToolbar() {
+  if (!_bulkToolbar) return;
+  if (!_selectMode || _selectedUsernames.size === 0) {
+    _bulkToolbar.hidden = true;
+    _bulkToolbar.innerHTML = "";
+    return;
+  }
+  const n = _selectedUsernames.size;
+  const tagBtn = (flag, sym, label) =>
+    `<button type="button" class="bulk-btn" data-bulk="${flag}" title="${label}">${sym} ${label}</button>`;
+  _bulkToolbar.hidden = false;
+  _bulkToolbar.innerHTML = `
+    <span class="bulk-count">${n} selected</span>
+    ${tagBtn("favorite", "★", "Favorite")}
+    ${tagBtn("want_remove", "✦", "Want to remove")}
+    ${tagBtn("watchlist", "↺", "Wait-back")}
+    ${tagBtn("disabled", "⚠", "Disabled")}
+    ${tagBtn("unavailable", "✕", "Unavailable")}
+    <button type="button" class="bulk-btn" data-bulk="open">Open all in tabs</button>
+    <button type="button" class="bulk-btn" data-bulk="queue">Add to follow queue</button>
+    <button type="button" class="bulk-btn bulk-cancel" data-bulk="cancel">Cancel</button>
+  `;
+  $$(".bulk-btn", _bulkToolbar).forEach((btn) =>
+    btn.addEventListener("click", () => runBulkAction(btn.dataset.bulk))
+  );
+}
+
+async function runBulkAction(action) {
+  const usernames = Array.from(_selectedUsernames);
+  if (action === "cancel") { setSelectMode(false); return; }
+  if (action === "open") {
+    // Browsers block popup spam after a few — open the first 5 with a
+    // brief gap, then warn for any beyond that.
+    const limit = 5;
+    const opened = usernames.slice(0, limit);
+    opened.forEach((u, i) => setTimeout(() => window.open(`https://www.instagram.com/${encodeURIComponent(u)}/`, "_blank"), i * 50));
+    if (usernames.length > limit) {
+      toast(`Opened first ${limit}. Browser blocks bulk popups beyond that.`);
+    } else {
+      toast(`Opened ${opened.length} tab${opened.length === 1 ? "" : "s"}`);
+    }
+    return;
+  }
+  if (action === "queue") {
+    try {
+      await Promise.all(usernames.map((u) =>
+        api.post("/api/followup/add", { account: u })
+      ));
+      toast(`Added ${usernames.length} to follow queue`);
+    } catch (e) {
+      toast(`Failed: ${e.message}`);
+    }
+    return;
+  }
+  // Tag bulk apply: POST /api/tags for each, in parallel.
+  const flag = action;
+  toast(`Applying ${flag} to ${usernames.length}…`);
+  try {
+    await Promise.all(usernames.map((u) =>
+      api.post("/api/tags", { account: u, flag, value: true })
+    ));
+    toast(`Applied ${flag} to ${usernames.length} account${usernames.length === 1 ? "" : "s"}`);
+    // Exit select mode and refresh the current list so any newly-tagged
+    // rows that should now be filtered out (disabled / unavailable
+    // exclude from non-bucket lists) actually drop.
+    setSelectMode(false);
+    loadLists();
+  } catch (e) {
+    toast(`Some applies failed: ${e.message}`);
+  }
+}
+
+if (_selectToggleBtn) {
+  _selectToggleBtn.addEventListener("click", () => setSelectMode(!_selectMode));
+}
 
 function goToList(kind, push = true) {
   showView("lists", false);
@@ -857,8 +967,17 @@ function renderListRow(item) {
   const igUrl = `https://www.instagram.com/${encodeURIComponent(item.username)}/`;
   const openLink = `<a class="row-open" href="${igUrl}" target="_blank" rel="noopener" title="Open ${escapeAttr(item.username)} on Instagram">↗</a>`;
 
+  // Color stripe + subtle background tint based on relationship state.
+  // bucket_status_kind takes precedence (we're inside a bucket list view),
+  // otherwise the row's current relationship kind.
+  const rel = item.bucket_status_kind || item.relationship_kind || "muted";
+  // Selection support for multi-select mode (handled by CSS when the parent
+  // .list-output is in select-mode and this row has aria-selected="true").
+  const checkbox = `<span class="row-check" aria-hidden="true"></span>`;
+
   return `
-    <div class="list-row${rowClass ? " " + rowClass : ""}" data-username="${escapeAttr(item.username)}" data-search="${escapeAttr(haystack)}">
+    <div class="list-row${rowClass ? " " + rowClass : ""}" data-username="${escapeAttr(item.username)}" data-search="${escapeAttr(haystack)}" data-rel="${escapeAttr(rel)}">
+      ${checkbox}
       <div class="username-block">
         <span class="username">${escapeHtml(item.username)}</span>
         ${sub ? `<span class="sub">${sub}</span>` : ""}
@@ -964,8 +1083,31 @@ async function loadLists() {
     // Re-apply any active search after rendering so a sort change (which
     // re-renders the rows) keeps the filter live.
     applyListSearch();
+    // Restore select-mode visual state after a re-render.
+    if (_selectMode) {
+      out.classList.add("select-mode");
+      $$(".list-row", out).forEach((row) => {
+        if (_selectedUsernames.has(row.dataset.username)) {
+          row.setAttribute("aria-selected", "true");
+        }
+      });
+    }
     $$(".list-row", out).forEach((row) => {
-      row.addEventListener("click", () => openAccountModal(row.dataset.username));
+      row.addEventListener("click", () => {
+        if (_selectMode) {
+          const u = row.dataset.username;
+          if (_selectedUsernames.has(u)) {
+            _selectedUsernames.delete(u);
+            row.removeAttribute("aria-selected");
+          } else {
+            _selectedUsernames.add(u);
+            row.setAttribute("aria-selected", "true");
+          }
+          renderBulkToolbar();
+        } else {
+          openAccountModal(row.dataset.username);
+        }
+      });
       const openLink = row.querySelector(".row-open");
       if (openLink) openLink.addEventListener("click", (e) => e.stopPropagation());
       $$(".row-tag", row).forEach((btn) => {

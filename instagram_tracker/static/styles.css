@@ -679,19 +679,193 @@ code {
 }
 .alias-link:hover { color: var(--accent-hover); border-bottom-style: solid; }
 .list-row {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: 10px 14px;
   background: var(--bg-elev-2);
-  border-radius: 8px;
+  border-radius: 10px;
   cursor: pointer;
   font-size: 14px;
-  gap: 8px;
+  gap: 10px;
+  border-left: 3px solid transparent;
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease, background 120ms ease;
 }
-.list-row:hover { background: var(--border); }
+.list-row::before {
+  /* Subtle color wash from the left edge — picks up the relationship
+     color and fades to transparent. Adds 'mppph' without being loud. */
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(90deg, var(--rel-tint, transparent), transparent 38%);
+  opacity: 0.55;
+}
+.list-row > * { position: relative; }  /* keep content above ::before tint */
+.list-row:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+.list-row:hover::before { opacity: 0.85; }
 .list-row .badges { display: flex; gap: 4px; flex-shrink: 0; font-size: 13px; }
-.list-row .username { font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-row .username { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: -0.005em; }
+
+/* Per-relationship color stripe + tint variables */
+.list-row[data-rel="good"]    { border-left-color: var(--good);   --rel-tint: rgba(62, 207, 142, 0.10); }
+.list-row[data-rel="warn"]    { border-left-color: var(--warn);   --rel-tint: rgba(255, 180, 84, 0.10); }
+.list-row[data-rel="info"]    { border-left-color: var(--accent); --rel-tint: rgba(79, 140, 255, 0.10); }
+.list-row[data-rel="action"]  { border-left-color: var(--bad);    --rel-tint: rgba(255, 94, 122, 0.10); }
+.list-row[data-rel="pending"] { border-left-color: var(--violet); --rel-tint: rgba(167, 139, 250, 0.10); }
+.list-row[data-rel="stopped"] { border-left-color: var(--muted);  --rel-tint: rgba(143, 143, 153, 0.06); }
+.list-row[data-rel="muted"]   { border-left-color: var(--border); --rel-tint: transparent; }
+
+/* ---------- multi-select mode ---------- */
+.list-row .row-check {
+  width: 0;
+  overflow: hidden;
+  flex-shrink: 0;
+  transition: width 140ms ease, margin-right 140ms ease;
+  margin-right: 0;
+}
+.list-output.select-mode .list-row .row-check {
+  width: 18px;
+  height: 18px;
+  margin-right: 4px;
+  border: 2px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-elev);
+  display: inline-block;
+  position: relative;
+}
+.list-output.select-mode .list-row[aria-selected="true"] {
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 2px var(--accent) inset;
+}
+.list-output.select-mode .list-row[aria-selected="true"] .row-check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.list-output.select-mode .list-row[aria-selected="true"] .row-check::after {
+  content: "✓";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+/* While in select mode, taps shouldn't trigger the modal — disable
+   the open-link and tag buttons so clicks fall through to row select. */
+.list-output.select-mode .row-tag,
+.list-output.select-mode .row-open {
+  pointer-events: none;
+  opacity: 0.45;
+}
+
+/* ---------- bulk action bar ---------- */
+.bulk-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 10px;
+  box-shadow: var(--shadow);
+  position: sticky;
+  bottom: env(safe-area-inset-bottom, 8px);
+  z-index: 4;
+}
+.bulk-toolbar .bulk-count { font-weight: 600; margin-right: 6px; font-size: 13px; }
+.bulk-toolbar .bulk-btn {
+  appearance: none;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+.bulk-toolbar .bulk-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+.bulk-toolbar .bulk-btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+.bulk-toolbar .bulk-cancel { margin-left: auto; color: var(--muted); }
+
+/* ---------- collapsed scan / import details ---------- */
+.scan-details {
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev-2);
+  overflow: hidden;
+}
+.scan-details summary {
+  cursor: pointer;
+  padding: 8px 12px;
+  list-style: none;
+}
+.scan-details summary::-webkit-details-marker { display: none; }
+.scan-details summary::before {
+  content: "▸ ";
+  display: inline-block;
+  margin-right: 4px;
+  transition: transform 100ms ease;
+  color: var(--muted);
+}
+.scan-details[open] summary::before { content: "▾ "; }
+.scan-detail-list {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px 12px 10px;
+  border-top: 1px solid var(--border);
+}
+.scan-item {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  padding: 3px 0;
+  font-variant-numeric: tabular-nums;
+}
+.scan-item.ok    { color: var(--good); }
+.scan-item.err   { color: var(--bad); }
+.scan-item.muted { color: var(--muted); }
+.scan-item .scan-verb {
+  display: inline-block;
+  min-width: 28px;
+  font-weight: 700;
+  text-align: center;
+}
+.scan-item code {
+  font-size: 11px;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  opacity: 0.85;
+}
+
+/* ---------- select-mode toggle in toolbar ---------- */
+.select-toggle {
+  appearance: none;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 100ms ease;
+}
+.select-toggle:hover { border-color: var(--accent); color: var(--text); }
+.select-toggle.active { background: var(--accent); border-color: var(--accent); color: white; }
 
 textarea {
   width: 100%;
