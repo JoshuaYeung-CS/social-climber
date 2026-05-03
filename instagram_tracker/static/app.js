@@ -1384,20 +1384,17 @@ function renderListRow(item) {
   if (item.following_via_extension) parts.push(`<span class="info-tag">via extension — not yet in export</span>`);
   if (item.mutual_since_at) parts.push(`mutual since ${escapeHtml(fmtDate(item.mutual_since_at))}`);
   if (item.history_status === "re-engaged") parts.push(`<span class="info-tag">re-engaged</span>`);
-  // Drop the "likely" hedge in three cases, all genuinely certain:
-  //   1. privacy_confirmed_private — extension actually visited the IG
-  //      profile and saw the "Account is Private" banner. DOM-confirmed.
-  //   2. likely_private + you currently follow / have a pending request.
-  //      The pending step in your snapshot history is the IG-recorded
-  //      proof that a follow REQUEST happened. Public accounts don't
-  //      produce a pending step (you tap Follow → instant follow with
-  //      no request). So observing pending → follow can only mean private.
-  //   3. likely_public + you currently follow. The follow happened with
-  //      no pending step ever observed across your dense snapshot history.
-  //      Public accounts work that way; private ones don't.
+  // Five-label privacy display, ordered most-certain → least:
+  //   1. "🔒 private (banner shown)" — DOM-confirmed by extension visit.
+  //   2. "🔒 private" — pending → follow transition observed + you follow.
+  //      Logically airtight: only private accounts go through pending.
+  //   3. "🔒 likely private" — pending observation but no current contact.
+  //   4. "🌐 public" — no pending observed + you currently follow.
+  //   5. "🌐 likely public" — inference only, no current relationship.
+  // Anything else stays unlabeled (= "?" unknown via the filter chip).
   const directContact = item.currently_following || item.currently_pending;
   if (item.privacy_confirmed_private) {
-    parts.push(`<span class="privacy-tag privacy-private">🔒 private</span>`);
+    parts.push(`<span class="privacy-tag privacy-private">🔒 private (banner shown)</span>`);
   } else if (item.privacy === "likely_private" && directContact) {
     parts.push(`<span class="privacy-tag privacy-private">🔒 private</span>`);
   } else if (item.privacy === "likely_private") {
