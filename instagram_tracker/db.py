@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS snapshots (
     label TEXT,
     source_path TEXT,
     content_hash TEXT,
-    taken_at TEXT
+    taken_at TEXT,
+    source_mtime REAL,
+    source_size INTEGER
 );
 -- Index for taken_at is created in the migration block AFTER the ALTER for
 -- pre-existing DBs, so we don't reference a column that's still being added.
@@ -151,6 +153,14 @@ def connect(db_path: Path) -> sqlite3.Connection:
         conn.execute("ALTER TABLE snapshots ADD COLUMN content_hash TEXT")
     if "taken_at" not in snap_cols:
         conn.execute("ALTER TABLE snapshots ADD COLUMN taken_at TEXT")
+    # source_mtime / source_size: file fingerprint captured at import time so
+    # the watcher can detect partial-then-fully-synced files (Drive can hand
+    # us a 50KB stub, we import it, then Drive finishes streaming and the
+    # file becomes 5MB — the path is the same but we want to re-process).
+    if "source_mtime" not in snap_cols:
+        conn.execute("ALTER TABLE snapshots ADD COLUMN source_mtime REAL")
+    if "source_size" not in snap_cols:
+        conn.execute("ALTER TABLE snapshots ADD COLUMN source_size INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_taken_at ON snapshots(taken_at)")
     # Unique partial index on content_hash defends against duplicate imports
     # under concurrency. The duplicate guard in ingest does its own SELECT

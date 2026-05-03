@@ -38,6 +38,13 @@ log = logging.getLogger("instagram_tracker.watcher")
 # content_hash index in db.py is the second line of defence.
 _SCAN_LOCK = threading.Lock()
 
+# Paths that errored or produced suspect output during the current process's
+# lifetime. The watcher always re-attempts these on the next scan even when
+# they path-match an existing snapshot — handles the "I just clicked scan
+# again, why are the same errors back" complaint when Drive is mid-sync.
+# Successful imports remove the path from this set.
+_RECENT_ERROR_PATHS: set[str] = set()
+
 # Filename patterns Meta uses for the artifacts we care about. Matched
 # case-insensitively against the basename. Two flavors:
 #   - .zip files (Meta's "Send to email" delivery, or a Drive download)
@@ -150,40 +157,66 @@ def _import_one(zip_path: Path) -> None:
             conn.close()
 
 
+def _load_fingerprints() -> dict[str, tuple[float | None, int | None]]:
+    """Map of source_path → (mtime, size) captured at import time. Same
+    semantic both the polling loop and the manual scan_once use to decide
+    whether a path-matching file should be re-processed."""
+    out: dict[str, tuple[float | None, int | None]] = {}
+    conn = None
+    try:
+        conn = connect(DB_PATH)
+        for r in conn.execute(
+            "SELECT source_path, source_mtime, source_size FROM snapshots "
+            "WHERE source_path IS NOT NULL AND source_path != ''"
+        ).fetchall():
+            out[str(r["source_path"])] = (r["source_mtime"], r["source_size"])
+    except Exception as e:
+        log.warning("Failed to read previously-imported fingerprints: %s", e)
+    finally:
+        if conn is not None:
+            conn.close()
+    return out
+
+
+def _file_unchanged_since_import(p: Path, prev: tuple[float | None, int | None]) -> bool:
+    """True iff the file at p still has the size + mtime we recorded when
+    we imported it. Fingerprint mismatch (or stat failure) means re-process."""
+    prev_mtime, prev_size = prev
+    if prev_mtime is None and prev_size is None:
+        # Legacy row with no fingerprint — trust path-only equality.
+        return True
+    try:
+        st = p.stat()
+    except OSError:
+        return False
+    if prev_size is not None and int(st.st_size) != int(prev_size):
+        return False
+    if prev_mtime is not None and abs(float(st.st_mtime) - float(prev_mtime)) > 1.0:
+        return False
+    return True
+
+
 def _watcher_loop(root: Path) -> None:
     log.info("Watcher started on %s (polling every %ds)", root, _POLL_INTERVAL_S)
-
-    def already_imported_paths() -> set[str]:
-        """Pull the set of source_paths we've already ingested from the DB
-        so the watcher doesn't re-process files on every restart. Cheap
-        (single query, no joins)."""
-        out: set[str] = set()
-        conn = None
-        try:
-            conn = connect(DB_PATH)
-            for r in conn.execute(
-                "SELECT DISTINCT source_path FROM snapshots "
-                "WHERE source_path IS NOT NULL AND source_path != ''"
-            ).fetchall():
-                out.add(str(r["source_path"]))
-        except Exception as e:
-            log.warning("Failed to read previously-imported paths: %s", e)
-        finally:
-            if conn is not None:
-                conn.close()
-        return out
 
     while True:
         try:
             current = _scan(root)
-            seen = already_imported_paths()
+            fingerprints = _load_fingerprints()
             for p in current:
-                if str(p) in seen:
-                    continue
+                path_str = str(p)
+                if path_str not in _RECENT_ERROR_PATHS:
+                    prev = fingerprints.get(path_str)
+                    if prev is not None and _file_unchanged_since_import(p, prev):
+                        continue
                 if _is_drive_placeholder(p):
                     log.debug("Skipping %s (Drive placeholder, content not synced yet)", p.name)
+                    _RECENT_ERROR_PATHS.add(path_str)
                     continue
                 _import_one(p)
+                # _import_one logs internally; we don't have a clean status
+                # back here, so leave _RECENT_ERROR_PATHS management to the
+                # manual-scan path which has finer-grained outcomes.
         except Exception as e:
             log.error("Watcher iteration failed: %s", e)
         time.sleep(_POLL_INTERVAL_S)
@@ -237,48 +270,102 @@ def _scan_once_locked() -> dict:
         }
     files = _scan(root)
 
-    # Build a set of already-processed source paths from the DB so we can
-    # skip the work of unzipping and re-hashing zips/folders we've already
-    # ingested. snapshots.source_path is the original Drive path written at
-    # ingest time, so a path-based skip exactly matches the dedup we'd hit
-    # via content_hash anyway — but without paying for the parse + hash.
-    already_seen: set[str] = set()
+    # Build the dedup map: path → (mtime, size) recorded at the import time
+    # of any prior successful snapshot. We skip a file ONLY when the path
+    # matches AND the current file's fingerprint matches the stored one.
+    # If the file changed (most common cause: Drive finished syncing a
+    # placeholder we already partial-imported), we re-process — which lets
+    # ingest's content_hash dedup either spot a real duplicate or land
+    # the corrected snapshot data.
+    #
+    # Legacy snapshots (imported before source_mtime/source_size existed)
+    # have NULL fingerprints; for those we keep the old path-only behaviour
+    # to avoid spuriously re-processing every file on first scan after the
+    # column upgrade.
+    fingerprints: dict[str, tuple[float | None, int | None]] = {}
     conn0 = None
     try:
         conn0 = connect(DB_PATH)
         for r in conn0.execute(
-            "SELECT DISTINCT source_path FROM snapshots "
+            "SELECT source_path, source_mtime, source_size FROM snapshots "
             "WHERE source_path IS NOT NULL AND source_path != ''"
         ).fetchall():
-            already_seen.add(str(r["source_path"]))
+            fingerprints[str(r["source_path"])] = (r["source_mtime"], r["source_size"])
     finally:
         if conn0 is not None:
             conn0.close()
 
+    def can_skip(p: Path) -> bool:
+        path_str = str(p)
+        # Force-retry paths that errored earlier in this process's lifetime.
+        if path_str in _RECENT_ERROR_PATHS:
+            return False
+        prev = fingerprints.get(path_str)
+        if prev is None:
+            return False
+        prev_mtime, prev_size = prev
+        # Legacy row with no fingerprint recorded — fall back to path-only
+        # skip so we don't re-import every file after upgrading.
+        if prev_mtime is None and prev_size is None:
+            return True
+        try:
+            st = p.stat()
+        except OSError:
+            return False
+        # Size is the strong signal (Drive grows the file as it syncs).
+        # mtime can lie on some networked filesystems, so we only trust it
+        # when size hasn't changed.
+        if prev_size is not None and int(st.st_size) != int(prev_size):
+            return False
+        if prev_mtime is not None and abs(float(st.st_mtime) - float(prev_mtime)) > 1.0:
+            return False
+        return True
+
     imported = skipped = already = 0
     details: list[dict] = []
     for p in files:
-        if str(p) in already_seen:
+        if can_skip(p):
             already += 1
             continue
         if _is_drive_placeholder(p):
             details.append({"file": p.name, "outcome": "placeholder",
                             "message": "Drive hasn't synced this file's content yet"})
+            _RECENT_ERROR_PATHS.add(str(p))
             continue
         conn = None
         try:
             conn = connect(DB_PATH)
             run = import_path(conn, p)
+            had_real_import = False
             for r in run.imports:
                 imported += 1
-                details.append({"file": p.name, "outcome": "imported",
-                                "snapshot_id": r.snapshot_id, "label": r.label})
+                had_real_import = True
+                # Treat "all-zeroes" imports as suspicious — a 0-followers
+                # 0-following snapshot is almost always a partial-sync that
+                # parsed to empty JSONs. Force-retry next scan.
+                counts = r.counts or {}
+                if (counts.get("followers", 0) + counts.get("following", 0)) == 0:
+                    _RECENT_ERROR_PATHS.add(str(p))
+                    details.append({
+                        "file": p.name,
+                        "outcome": "imported",
+                        "snapshot_id": r.snapshot_id,
+                        "label": r.label,
+                        "warning": "Imported with 0 followers + 0 following — likely partial sync; will retry next scan.",
+                    })
+                else:
+                    details.append({"file": p.name, "outcome": "imported",
+                                    "snapshot_id": r.snapshot_id, "label": r.label})
             for s in run.skipped:
                 skipped += 1
                 details.append({"file": p.name, "outcome": s.reason,
                                 "label": s.label, "message": s.message[:200]})
+            # Successful, non-empty import → clear any prior error record.
+            if had_real_import or run.skipped:
+                _RECENT_ERROR_PATHS.discard(str(p))
         except Exception as e:
             details.append({"file": p.name, "outcome": "error", "message": str(e)})
+            _RECENT_ERROR_PATHS.add(str(p))
         finally:
             if conn is not None:
                 conn.close()

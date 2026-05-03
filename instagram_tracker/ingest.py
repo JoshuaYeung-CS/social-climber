@@ -287,11 +287,25 @@ def _ingest_one(
     now_iso = utc_now_iso()
     taken_at = parse_label_to_iso(label) or now_iso
 
+    # File fingerprint at import time. Lets the watcher detect Drive
+    # placeholders that finish syncing later — same path, different size +
+    # mtime → re-process. Best-effort; folders or paths that don't stat
+    # cleanly leave both fields NULL and fall back to path-only dedup.
+    src_mtime: float | None = None
+    src_size: int | None = None
+    try:
+        if source_path:
+            st = Path(source_path).stat()
+            src_mtime = float(st.st_mtime)
+            src_size = int(st.st_size)
+    except OSError:
+        pass
+
     try:
         cur = conn.execute(
-            "INSERT INTO snapshots (created_at, label, source_path, content_hash, taken_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (now_iso, label, source_path, content_hash, taken_at),
+            "INSERT INTO snapshots (created_at, label, source_path, content_hash, taken_at, source_mtime, source_size) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (now_iso, label, source_path, content_hash, taken_at, src_mtime, src_size),
         )
         snapshot_id = int(cur.lastrowid)
     except sqlite3.IntegrityError:
