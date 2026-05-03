@@ -1058,6 +1058,66 @@ function applyListSearch() {
 
 searchInput.addEventListener("input", applyListSearch);
 
+// Delegated click handler for list rows. Bound ONCE here so rows that the
+// chunked renderer (renderRowsChunked) appends asynchronously after the
+// first 120-row sync paint still respond to clicks. The previous per-row
+// .addEventListener loop ran immediately after the sync paint, so any row
+// painted in a later requestAnimationFrame batch never got handlers and
+// the user could only tag the first batch (the visible "newest" rows).
+$("#list-output")?.addEventListener("click", async (e) => {
+  const row = e.target.closest(".list-row");
+  if (!row) return;
+
+  // External-link icon: let the browser handle navigation, just stop the
+  // click from also bubbling up to the row (which would open the modal).
+  if (e.target.closest(".row-open")) {
+    e.stopPropagation();
+    return;
+  }
+
+  // Tag button: toggle the flag via API, then update local row state.
+  const tagBtn = e.target.closest(".row-tag");
+  if (tagBtn) {
+    e.stopPropagation();
+    const flag = tagBtn.dataset.rowFlag;
+    const willBe = !tagBtn.classList.contains("on");
+    try {
+      const result = await api.post("/api/tags", { account: row.dataset.username, flag, value: willBe });
+      tagBtn.classList.toggle("on", !!result[flag]);
+      toast(`${flag.replace("_", " ")} ${result[flag] ? "added" : "removed"}`);
+      const currentKind = select.value;
+      const BUCKETS = ["favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"];
+      // Removed from the bucket we're viewing → drop the row.
+      if (!result[flag] && currentKind === flag) row.remove();
+      // Tagged suppressed flag ON while viewing a non-bucket list → drop
+      // (server excludes these from non-bucket lists, so the local view
+      // would be inconsistent with the server's next render).
+      if ((flag === "disabled" || flag === "unavailable" || flag === "random_request")
+          && result[flag] && !BUCKETS.includes(currentKind)) {
+        row.remove();
+      }
+    } catch (err) {
+      toast(`Failed: ${err.message}`);
+    }
+    return;
+  }
+
+  // Bare row click — select-mode toggle or open modal.
+  if (_selectMode) {
+    const u = row.dataset.username;
+    if (_selectedUsernames.has(u)) {
+      _selectedUsernames.delete(u);
+      row.removeAttribute("aria-selected");
+    } else {
+      _selectedUsernames.add(u);
+      row.setAttribute("aria-selected", "true");
+    }
+    renderBulkToolbar();
+  } else {
+    openAccountModal(row.dataset.username);
+  }
+});
+
 // Privacy filter chips. Each chip toggles its own state; the filter
 // applies after all chips are evaluated. "Clear filters" reactivates
 // all chips so everything shows.
@@ -1659,53 +1719,9 @@ async function loadLists() {
         }
       });
     }
-    $$(".list-row", out).forEach((row) => {
-      row.addEventListener("click", () => {
-        if (_selectMode) {
-          const u = row.dataset.username;
-          if (_selectedUsernames.has(u)) {
-            _selectedUsernames.delete(u);
-            row.removeAttribute("aria-selected");
-          } else {
-            _selectedUsernames.add(u);
-            row.setAttribute("aria-selected", "true");
-          }
-          renderBulkToolbar();
-        } else {
-          openAccountModal(row.dataset.username);
-        }
-      });
-      const openLink = row.querySelector(".row-open");
-      if (openLink) openLink.addEventListener("click", (e) => e.stopPropagation());
-      $$(".row-tag", row).forEach((btn) => {
-        btn.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          const flag = btn.dataset.rowFlag;
-          const willBe = !btn.classList.contains("on");
-          try {
-            const result = await api.post("/api/tags", { account: row.dataset.username, flag, value: willBe });
-            btn.classList.toggle("on", !!result[flag]);
-            toast(`${flag.replace("_", " ")} ${result[flag] ? "added" : "removed"}`);
-            // No loadHome here — user is on Lists, not Home; bucket-count
-            // tiles aren't visible. They'll refresh next time the user
-            // navigates back. Saves a ~1s wait per tag click.
-            const currentKind = select.value;
-            const BUCKETS = ["favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"];
-            // If we just removed from the bucket we're viewing, drop the row.
-            if (!result[flag] && currentKind === flag) {
-              row.remove();
-            }
-            // If we just tagged disabled or unavailable ON while viewing a non-bucket
-            // list, drop the row (server excludes these from non-bucket lists).
-            if ((flag === "disabled" || flag === "unavailable" || flag === "random_request") && result[flag] && !BUCKETS.includes(currentKind)) {
-              row.remove();
-            }
-          } catch (err) {
-            toast(`Failed: ${err.message}`);
-          }
-        });
-      });
-    });
+    // Per-row click handlers are bound once at module init via delegation
+    // on #list-output, so rows added later by the chunked renderer still
+    // respond. See the listOutput.addEventListener call near loadLists.
   } catch (e) {
     toast(`Lists failed: ${e.message}`);
   }
