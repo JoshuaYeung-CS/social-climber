@@ -78,6 +78,12 @@ $$(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.v
 // ---------- home ----------
 
 async function loadHome() {
+  // Initial home load — surface a spinner in the snapshot pill so the
+  // header doesn't sit blank during the fetch.
+  const pillEl = $("#snapshot-pill");
+  if (pillEl && pillEl.textContent === "no data") {
+    pillEl.innerHTML = `<span class="spinner" style="margin-right:4px"></span>loading…`;
+  }
   try {
     const data = await api.get("/api/home");
     const pill = $("#snapshot-pill");
@@ -744,16 +750,22 @@ window.addEventListener("popstate", (e) => {
 })();
 
 async function openAccountModal(username, push = true) {
+  // Open the modal immediately with a spinner — feedback that the click
+  // registered. The first lookup is sometimes uncached (1+ seconds for
+  // accounts with many snapshots) so a blank modal would feel broken.
+  $("#account-detail").innerHTML =
+    `<div class="loading-card"><span class="spinner"></span>Loading ${escapeHtml(username)}…</div>`;
+  modal.hidden = false;
+  if (push) {
+    history.pushState({ modal: username, view: history.state?.view, listKind: history.state?.listKind }, "", "");
+  }
   try {
     const data = await api.get(`/api/lookup?account=${encodeURIComponent(username)}`);
     $("#account-detail").innerHTML = renderLookup(data);
     bindTagToggles($("#account-detail"), data.username, data.tags);
-    modal.hidden = false;
-    if (push) {
-      history.pushState({ modal: username, view: history.state?.view, listKind: history.state?.listKind }, "", "");
-    }
   } catch (e) {
-    toast(`Couldn't open ${username}: ${e.message}`);
+    $("#account-detail").innerHTML =
+      `<div class="warn-banner">Couldn't load ${escapeHtml(username)}: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -1264,8 +1276,13 @@ function renderRowsChunked(out, items, renderFn) {
   const myToken = _renderToken;
 
   // First chunk: render synchronously so the user sees rows immediately.
-  out.innerHTML = items.slice(0, _RENDER_FIRST).map(renderFn).join("");
-  if (items.length <= _RENDER_FIRST) return;
+  // Append a loading-more footer if there are more rows to come, so the
+  // user knows they're not seeing the full list yet.
+  const firstChunk = items.slice(0, _RENDER_FIRST).map(renderFn).join("");
+  const hasMore = items.length > _RENDER_FIRST;
+  out.innerHTML = firstChunk +
+    (hasMore ? `<div class="loading-more" id="list-loading-more"><span class="spinner"></span>Loading ${items.length - _RENDER_FIRST} more…</div>` : "");
+  if (!hasMore) return;
 
   // Remaining chunks: append progressively. Yield to the browser between
   // each so the layout/paint cost is spread out, not bunched.
@@ -1280,13 +1297,24 @@ function renderRowsChunked(out, items, renderFn) {
     const frag = document.createRange().createContextualFragment(
       slice.map(renderFn).join("")
     );
-    out.appendChild(frag);
+    // Insert before the loading-more footer so it stays at the bottom.
+    const moreFooter = out.querySelector("#list-loading-more");
+    if (moreFooter) {
+      moreFooter.parentNode.insertBefore(frag, moreFooter);
+      // Update the count in the footer so progress feels live.
+      const remaining = items.length - idx - _RENDER_CHUNK;
+      if (remaining > 0) {
+        moreFooter.innerHTML = `<span class="spinner"></span>Loading ${remaining} more…`;
+      }
+    } else {
+      out.appendChild(frag);
+    }
     idx += _RENDER_CHUNK;
     if (idx < items.length) {
       requestAnimationFrame(paint);
     } else {
-      // Final chunk done — re-run search so any active filter applies to
-      // newly-painted rows.
+      // Final chunk done — remove the loading-more footer + re-run search.
+      out.querySelector("#list-loading-more")?.remove();
       applyListSearch();
     }
   }
@@ -1464,6 +1492,12 @@ function fmtDateTime(ts) {
 const fmtDaysSince = fmtDuration;
 
 async function loadLists() {
+  // Show a spinner immediately so the user knows the click registered.
+  // Replaced as soon as the API returns + first chunk paints.
+  const out = $("#list-output");
+  if (out) {
+    out.innerHTML = `<div class="loading-card"><span class="spinner"></span>Loading list…</div>`;
+  }
   try {
     const data = await api.get("/api/lists");
     const sections = data.sections || {};
@@ -1701,15 +1735,19 @@ $("#queue-clear").addEventListener("click", async () => {
 let _historyData = null;
 
 async function loadHistory(force = false) {
+  const chartEl = $("#history-chart");
   try {
     if (!_historyData || force) {
+      if (chartEl) {
+        chartEl.innerHTML = `<div class="loading-card"><span class="spinner"></span>Loading timeline…</div>`;
+      }
       const data = await api.get("/api/timeline");
       _historyData = data.snapshots || [];
     }
     renderHistory();
     loadActivityLog(force);
   } catch (e) {
-    $("#history-chart").innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
+    if (chartEl) chartEl.innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -1720,7 +1758,7 @@ async function loadActivityLog(force = false) {
   if (!out) return;
   try {
     if (!_activityData || force) {
-      out.innerHTML = `<div class="muted">Loading…</div>`;
+      out.innerHTML = `<div class="loading-card"><span class="spinner"></span>Loading activity log…</div>`;
       const data = await api.get("/api/activity-log");
       _activityData = data.events || [];
     }

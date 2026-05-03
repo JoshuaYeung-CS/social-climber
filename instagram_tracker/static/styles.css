@@ -1408,6 +1408,32 @@ textarea {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Generic centered loading card — used while fetching list / lookup /
+   timeline / activity-log data. Soft elevation so it doesn't look like
+   stuck UI; padded so it's visible at a glance. */
+.loading-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 36px 16px;
+  color: var(--muted);
+  font-size: 13px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+/* Tiny "more rows arriving" footer for the chunked list render. */
+.loading-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 /* ----------------------------------------------------------------- */
 /* Phone (portrait) layout: ≤ 480px viewport width.                   */
 /* List rows reflow to a stacked layout so long usernames and the     */
