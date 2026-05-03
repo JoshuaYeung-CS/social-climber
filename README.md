@@ -67,6 +67,48 @@ IG_WATCH_FOLDER="$HOME/Library/CloudStorage/GoogleDrive-you@example.com/My Drive
 
 For fully-automatic background polling, add `IG_WATCH_POLL=1` (default 60-second interval, override with `IG_WATCH_INTERVAL_S`).
 
+### Optional: HTTPS with a self-signed cert
+
+The default `http://` setup works fine when accessing the app from the same Mac. From your phone over your home Wi-Fi it also works, but iOS Safari blocks some browser features (most notably the Clipboard API used by the **Paste + look up** button) on HTTP origins that aren't `localhost`. If you want those features on the phone, run the server over HTTPS using a cert you generate yourself. **Nothing leaves your LAN.** No third party involved.
+
+**One-time setup** (~5 minutes):
+
+```bash
+./scripts/make-cert.sh
+```
+
+This produces `data/cert.pem` and `data/key.pem` valid for 10 years, covering `localhost`, `127.0.0.1`, and your Mac's current LAN IP. Both files are git-ignored — they never go to GitHub.
+
+**Run with HTTPS:**
+
+```bash
+IG_HTTPS=1 ./run.sh
+```
+
+Output now reads `https://localhost:8443` and `https://<lan-ip>:8443`.
+
+**Trust the cert on your iPhone** (one-time, ~5 taps):
+
+1. AirDrop `data/cert.pem` from your Mac to your iPhone (or email it to yourself, or put it in iCloud Drive and tap from Files).
+2. iOS shows "Profile Downloaded" — tap to open.
+3. Settings → General → VPN & Device Management → tap **IG Tracker Local** profile → **Install** → enter passcode.
+4. Settings → General → About → **Certificate Trust Settings** → toggle on "IG Tracker Local".
+5. Done. Visit `https://<your-mac-lan-ip>:8443` from Safari — green padlock, no warnings, clipboard works.
+
+**Trust the cert on your Mac** (only if you also see warnings there):
+
+```bash
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain data/cert.pem
+```
+
+**Re-generating the cert** (e.g. if your LAN IP changes when you switch networks):
+
+```bash
+./scripts/make-cert.sh
+```
+
+It will ask before overwriting. After regenerating you'll need to re-trust on devices that had the old cert.
+
 ## Project layout
 
 ```

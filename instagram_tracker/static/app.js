@@ -402,10 +402,13 @@ function bindPasteButton({ inputId, pasteId, runAfter }) {
         toast("Clipboard is empty.");
         return;
       }
-      // Append with a newline separator so multiple paste clicks build up
-      // a bulk list without overwriting prior content.
-      const trimmed = (input.value || "").replace(/\s+$/, "");
-      input.value = trimmed ? trimmed + "\n" + text : text;
+      // Replace, don't append: each paste-and-action click is a fresh
+      // operation. The previous textarea content + result panel are
+      // cleared first so the next lookup/queue is unambiguous, not a
+      // pile-up of past clipboards.
+      const result = $(`#${inputId.replace("-input", "-result")}`);
+      input.value = text;
+      if (result) result.innerHTML = "";
       // Notify the bound clear-button (and any other listeners) that the
       // input changed, so disabled-state updates immediately.
       input.dispatchEvent(new Event("input", { bubbles: true }));
