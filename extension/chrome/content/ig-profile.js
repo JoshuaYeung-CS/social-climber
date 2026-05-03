@@ -809,28 +809,24 @@ function renderPanel(panel, username, data) {
   const observedPrivacy = detectPrivacyFromDOM();
   const userFollows = !!data.currently_following;
   const userHasPending = !!data.currently_pending;
-  // Privacy display rule — every scenario covered:
-  //   user-tagged "now_public"   → "🌐 public (you confirmed)" — manual
-  //     override for the private→public flip case. User has personally
-  //     verified the account is now public, so we trust them and show
-  //     un-hedged. Highest priority among signals.
-  //   DOM banner observed         → "🔒 private" (IG explicitly says so)
-  //   likely_private + pending NOW → "🔒 private" (pending = approval-
-  //     required = private now)
-  //   likely_private              → "🔒 likely private" — was private
-  //     at the time pending was captured; could have flipped, but
-  //     untagged so we hedge.
-  //   likely_public               → "🌐 likely public" — never un-hedged
-  //     since brief pending phase could escape between snapshots.
-  //   (unlabeled)                 → unknown.
+  // Privacy display rule:
+  //   now_public tagged    → "🌐 public (you confirmed)" — user verified.
+  //   ever-pending evidence → "🔒 private" — pending only happens for
+  //     private accounts, so any pending observation in any snapshot
+  //     proves the account had a pending phase. The rare private→public
+  //     flip case is handled via the now_public tag (one-click manual
+  //     override), so we don't need to hedge the default label.
+  //   likely_public         → "🌐 likely public" — kept hedged because
+  //     a brief pending phase could escape between snapshots, so the
+  //     "no pending observed" inference isn't airtight even with
+  //     pre-follow coverage.
+  //   (unlabeled)           → unknown.
   if (tags.now_public) {
     lines.push(`🌐 public (you confirmed)`);
   } else if (observedPrivacy === "private") {
     lines.push(`🔒 private`);
-  } else if (data.privacy === "likely_private" && userHasPending) {
-    lines.push(`🔒 private`);
   } else if (data.privacy === "likely_private") {
-    lines.push(`🔒 likely private`);
+    lines.push(`🔒 private`);
   } else if (data.privacy === "likely_public") {
     lines.push(`🌐 likely public`);
   }

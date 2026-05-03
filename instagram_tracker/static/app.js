@@ -660,16 +660,14 @@ function renderLookup(data) {
       <div class="facts">
         ${(() => {
           const confirmed = data.observation?.is_private === true;
-          // Privacy rule (full coverage):
-          //  user-tagged now_public  → "🌐 public (you confirmed)" — flip override
-          //  extension banner        → "🔒 private"
-          //  likely_private + pending → "🔒 private"
-          //  likely_private          → "🔒 likely private"
-          //  likely_public           → "🌐 likely public"
+          // Privacy rule:
+          //  now_public tagged → "🌐 public (you confirmed)" — user verified
+          //  banner / pending  → "🔒 private" (100% certain)
+          //  ever-pending      → "🔒 private" (un-hedged; flip handled by tag)
+          //  likely_public     → "🌐 likely public" (always hedged)
           if (data.tags?.now_public) return `<div class="row"><span class="key">Privacy</span><span>🌐 public (you confirmed)</span></div>`;
           if (confirmed) return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
-          if (data.privacy === "likely_private" && data.currently_pending) return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
-          if (data.privacy === "likely_private") return `<div class="row"><span class="key">Privacy</span><span>🔒 likely private</span></div>`;
+          if (data.privacy === "likely_private") return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
           if (data.privacy === "likely_public") return `<div class="row"><span class="key">Privacy</span><span>🌐 likely public</span></div>`;
           return "";
         })()}
@@ -1169,7 +1167,7 @@ $("#list-output")?.addEventListener("click", async (e) => {
 // applies after all chips are evaluated. "Clear filters" reactivates
 // all chips so everything shows.
 function updateFilterCounts(rows) {
-  const counts = { private: 0, likely_private: 0, public: 0, likely_public: 0, unknown: 0 };
+  const counts = { private: 0, public: 0, likely_public: 0, unknown: 0 };
   rows.forEach((r) => {
     const p = r.dataset.privacy || "unknown";
     counts[p] = (counts[p] || 0) + 1;
@@ -1484,24 +1482,19 @@ function renderListRow(item) {
   // date-precision ISO string when only a snapshot label is available.
   const parts = [];
 
-  // Privacy bucket for filter chips. Full coverage:
-  //   "public"         — user has tagged now_public (manual override for
-  //                      private→public flip; user has personally verified).
-  //                      The only un-hedged "public" we ever emit.
-  //   "private"        — DOM banner observed by extension OR
-  //                      likely_private + currently_pending (100%).
-  //   "likely_private" — likely_private inference but no current pending.
-  //   "likely_public"  — likely_public inference (always hedged).
-  //   "unknown"        — no signal either way.
+  // Privacy bucket for filter chips:
+  //   "public"        — user-tagged now_public (manual verification).
+  //   "private"       — banner observed OR ever-pending evidence
+  //                     (private accounts only; flip case handled by
+  //                     the now_public tag).
+  //   "likely_public" — likely_public inference, always hedged (brief
+  //                     pending phase can escape between snapshots).
+  //   "unknown"       — no signal.
   let privacy = "unknown";
   if (item.now_public) {
     privacy = "public";
-  } else if (item.privacy_confirmed_private) {
+  } else if (item.privacy_confirmed_private || item.privacy === "likely_private") {
     privacy = "private";
-  } else if (item.privacy === "likely_private" && item.currently_pending) {
-    privacy = "private";
-  } else if (item.privacy === "likely_private") {
-    privacy = "likely_private";
   } else if (item.privacy === "likely_public") {
     privacy = "likely_public";
   }
@@ -1517,18 +1510,14 @@ function renderListRow(item) {
   if (item.following_via_extension) parts.push(`<span class="info-tag">via extension — not yet in export</span>`);
   if (item.mutual_since_at) parts.push(`mutual since ${escapeHtml(fmtDate(item.mutual_since_at))}`);
   if (item.history_status === "re-engaged") parts.push(`<span class="info-tag">re-engaged</span>`);
-  // Privacy display, ordered most-certain → least:
+  // Privacy display:
   //   "🌐 public (you confirmed)" — user-tagged now_public.
-  //   "🔒 private"                — DOM banner OR pending now.
-  //   "🔒 likely private"         — past pending evidence, no current
-  //                                  pending (flip case hedge).
+  //   "🔒 private"                — banner OR ever-pending evidence.
   //   "🌐 likely public"          — inference only.
   if (privacy === "public") {
     parts.push(`<span class="privacy-tag privacy-public">🌐 public (you confirmed)</span>`);
   } else if (privacy === "private") {
     parts.push(`<span class="privacy-tag privacy-private">🔒 private</span>`);
-  } else if (privacy === "likely_private") {
-    parts.push(`<span class="privacy-tag privacy-private">🔒 likely private</span>`);
   } else if (privacy === "likely_public") {
     parts.push(`<span class="privacy-tag privacy-public">🌐 likely public</span>`);
   }
