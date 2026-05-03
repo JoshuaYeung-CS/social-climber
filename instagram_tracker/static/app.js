@@ -369,16 +369,36 @@ function bindPasteButton({ inputId, pasteId }) {
   const input = $(`#${inputId}`);
   const btn = $(`#${pasteId}`);
   if (!input || !btn) return;
+
+  // iOS Safari over plain HTTP (i.e. the phone hitting the Mac's LAN IP,
+  // not localhost) blocks navigator.clipboard entirely. Detect this up
+  // front so the toast can explain *why* the Paste button can't directly
+  // paste, instead of saying something generic.
+  const insecureLocal = location.protocol === "http:" &&
+    !["localhost", "127.0.0.1"].includes(location.hostname);
+
+  // Focus + place caret at end so the iOS keyboard appears with its
+  // clipboard suggestion strip. The user can then one-tap the suggestion
+  // OR long-press → Paste in the textarea — both faster than typing.
+  const focusForManualPaste = () => {
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  };
+
   btn.addEventListener("click", async () => {
     if (!navigator.clipboard || !navigator.clipboard.readText) {
-      input.focus();
-      toast("Clipboard API not available. Long-press the box → Paste.");
+      focusForManualPaste();
+      if (insecureLocal) {
+        toast("iOS blocks clipboard reads over LAN HTTP. Tap the suggestion above the keyboard, or long-press → Paste.", 4500);
+      } else {
+        toast("Clipboard API unavailable here. Long-press the box → Paste.");
+      }
       return;
     }
     try {
       const text = await navigator.clipboard.readText();
       if (!text) {
-        input.focus();
+        focusForManualPaste();
         toast("Clipboard is empty.");
         return;
       }
@@ -389,14 +409,12 @@ function bindPasteButton({ inputId, pasteId }) {
       // Notify the bound clear-button (and any other listeners) that the
       // input changed, so disabled-state updates immediately.
       input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.focus();
-      // Move caret to the end so further typing appends naturally.
-      input.setSelectionRange(input.value.length, input.value.length);
+      focusForManualPaste();
     } catch (e) {
       // Most common failure: Safari blocks clipboard read outside a recent
-      // user gesture, or the user denied the prompt. Surface a clear hint.
-      input.focus();
-      toast("Couldn't read clipboard — paste manually with Cmd+V or long-press.");
+      // user gesture, or the user denied the prompt.
+      focusForManualPaste();
+      toast("Couldn't read clipboard — tap the keyboard's paste suggestion or long-press → Paste.", 4500);
     }
   });
 }
