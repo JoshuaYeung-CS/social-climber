@@ -279,6 +279,8 @@ code {
 .bucket-btn[data-flag="unavailable"] .count { color: var(--violet); }
 .bucket-btn[data-flag="random_request"]         { border-color: rgba(244, 114, 182, 0.35); background: rgba(244, 114, 182, 0.08); color: var(--pink); }
 .bucket-btn[data-flag="random_request"] .count  { color: var(--pink); }
+.bucket-btn[data-flag="now_public"]              { border-color: rgba(79, 140, 255, 0.35); background: rgba(79, 140, 255, 0.06); color: var(--accent); }
+.bucket-btn[data-flag="now_public"] .count       { color: var(--accent); }
 
 .lookup-form { display: flex; gap: 8px; flex-wrap: wrap; }
 .lookup-form input {

@@ -13,6 +13,7 @@ const TAG_SYMS = {
   disabled: "⚠",
   unavailable: "✕",
   random_request: "🎲",
+  now_public: "🌐",
 };
 const TAG_LABELS = {
   favorite: "Favorite",
@@ -21,6 +22,7 @@ const TAG_LABELS = {
   disabled: "Disabled",
   unavailable: "Unavailable",
   random_request: "Random request",
+  now_public: "Was private, now public (you confirmed)",
 };
 
 // IG paths that look like /<word>/ but aren't usernames.
@@ -807,21 +809,23 @@ function renderPanel(panel, username, data) {
   const observedPrivacy = detectPrivacyFromDOM();
   const userFollows = !!data.currently_following;
   const userHasPending = !!data.currently_pending;
-  // Three-tier privacy rule covering every scenario:
-  //   "🔒 private" → DOM banner observed (IG explicitly says so) OR
-  //     likely_private + currently_pending (pending exists ⇒ approval
-  //     required ⇒ private NOW). Both 100% certain.
-  //   "🔒 likely private" → likely_private inference (past pending
-  //     observed at some snapshot, but no current pending). Account
-  //     WAS private when the pending was captured; could have flipped
-  //     private→public after approving you, in which case it's now
-  //     public despite the historical evidence. The hedge protects
-  //     against this.
-  //   "🌐 likely public" → likely_public inference. Pre-follow snapshot
-  //     coverage + no pending observed. Strong, never airtight (brief
-  //     pending phase can resolve between snapshots).
-  //   (unlabeled) → unknown.
-  if (observedPrivacy === "private") {
+  // Privacy display rule — every scenario covered:
+  //   user-tagged "now_public"   → "🌐 public (you confirmed)" — manual
+  //     override for the private→public flip case. User has personally
+  //     verified the account is now public, so we trust them and show
+  //     un-hedged. Highest priority among signals.
+  //   DOM banner observed         → "🔒 private" (IG explicitly says so)
+  //   likely_private + pending NOW → "🔒 private" (pending = approval-
+  //     required = private now)
+  //   likely_private              → "🔒 likely private" — was private
+  //     at the time pending was captured; could have flipped, but
+  //     untagged so we hedge.
+  //   likely_public               → "🌐 likely public" — never un-hedged
+  //     since brief pending phase could escape between snapshots.
+  //   (unlabeled)                 → unknown.
+  if (tags.now_public) {
+    lines.push(`🌐 public (you confirmed)`);
+  } else if (observedPrivacy === "private") {
     lines.push(`🔒 private`);
   } else if (data.privacy === "likely_private" && userHasPending) {
     lines.push(`🔒 private`);

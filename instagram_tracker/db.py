@@ -170,6 +170,15 @@ def connect(db_path: Path) -> sqlite3.Connection:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN random_request INTEGER NOT NULL DEFAULT 0")
     if "random_request_added_at" not in cols:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN random_request_added_at TEXT")
+    # now_public: manual override for accounts that flipped private→public
+    # after approving you. Without it, the historical pending evidence
+    # in your DB makes the account look "likely private" even though
+    # it's currently public. Setting this tag forces the privacy display
+    # to "🌐 public" (un-hedged) since the user has personally verified.
+    if "now_public" not in cols:
+        conn.execute("ALTER TABLE profile_tags ADD COLUMN now_public INTEGER NOT NULL DEFAULT 0")
+    if "now_public_added_at" not in cols:
+        conn.execute("ALTER TABLE profile_tags ADD COLUMN now_public_added_at TEXT")
 
     # profile_observations new columns for live button-state observation
     obs_cols = {row[1] for row in conn.execute("PRAGMA table_info(profile_observations)").fetchall()}

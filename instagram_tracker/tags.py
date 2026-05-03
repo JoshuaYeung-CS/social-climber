@@ -8,7 +8,7 @@ import sqlite3
 
 from .db import utc_now_iso
 
-VALID_FLAGS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"}
+VALID_FLAGS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public"}
 
 
 def _added_at_col(flag: str) -> str:
@@ -28,12 +28,14 @@ def get_tags(conn: sqlite3.Connection, username: str) -> dict:
             "disabled": False,
             "unavailable": False,
             "random_request": False,
+            "now_public": False,
             "favorite_added_at": None,
             "want_remove_added_at": None,
             "watchlist_added_at": None,
             "disabled_added_at": None,
             "unavailable_added_at": None,
             "random_request_added_at": None,
+            "now_public_added_at": None,
             "profile_url": None,
             "notes": None,
         }
@@ -46,12 +48,14 @@ def get_tags(conn: sqlite3.Connection, username: str) -> dict:
         "disabled": bool(row["disabled"]) if "disabled" in keys else False,
         "unavailable": bool(row["unavailable"]) if "unavailable" in keys else False,
         "random_request": bool(row["random_request"]) if "random_request" in keys else False,
+        "now_public": bool(row["now_public"]) if "now_public" in keys else False,
         "favorite_added_at": row["favorite_added_at"],
         "want_remove_added_at": row["want_remove_added_at"],
         "watchlist_added_at": row["watchlist_added_at"],
         "disabled_added_at": row["disabled_added_at"] if "disabled_added_at" in keys else None,
         "unavailable_added_at": row["unavailable_added_at"] if "unavailable_added_at" in keys else None,
         "random_request_added_at": row["random_request_added_at"] if "random_request_added_at" in keys else None,
+        "now_public_added_at": row["now_public_added_at"] if "now_public_added_at" in keys else None,
         "profile_url": row["profile_url"],
         "notes": row["notes"],
     }
@@ -87,8 +91,9 @@ def set_flag(
                 disabled, disabled_added_at,
                 unavailable, unavailable_added_at,
                 random_request, random_request_added_at,
+                now_public, now_public_added_at,
                 profile_url, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 username,
@@ -98,6 +103,7 @@ def set_flag(
                 cols["disabled"], added["disabled_added_at"],
                 cols["unavailable"], added["unavailable_added_at"],
                 cols["random_request"], added["random_request_added_at"],
+                cols["now_public"], added["now_public_added_at"],
                 profile_url, now,
             ),
         )
@@ -142,9 +148,9 @@ def list_with_flag(conn: sqlite3.Connection, flag: str) -> list[dict]:
 
 def all_flagged_usernames(conn: sqlite3.Connection) -> dict[str, dict[str, bool]]:
     rows = conn.execute(
-        "SELECT username, favorite, want_remove, watchlist, disabled, unavailable, random_request "
+        "SELECT username, favorite, want_remove, watchlist, disabled, unavailable, random_request, now_public "
         "FROM profile_tags "
-        "WHERE favorite = 1 OR want_remove = 1 OR watchlist = 1 OR disabled = 1 OR unavailable = 1 OR random_request = 1"
+        "WHERE favorite = 1 OR want_remove = 1 OR watchlist = 1 OR disabled = 1 OR unavailable = 1 OR random_request = 1 OR now_public = 1"
     ).fetchall()
     return {
         r["username"]: {
@@ -154,6 +160,7 @@ def all_flagged_usernames(conn: sqlite3.Connection) -> dict[str, dict[str, bool]
             "disabled": bool(r["disabled"]),
             "unavailable": bool(r["unavailable"]),
             "random_request": bool(r["random_request"]),
+            "now_public": bool(r["now_public"]),
         }
         for r in rows
     }

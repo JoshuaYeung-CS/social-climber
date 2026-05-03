@@ -386,6 +386,7 @@ def _home_compute():
             "disabled": len(tags_mod.list_with_flag(conn, "disabled")),
             "unavailable": len(tags_mod.list_with_flag(conn, "unavailable")),
             "random_request": len(tags_mod.list_with_flag(conn, "random_request")),
+            "now_public": len(tags_mod.list_with_flag(conn, "now_public")),
         }
 
         return {
@@ -862,7 +863,7 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # Bucket lists. Skipped in pure mode — overlay rebuilds them from
         # current tags so a tag toggle doesn't invalidate the snapshot cache.
         if not _pure_only:
-            for flag in ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"):
+            for flag in ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public"):
                 sections[flag] = sorted(r["username"] for r in tags_mod.list_with_flag(conn, flag))
 
         # ---- Cumulative / historical lists across ALL snapshots ----
@@ -1130,7 +1131,7 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
             "all_followers",
             "feeder_accounts",
         }
-        BUCKET_KINDS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"}
+        BUCKET_KINDS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public"}
 
         # Tag state — empty in pure mode so pre-built rows have tag fields = False;
         # overlay attaches the real values per request.
@@ -1514,8 +1515,8 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         return {"snapshot_id": sid, "previous_snapshot_id": prev_id, "sections": annotated}
 
 
-_TAG_FLAGS = ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request")
-_BUCKET_KINDS_SET = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"}
+_TAG_FLAGS = ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public")
+_BUCKET_KINDS_SET = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public"}
 _BUCKET_PRIORITY = {"action": 0, "warn": 1, "pending": 2, "stopped": 3, "good": 4, "": 5}
 
 

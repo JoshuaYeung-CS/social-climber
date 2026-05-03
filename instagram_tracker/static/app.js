@@ -171,6 +171,7 @@ async function loadHome() {
     $("#count-disabled").textContent = data.bucket_counts.disabled ?? 0;
     $("#count-unavailable").textContent = data.bucket_counts.unavailable ?? 0;
     $("#count-random_request").textContent = data.bucket_counts.random_request ?? 0;
+    $("#count-now_public").textContent = data.bucket_counts.now_public ?? 0;
   } catch (e) {
     console.error(e);
     toast(`Couldn't load home: ${e.message}`);
@@ -659,11 +660,13 @@ function renderLookup(data) {
       <div class="facts">
         ${(() => {
           const confirmed = data.observation?.is_private === true;
-          // Three-tier rule covering every scenario:
-          //  "🔒 private"        — extension banner OR likely_private+pending now
-          //  "🔒 likely private" — likely_private without current pending
-          //                        (was private; private→public flip possible)
-          //  "🌐 likely public"  — likely_public inference (always hedged)
+          // Privacy rule (full coverage):
+          //  user-tagged now_public  → "🌐 public (you confirmed)" — flip override
+          //  extension banner        → "🔒 private"
+          //  likely_private + pending → "🔒 private"
+          //  likely_private          → "🔒 likely private"
+          //  likely_public           → "🌐 likely public"
+          if (data.tags?.now_public) return `<div class="row"><span class="key">Privacy</span><span>🌐 public (you confirmed)</span></div>`;
           if (confirmed) return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
           if (data.privacy === "likely_private" && data.currently_pending) return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
           if (data.privacy === "likely_private") return `<div class="row"><span class="key">Privacy</span><span>🔒 likely private</span></div>`;
@@ -692,6 +695,7 @@ function renderTagToggles(tags) {
       <button class="tag-toggle ${tags.disabled ? "active" : ""}" data-flag="disabled">⚠ Disabled</button>
       <button class="tag-toggle ${tags.unavailable ? "active" : ""}" data-flag="unavailable">✕ Unavailable</button>
       <button class="tag-toggle ${tags.random_request ? "active" : ""}" data-flag="random_request">🎲 Random request</button>
+      <button class="tag-toggle ${tags.now_public ? "active" : ""}" data-flag="now_public">🌐 Now public</button>
     </div>
   `;
 }
@@ -867,6 +871,7 @@ const LIST_DESCRIPTIONS = {
   disabled:                     "Accounts you've manually marked as gone (deactivated, deleted, blocked you). Auto-clears if they reappear in your followers (proof of life). Excluded from non-bucket lists.",
   unavailable:                  "Accounts where the extension landed on Instagram's 'Sorry, this page isn't available' state. Auto-clears if they reappear in your followers. Excluded from non-bucket lists.",
   random_request:               "Manual flag for incoming requests that look like spam / bots / random users. Excluded from 'real_requests' and other non-bucket lists.",
+  now_public:                   "Accounts you've personally verified flipped from private to public. The historical pending evidence in your DB still says 'likely private', but you've checked their profile and confirmed they're now public. This tag overrides the privacy display to '🌐 public (you confirmed)' for those accounts. Use it for the rare flip case the inference can't detect on its own.",
 };
 
 const LIST_KINDS = [
@@ -896,6 +901,7 @@ const LIST_KINDS = [
   ["disabled", "⚠ Disabled"],
   ["unavailable", "✕ Unavailable (page not found)"],
   ["random_request", "🎲 Random requests"],
+  ["now_public", "🌐 Was private, now public"],
 ];
 
 const select = $("#list-kind");
@@ -917,7 +923,7 @@ const LIST_GROUPS = [
   { label: "Current",  kinds: ["everyone", "all_followers", "all_following", "mutuals", "not_following_you_back", "feeder_accounts", "pending", "incoming_requests", "renamed"] },
   { label: "History",  kinds: ["ever_unfollowed_you", "mutual_break_you_first", "mutual_break_they_first", "ever_removed_you_as_follower", "you_unfollowed_ever", "still_follow_after_drop"] },
   { label: "Requests", kinds: ["ever_incoming_requests", "real_requests", "incoming_request_dropped", "ever_requested_outgoing", "request_dropped"] },
-  { label: "Tags",     kinds: ["favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"] },
+  { label: "Tags",     kinds: ["favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public"] },
 ];
 
 // Cross-list intersection: cmd/ctrl+click (or long-press on touch) a pill
@@ -1163,7 +1169,7 @@ $("#list-output")?.addEventListener("click", async (e) => {
 // applies after all chips are evaluated. "Clear filters" reactivates
 // all chips so everything shows.
 function updateFilterCounts(rows) {
-  const counts = { private: 0, likely_private: 0, likely_public: 0, unknown: 0 };
+  const counts = { private: 0, likely_private: 0, public: 0, likely_public: 0, unknown: 0 };
   rows.forEach((r) => {
     const p = r.dataset.privacy || "unknown";
     counts[p] = (counts[p] || 0) + 1;
@@ -1245,6 +1251,7 @@ function renderBulkToolbar() {
     ${tagBtn("disabled", "⚠", "Disabled")}
     ${tagBtn("unavailable", "✕", "Unavailable")}
     ${tagBtn("random_request", "🎲", "Random request")}
+    ${tagBtn("now_public", "🌐", "Now public")}
     <button type="button" class="bulk-btn" data-bulk="open">Open all in tabs</button>
     <button type="button" class="bulk-btn" data-bulk="queue">Add to follow queue</button>
     <button type="button" class="bulk-btn bulk-cancel" data-bulk="cancel">Cancel</button>
@@ -1477,19 +1484,19 @@ function renderListRow(item) {
   // date-precision ISO string when only a snapshot label is available.
   const parts = [];
 
-  // Privacy bucket for filter chips. Three-tier rule covering every
-  // scenario:
-  //   "private"        — DOM banner observed by extension (privacy_confirmed_private)
-  //                      OR likely_private inference + currently_pending
-  //                      (pending now ⇒ private now, 100% certain).
+  // Privacy bucket for filter chips. Full coverage:
+  //   "public"         — user has tagged now_public (manual override for
+  //                      private→public flip; user has personally verified).
+  //                      The only un-hedged "public" we ever emit.
+  //   "private"        — DOM banner observed by extension OR
+  //                      likely_private + currently_pending (100%).
   //   "likely_private" — likely_private inference but no current pending.
-  //                      Was private when pending was captured; private→public
-  //                      flip is possible so we hedge to "likely".
-  //   "likely_public"  — likely_public inference (pre-follow coverage + no
-  //                      pending observed). Never un-hedged.
+  //   "likely_public"  — likely_public inference (always hedged).
   //   "unknown"        — no signal either way.
   let privacy = "unknown";
-  if (item.privacy_confirmed_private) {
+  if (item.now_public) {
+    privacy = "public";
+  } else if (item.privacy_confirmed_private) {
     privacy = "private";
   } else if (item.privacy === "likely_private" && item.currently_pending) {
     privacy = "private";
@@ -1511,11 +1518,14 @@ function renderListRow(item) {
   if (item.mutual_since_at) parts.push(`mutual since ${escapeHtml(fmtDate(item.mutual_since_at))}`);
   if (item.history_status === "re-engaged") parts.push(`<span class="info-tag">re-engaged</span>`);
   // Privacy display, ordered most-certain → least:
-  //   "🔒 private"        — DOM-banner-confirmed OR pending now.
-  //   "🔒 likely private" — past pending evidence, no current pending
-  //                          (flip case hedge).
-  //   "🌐 likely public"  — inference only.
-  if (privacy === "private") {
+  //   "🌐 public (you confirmed)" — user-tagged now_public.
+  //   "🔒 private"                — DOM banner OR pending now.
+  //   "🔒 likely private"         — past pending evidence, no current
+  //                                  pending (flip case hedge).
+  //   "🌐 likely public"          — inference only.
+  if (privacy === "public") {
+    parts.push(`<span class="privacy-tag privacy-public">🌐 public (you confirmed)</span>`);
+  } else if (privacy === "private") {
     parts.push(`<span class="privacy-tag privacy-private">🔒 private</span>`);
   } else if (privacy === "likely_private") {
     parts.push(`<span class="privacy-tag privacy-private">🔒 likely private</span>`);
@@ -1572,6 +1582,7 @@ function renderListRow(item) {
     ${tagBtn("disabled", "⚠", item.disabled)}
     ${tagBtn("unavailable", "✕", item.unavailable)}
     ${tagBtn("random_request", "🎲", item.random_request)}
+    ${tagBtn("now_public", "🌐", item.now_public)}
   `;
 
   // Searchable haystack: current username + any past aliases (rename chain),
