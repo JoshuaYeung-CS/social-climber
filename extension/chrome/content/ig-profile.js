@@ -625,7 +625,7 @@ async function handleUnavailable(panel, username, data) {
   panel.innerHTML = `
     <div class="igt-head">
       <span class="igt-title">IG Tracker</span>
-      <button class="igt-icon" data-action="collapse" title="Collapse">⇲</button>
+      <button class="igt-icon" data-action="collapse" title="Minimize">−</button>
       <button class="igt-icon" data-action="close" title="Close">✕</button>
     </div>
     <div class="igt-body">
@@ -646,7 +646,7 @@ function renderEmpty(panel, username, reason) {
   panel.innerHTML = `
     <div class="igt-head">
       <span class="igt-title">IG Tracker</span>
-      <button class="igt-icon" data-action="collapse" title="Collapse">⇲</button>
+      <button class="igt-icon" data-action="collapse" title="Minimize">−</button>
       <button class="igt-icon" data-action="close" title="Close">✕</button>
     </div>
     <div class="igt-body">
@@ -863,7 +863,7 @@ function renderPanel(panel, username, data) {
   panel.innerHTML = `
     <div class="igt-head">
       <span class="igt-title">IG Tracker</span>
-      <button class="igt-icon" data-action="collapse" title="Collapse">⇲</button>
+      <button class="igt-icon" data-action="collapse" title="Minimize">−</button>
       <button class="igt-icon" data-action="close" title="Close">✕</button>
     </div>
     <div class="igt-body">
@@ -894,7 +894,55 @@ function renderPanel(panel, username, data) {
   });
 }
 
+// Drag-to-move support. Mousedown on the header (avoiding the icon
+// buttons) starts a drag; document-level mousemove/mouseup track and
+// commit position. Position is INTENTIONALLY not persisted across
+// SPA-navigations: refreshOverlay resets to the CSS default (top:76px,
+// right:16px) so each new profile starts at the same place.
+let _drag = null;
+
+function attachDragHandle(panel) {
+  const head = panel.querySelector(".igt-head");
+  if (!head) return;
+  head.style.cursor = "move";
+  head.style.userSelect = "none";
+  head.addEventListener("mousedown", (e) => {
+    // Don't initiate drag from clicks on the close/minimize icons.
+    if (e.target.closest("[data-action]")) return;
+    if (e.button !== 0) return;
+    const rect = panel.getBoundingClientRect();
+    _drag = { panel, dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+    panel.style.right = "auto";
+    panel.style.left = rect.left + "px";
+    panel.style.top = rect.top + "px";
+    e.preventDefault();
+  });
+}
+
+function resetPanelPosition(panel) {
+  // Clear inline overrides so the CSS rule (top:76px; right:16px) takes
+  // back over. Called on every refreshOverlay so the panel always lands
+  // at the same starting place when you navigate to a new profile.
+  panel.style.left = "";
+  panel.style.top = "";
+  panel.style.right = "";
+}
+
+document.addEventListener("mousemove", (e) => {
+  if (!_drag) return;
+  const p = _drag.panel;
+  let nx = e.clientX - _drag.dx;
+  let ny = e.clientY - _drag.dy;
+  nx = Math.max(0, Math.min(window.innerWidth - p.offsetWidth, nx));
+  ny = Math.max(0, Math.min(window.innerHeight - p.offsetHeight, ny));
+  p.style.left = nx + "px";
+  p.style.top = ny + "px";
+}, true);
+
+document.addEventListener("mouseup", () => { _drag = null; }, true);
+
 function bindHeaderActions(panel) {
+  attachDragHandle(panel);
   panel.querySelectorAll("[data-action]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const action = btn.dataset.action;
@@ -920,6 +968,7 @@ let _followBtnObserver = null;
 async function refreshOverlay(username) {
   if (!_settings.showOverlay) return;
   if (!_panelEl) _panelEl = buildPanel();
+  resetPanelPosition(_panelEl);
   if (!_panelOpen) {
     renderCollapsed(_panelEl, username);
     return;
@@ -928,7 +977,7 @@ async function refreshOverlay(username) {
   _panelEl.innerHTML = `
     <div class="igt-head">
       <span class="igt-title">IG Tracker</span>
-      <button class="igt-icon" data-action="collapse" title="Collapse">⇲</button>
+      <button class="igt-icon" data-action="collapse" title="Minimize">−</button>
       <button class="igt-icon" data-action="close" title="Close">✕</button>
     </div>
     <div class="igt-body">
