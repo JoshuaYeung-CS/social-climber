@@ -238,7 +238,13 @@ def _home_compute():
             # a one-snapshot blip in some past export and reappeared. See
             # the matching comment in the lists path below.
             ever_removed = ever_left_following - ever_self - ig_bounced - curr.following
-            ever_unfollowed_you = ever_unfollowed_you - ig_bounced - curr.followers
+            # Symmetric "you initiated" filter for the inbound side:
+            # accounts where YOU also unfollowed (in ever_self) shouldn't
+            # show up as "they unfollowed you" — that case is a mutual
+            # break or an IG quirk where unfollowing them caused their
+            # row to drop from your followers export. ever_removed already
+            # subtracts ever_self for the same reason.
+            ever_unfollowed_you = ever_unfollowed_you - ig_bounced - curr.followers - ever_self
 
             # Strip rename chains so renames don't inflate "they unfollowed/removed you" counts.
             alias_map = q.username_alias_map(conn)
@@ -900,7 +906,13 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # so "Ever removed you as follower" trends toward the size of
         # current following rather than the count of real removals.
         ever_removed_you = ever_left_following - ever_self - ig_bounced - sd.following
-        ever_unfollowed_you = ever_unfollowed_you - ig_bounced - sd.followers
+        # Symmetric "you initiated" filter for the inbound side: if you
+        # ALSO unfollowed them (in ever_self), the drop from followers is
+        # most likely a consequence of your action, not a real "they
+        # unfollowed you" event. Without this, mutual-break rows show up
+        # in "Ever unfollowed you" labeled as "you unfollowed [date]",
+        # which is confusing in a list that's about THEIR action.
+        ever_unfollowed_you = ever_unfollowed_you - ig_bounced - sd.followers - ever_self
 
         # Also exclude usernames that are part of a detected rename chain whose CURRENT
         # alias is still in your following/followers — they didn't really leave.
