@@ -213,13 +213,16 @@ async function refreshScanButton() {
   try {
     const data = await api.get("/api/scan-status");
     const btn = $("#scan-drive-btn");
+    const forceBtn = $("#scan-drive-force-btn");
     const hint = $("#scan-folder-hint");
     if (data.watch_folder) {
       btn.hidden = false;
+      if (forceBtn) forceBtn.hidden = false;
       hint.hidden = false;
       hint.textContent = `Watching: ${data.watch_folder}`;
     } else {
       btn.hidden = true;
+      if (forceBtn) forceBtn.hidden = true;
       hint.hidden = true;
     }
   } catch (e) { /* server not ready, ignore */ }
@@ -241,15 +244,23 @@ function manageOverflowFade(el) {
   el.addEventListener("scroll", sync, { passive: true });
 }
 
-$("#scan-drive-btn")?.addEventListener("click", async () => {
+async function runScan({ force }) {
   const btn = $("#scan-drive-btn");
+  const forceBtn = $("#scan-drive-force-btn");
   const status = $("#scan-status");
-  btn.disabled = true;
-  const originalLabel = btn.textContent;
-  btn.textContent = "Scanning… (Drive listing can take a minute)";
-  status.innerHTML = `<span class="pending"><span class="spinner"></span>Scanning Drive folder…</span>`;
+  if (btn) btn.disabled = true;
+  if (forceBtn) forceBtn.disabled = true;
+  const originalLabel = btn?.textContent;
+  const originalForceLabel = forceBtn?.textContent;
+  if (btn) btn.textContent = force ? "Force re-scanning…" : "Scanning… (Drive listing can take a minute)";
+  if (forceBtn && force) forceBtn.textContent = "Re-extracting every file…";
+  status.innerHTML = `<div class="loading-card"><span class="spinner"></span>${
+    force
+      ? "Force re-scan in progress. Re-extracting every file regardless of fingerprint cache. This is slower but thorough — please wait."
+      : "Scanning Drive folder…"
+  }</div>`;
   try {
-    const result = await api.post("/api/scan");
+    const result = await api.post(`/api/scan${force ? "?force=true" : ""}`);
     if (!result.ok) {
       status.innerHTML = `<div class="warn-box">⚠ ${escapeHtml(result.message)}</div>`;
     } else {
@@ -287,9 +298,15 @@ $("#scan-drive-btn")?.addEventListener("click", async () => {
   } catch (e) {
     status.innerHTML = `<div class="err">✗ ${escapeHtml(e.message)}</div>`;
   } finally {
-    btn.disabled = false;
-    btn.textContent = originalLabel;
+    if (btn) { btn.disabled = false; btn.textContent = originalLabel; }
+    if (forceBtn) { forceBtn.disabled = false; forceBtn.textContent = originalForceLabel; }
   }
+}
+$("#scan-drive-btn")?.addEventListener("click", () => runScan({ force: false }));
+$("#scan-drive-force-btn")?.addEventListener("click", () => {
+  if (!confirm("Force re-scan re-extracts every file in your Drive folder. " +
+               "This can take several minutes for many snapshots. Continue?")) return;
+  runScan({ force: true });
 });
 
 async function doImport(file) {

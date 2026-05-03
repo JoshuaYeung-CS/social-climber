@@ -114,11 +114,15 @@ def scan_status():
 
 
 @app.post("/api/scan")
-def scan_now():
+def scan_now(force: bool = False):
     """Manually trigger a one-shot scan-and-import of the watch folder.
     Synchronous so the response carries the result; on a slow Drive root
-    this can take a couple of minutes, but the user opted in by clicking."""
-    result = watcher_mod.scan_once()
+    this can take a couple of minutes, but the user opted in by clicking.
+
+    `force=true` bypasses the path-fingerprint dedup so every file is
+    re-extracted and re-evaluated. Catches files that the fingerprint
+    incorrectly skipped (Drive cache mismatches, etc.)."""
+    result = watcher_mod.scan_once(force=force)
     if result.get("imported") or result.get("skipped"):
         _bump_snapshot_version()
     return result
@@ -1544,6 +1548,17 @@ def _lists_apply_overlay(pure: dict) -> dict:
                 "SELECT username FROM profile_observations WHERE is_private = 1"
             ).fetchall()
         }
+        # Set of usernames the extension confirmed are unavailable (saw the
+        # "Sorry, this page isn't available" banner). Authoritative current
+        # state — overrides the bucket-status logic that would otherwise say
+        # "PAGE BACK" just because the user is still in the latest snapshot's
+        # following list (IG keeps deactivated accounts there for ages).
+        confirmed_unavailable = {
+            r["username"]
+            for r in conn.execute(
+                "SELECT username FROM profile_observations WHERE is_unavailable = 1"
+            ).fetchall()
+        }
     suppressed = {
         u for u, t in flagged.items()
         if t.get("disabled") or t.get("unavailable") or t.get("random_request")
@@ -1592,6 +1607,18 @@ def _lists_apply_overlay(pure: dict) -> dict:
             days = r.get("last_followed_you_days_ago")
             return (0, days if days is not None else 1_000_000, r["username"])
         annotated["not_following_you_back"].sort(key=nfb_key)
+
+    # Bucket-status override: if the extension confirmed an account is
+    # unavailable / disabled (page-not-found banner), trust that over the
+    # snapshot-derived "PAGE BACK" / "BACK ONLINE" alarm. The snapshot may
+    # still show them in your following because IG keeps deactivated
+    # accounts there indefinitely, but the live page check is authoritative.
+    for bk in ("unavailable", "disabled"):
+        for r in annotated.get(bk, []):
+            if r["username"] in confirmed_unavailable:
+                r["bucket_status"] = "still gone (extension confirms)"
+                r["bucket_status_kind"] = "good"
+
     # Bucket priority sort.
     for bk in _BUCKET_KINDS_SET:
         if bk in annotated:
@@ -1640,7 +1667,7 @@ def _lookup_compute(username: str, profile_url: str):
             "SELECT observed_at, display_name, bio, external_link, "
             "follower_count, following_count, post_count, verified, "
             "is_private, profile_pic_url, follow_button_state, "
-            "follow_state_changed_at "
+            "follow_state_changed_at, is_unavailable "
             "FROM profile_observations WHERE username = ?",
             (username,),
         ).fetchone()
@@ -1651,6 +1678,10 @@ def _lookup_compute(username: str, profile_url: str):
             ip = observation.get("is_private")
             observation["is_private"] = (
                 None if ip is None else bool(ip)
+            )
+            iu = observation.get("is_unavailable")
+            observation["is_unavailable"] = (
+                None if iu is None else bool(iu)
             )
 
         current_state = {
@@ -1788,6 +1819,15 @@ def profile_observation(payload: dict = Body(...)):
     # Live follow-button state observed in the extension. One of:
     # not_following / requested / following / follow_back_available / null.
     button_state = payload.get("follow_button_state") or None
+    # is_unavailable: extension confirmed "Sorry, this page isn't available"
+    # at observation time. Overrides the bucket-status logic which would
+    # otherwise say "PAGE BACK" purely because the user is still in the
+    # latest snapshot's following set (IG keeps deactivated accounts in
+    # following.json for ages).
+    is_unavailable = (
+        1 if payload.get("is_unavailable") is True
+        else (0 if payload.get("is_unavailable") is False else None)
+    )
     fields = {
         "username": username,
         "observed_at": datetime.now(timezone.utc).isoformat(),
@@ -1805,6 +1845,7 @@ def profile_observation(payload: dict = Body(...)):
         "follow_state_changed_at": (
             datetime.now(timezone.utc).isoformat() if payload.get("button_state_changed") else None
         ),
+        "is_unavailable": is_unavailable,
     }
     with db_conn() as conn:
         conn.execute(
@@ -1813,12 +1854,12 @@ def profile_observation(payload: dict = Body(...)):
                 username, observed_at, display_name, bio, external_link,
                 follower_count, following_count, post_count, verified,
                 is_private, profile_pic_url, follow_button_state,
-                follow_state_changed_at
+                follow_state_changed_at, is_unavailable
             ) VALUES (
                 :username, :observed_at, :display_name, :bio, :external_link,
                 :follower_count, :following_count, :post_count, :verified,
                 :is_private, :profile_pic_url, :follow_button_state,
-                :follow_state_changed_at
+                :follow_state_changed_at, :is_unavailable
             )
             ON CONFLICT(username) DO UPDATE SET
                 observed_at      = excluded.observed_at,
@@ -1832,7 +1873,8 @@ def profile_observation(payload: dict = Body(...)):
                 is_private       = COALESCE(excluded.is_private, is_private),
                 profile_pic_url  = COALESCE(excluded.profile_pic_url, profile_pic_url),
                 follow_button_state = COALESCE(excluded.follow_button_state, follow_button_state),
-                follow_state_changed_at = COALESCE(excluded.follow_state_changed_at, follow_state_changed_at)
+                follow_state_changed_at = COALESCE(excluded.follow_state_changed_at, follow_state_changed_at),
+                is_unavailable   = COALESCE(excluded.is_unavailable, is_unavailable)
             """,
             fields,
         )

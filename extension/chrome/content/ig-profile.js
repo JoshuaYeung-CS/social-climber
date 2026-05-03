@@ -197,6 +197,11 @@ function sendProfileObservation(username, profile, privacyDom, extra = {}) {
   // is_private: only send TRUE when DOM actually showed the banner. Don't
   // send FALSE on banner-absent — could be a private account we follow.
   const is_private = privacyDom === "private" ? true : null;
+  // is_unavailable: when we successfully extract profile data (counts,
+  // bio, etc.) the page is loading normally → not unavailable. Sending
+  // false explicitly clears any stale is_unavailable=true from a prior
+  // observation if the account came back online.
+  const is_unavailable = false;
   bgFetch(`${_settings.trackerUrl}/api/profile-observation`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -204,6 +209,7 @@ function sendProfileObservation(username, profile, privacyDom, extra = {}) {
       username,
       ...profile,
       is_private,
+      is_unavailable,
       follow_button_state: buttonState,
       button_state_changed: !!extra.button_state_changed,
     }),
@@ -481,6 +487,15 @@ async function handleUnavailable(panel, username, data) {
   if (!tags.unavailable) {
     toggleTag(username, "unavailable", true).catch(() => {});
   }
+  // Record is_unavailable=true so the bucket-status logic in the lists
+  // view stops saying "PAGE BACK" for this account. The snapshot still
+  // has them in following (IG keeps them there), but the live page
+  // check is authoritative.
+  bgFetch(`${_settings.trackerUrl}/api/profile-observation`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, is_unavailable: true }),
+  }).catch(() => {});
   panel.innerHTML = `
     <div class="igt-head">
       <span class="igt-title">IG Tracker</span>

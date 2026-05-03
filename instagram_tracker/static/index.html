@@ -38,7 +38,10 @@
         <div class="hint">Or drag-and-drop here.</div>
         <div id="import-status" class="status"></div>
         <hr style="margin:16px 0; border:0; border-top:1px solid var(--border);" />
-        <button class="ghost-btn" id="scan-drive-btn" hidden>Scan Drive folder for new exports</button>
+        <div class="scan-row">
+          <button class="ghost-btn" id="scan-drive-btn" hidden>Scan Drive folder for new exports</button>
+          <button class="ghost-btn" id="scan-drive-force-btn" hidden title="Re-extract every file regardless of fingerprint cache. Slower but catches files the fast scan incorrectly skipped.">Force re-scan all</button>
+        </div>
         <div id="scan-folder-hint" class="hint" hidden></div>
         <div id="scan-status" class="status"></div>
       </div>

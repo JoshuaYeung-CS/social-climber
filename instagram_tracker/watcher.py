@@ -234,11 +234,17 @@ def get_watch_folder() -> Path | None:
     return p
 
 
-def scan_once() -> dict:
+def scan_once(force: bool = False) -> dict:
     """Run a single scan-and-import pass synchronously. Used by the manual
     'Scan Drive folder' button on the home page so the user can trigger an
     import on demand without paying for background polling. Serialized via
-    _SCAN_LOCK so concurrent invocations can't race on the duplicate guard."""
+    _SCAN_LOCK so concurrent invocations can't race on the duplicate guard.
+
+    `force=True` bypasses the path-fingerprint dedup so EVERY file gets
+    re-extracted and re-evaluated by ingest's content-hash dedup. Slower
+    but catches files that the fingerprint check incorrectly skipped
+    (e.g. Drive returned cached bytes that didn't actually match the
+    current on-disk file)."""
     if not _SCAN_LOCK.acquire(blocking=False):
         return {
             "ok": False,
@@ -249,12 +255,12 @@ def scan_once() -> dict:
             "skipped": 0,
         }
     try:
-        return _scan_once_locked()
+        return _scan_once_locked(force=force)
     finally:
         _SCAN_LOCK.release()
 
 
-def _scan_once_locked() -> dict:
+def _scan_once_locked(force: bool = False) -> dict:
     root = get_watch_folder()
     if root is None:
         return {
@@ -296,6 +302,10 @@ def _scan_once_locked() -> dict:
             conn0.close()
 
     def can_skip(p: Path) -> bool:
+        # Force mode: never skip. Every file gets re-extracted and the
+        # ingest content-hash dedup decides what's a real duplicate.
+        if force:
+            return False
         path_str = str(p)
         # Force-retry paths that errored earlier in this process's lifetime.
         if path_str in _RECENT_ERROR_PATHS:

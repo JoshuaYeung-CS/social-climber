@@ -1357,6 +1357,14 @@ textarea {
 .obs-link a { color: var(--accent); }
 .obs-private { font-size: 12px; color: var(--warn); margin-top: 6px; }
 .obs-button-state { font-size: 12px; color: var(--accent); margin-top: 4px; }
+
+/* Scan-button row — primary "Scan" + secondary "Force re-scan all". */
+.scan-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.scan-row .ghost-btn { flex: 0 1 auto; }
 .account-detail .url a { color: var(--accent); text-decoration: none; }
 .tag-toggles { display: flex; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
 .tag-toggle {
