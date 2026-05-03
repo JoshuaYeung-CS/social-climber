@@ -57,8 +57,21 @@
 .igt-username {
   font-weight: 600;
   font-size: 13px;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   word-break: break-all;
+}
+.igt-check {
+  display: inline-block;
+  margin-left: 4px;
+  color: #4f8cff;
+  font-weight: 700;
+  font-size: 11px;
+}
+.igt-display-name {
+  font-size: 11px;
+  color: #8f8f99;
+  margin-bottom: 6px;
+  word-break: break-word;
 }
 .igt-rel {
   display: inline-block;

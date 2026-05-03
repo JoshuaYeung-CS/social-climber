@@ -149,6 +149,77 @@ function buildPanel() {
 //      can't prove public — we only emit "public" when there's no
 //      privacy banner AND posts are visible AND the page passes a few
 //      sanity checks.
+// Pull header-level profile info (counts, display name, verified badge,
+// profile pic, bio) from the profile page DOM. Pure DOM reading — never
+// triggers a network request to Instagram. Safe across all profile
+// states (logged in / out, follow / not follow, private / public).
+//
+// IG's class names are obfuscated and rotate weekly, so we lean on
+// stable structural elements (`header`) and stable text patterns
+// ("X posts", "Y followers") rather than CSS selectors that'd break.
+function extractProfileFromDOM() {
+  const out = {};
+  try {
+    const main = document.querySelector("main");
+    const header = main?.querySelector("header") || document.querySelector("header") || main || document.body;
+    const headerText = header?.innerText || "";
+
+    // Counts row — "1,234 posts", "5.5K followers", "1.2M following".
+    // Restrict regex to the header so post captions in the grid below
+    // ("...followers receive..." in a caption) don't poison the match.
+    const countRe = /([\d.,]+(?:\s*[KMB])?)\s+(posts?|followers?|following)/gi;
+    let m;
+    while ((m = countRe.exec(headerText)) !== null) {
+      const word = m[2].toLowerCase().replace(/s$/, "");
+      const key = word === "post" ? "posts" : word === "follower" ? "followers" : "following";
+      if (!out[key]) out[key] = m[1].replace(/\s+/g, "").trim();
+    }
+
+    // Verified badge: aria-label or title varies by locale, "Verified"
+    // is consistent in English. Limit to the header to avoid matching
+    // verification badges on tagged users in the grid below.
+    if (header.querySelector?.('svg[aria-label*="Verified" i], [title*="Verified" i]')) {
+      out.verified = true;
+    }
+
+    // Display name. IG uses an h2 (sometimes h1) in the header that's the
+    // user's typed-in name, distinct from the @username slug.
+    const heading = header.querySelector?.("h1, h2");
+    if (heading) {
+      const t = (heading.textContent || "").trim();
+      // Reject if it's just the username (already shown), too long
+      // (probably wrong element), or empty.
+      const isUsername = t.replace(/[._]/g, "").toLowerCase() ===
+        (window.location.pathname.split("/").filter(Boolean)[0] || "").replace(/[._]/g, "").toLowerCase();
+      if (t && t.length < 80 && !isUsername) {
+        out.display_name = t;
+      }
+    }
+
+    // Bio: the next text block after the counts row, before the post grid.
+    // IG renders it as a span/div with no consistent class, but it's the
+    // longest free-form text in the header. Pick the longest header text
+    // node that's not the display name and isn't the counts row itself.
+    const bioCandidate = Array.from(header.querySelectorAll?.("span, div") || [])
+      .map((el) => (el.innerText || "").trim())
+      .filter((t) => t.length > 12 && t.length < 320 && !/posts|followers|following/i.test(t.split("\n")[0]))
+      .filter((t) => t !== out.display_name)
+      .sort((a, b) => b.length - a.length);
+    if (bioCandidate.length > 0) out.bio = bioCandidate[0];
+
+    // Profile pic — alt text reliably contains "profile picture".
+    const pic = main?.querySelector?.('img[alt*="profile picture" i]');
+    if (pic?.src) out.profile_pic = pic.src;
+
+    // External link in bio (e.g. linktree). IG renders it with a target=_blank.
+    const ext = header.querySelector?.('a[target="_blank"][href]:not([href*="instagram.com"])');
+    if (ext?.href) out.external_link = ext.href;
+  } catch (e) {
+    // DOM access can throw during early lifecycle. Caller treats {} as "no data".
+  }
+  return out;
+}
+
 function detectPrivacyFromDOM() {
   try {
     const text = document.body?.innerText || "";
@@ -254,6 +325,23 @@ function renderPanel(panel, username, data) {
   else if (observedPrivacy === "public") lines.push(`🌐 public (confirmed)`);
   else if (data.privacy === "likely_private") lines.push(`🔒 likely private`);
   else if (data.privacy === "likely_public") lines.push(`🌐 likely public`);
+
+  // Live page facts — counts, verified badge, account category.
+  // Pulled fresh from the profile DOM each render; these aren't in the
+  // tracker DB at all (only what IG's data export gives us is). Showing
+  // them lets the overlay double as a "snapshot of who they are right now".
+  const profile = extractProfileFromDOM();
+  const countsParts = [];
+  if (profile.posts)      countsParts.push(`${profile.posts} posts`);
+  if (profile.followers)  countsParts.push(`${profile.followers} followers`);
+  if (profile.following)  countsParts.push(`${profile.following} following`);
+  if (countsParts.length) lines.push(countsParts.join(" · "));
+  if (profile.bio)        lines.push(profile.bio.length > 110 ? profile.bio.slice(0, 110) + "…" : profile.bio);
+  if (profile.external_link) {
+    let host = profile.external_link;
+    try { host = new URL(profile.external_link).hostname; } catch { /* keep raw */ }
+    lines.push(`↗ ${host}`);
+  }
   if (data.aliases && data.aliases.length > 1) {
     lines.push(`renamed: ${data.aliases.join(" → ")}`);
   }
@@ -270,7 +358,8 @@ function renderPanel(panel, username, data) {
       <button class="igt-icon" data-action="close" title="Close">✕</button>
     </div>
     <div class="igt-body">
-      <div class="igt-username">${escapeHtml(username)}</div>
+      <div class="igt-username">${escapeHtml(username)}${profile.verified ? ' <span class="igt-check" title="Verified">✓</span>' : ""}</div>
+      ${profile.display_name ? `<div class="igt-display-name">${escapeHtml(profile.display_name)}</div>` : ""}
       <div class="igt-rel igt-rel-${relKind}">${escapeHtml(rel)}</div>
       ${lines.length ? `<ul class="igt-lines">${lines.map(l => `<li>${escapeHtml(l)}</li>`).join("")}</ul>` : ""}
       <div class="igt-tags">${tagBtns}</div>
