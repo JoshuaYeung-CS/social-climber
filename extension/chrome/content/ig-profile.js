@@ -752,6 +752,19 @@ function renderPanel(panel, username, data) {
   else if (youFollow && !followsYou) { rel = "doesn't follow back"; relKind = "warn"; }
   else if (followsYou && !youFollow) { rel = "follows you only"; relKind = "info"; }
   else if (pending) { rel = "request pending"; relKind = "info"; }
+  else {
+    // No current relation — but check for prior interaction so the pill
+    // distinguishes "complete stranger" from "we have history together."
+    // Promotes the most-specific past-state we can derive from the
+    // lookup: previously-mutual > one-sided follow > pending-only.
+    const wasFollowing = !!data.ever_followed;
+    const wasFollower = !!data.ever_was_follower;
+    const wasPending = !!data.ever_requested;
+    if (wasFollowing && wasFollower) { rel = "↺ previously mutual"; relKind = "info"; }
+    else if (wasFollower) { rel = "↺ they followed you before"; relKind = "info"; }
+    else if (wasFollowing) { rel = "↺ you followed them before"; relKind = "info"; }
+    else if (wasPending) { rel = "↺ you requested before"; relKind = "muted"; }
+  }
 
   // Story lines from snapshot history.
   const lines = [];
@@ -759,8 +772,8 @@ function renderPanel(panel, username, data) {
   const ls = data.last_followed_snapshot;
   const fr = data.first_follower_snapshot;
   const lr = data.last_follower_snapshot;
-  if (fs?.label) lines.push(`first followed you ${fmtSnapshotLabel(fs.label)}`);
-  if (fr?.label) lines.push(`first appeared in your followers ${fmtSnapshotLabel(fr.label)}`);
+  if (fs?.label) lines.push(`you first followed them ${fmtSnapshotLabel(fs.label)}`);
+  if (fr?.label) lines.push(`they first appeared in your followers ${fmtSnapshotLabel(fr.label)}`);
   if (data.follow_runs_count && data.follow_runs_count > 1) {
     lines.push(`you followed them across ${data.follow_runs_count} separate runs`);
   }
