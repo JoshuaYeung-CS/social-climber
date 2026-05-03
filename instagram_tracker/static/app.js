@@ -1729,8 +1729,15 @@ async function loadLists() {
 
 // ---------- bucket buttons ----------
 
+// Bucket buttons are now anchors with href="#lists/<flag>", so cmd/ctrl-
+// click and middle-click open a new tab natively via the browser. For
+// plain clicks we suppress the navigation and SPA-route in place.
 $$(".bucket-btn").forEach((btn) =>
-  btn.addEventListener("click", () => goToList(btn.dataset.flag))
+  btn.addEventListener("click", (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+    e.preventDefault();
+    goToList(btn.dataset.flag);
+  })
 );
 
 // ---------- follow queue ----------

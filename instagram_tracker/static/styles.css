@@ -259,7 +259,9 @@ code {
   gap: 4px;
   min-height: 44px;
   transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+  text-decoration: none;
 }
+.bucket-btn:visited { color: inherit; }
 .bucket-btn:hover { transform: translateY(-1px); }
 .bucket-btn:active { transform: translateY(0); }
 .bucket-btn .count { font-size: 12px; font-weight: 600; }
