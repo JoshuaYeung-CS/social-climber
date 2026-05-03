@@ -239,6 +239,24 @@ function fmtDateTime(ts) {
     : { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+// Detect IG's "Sorry, this page isn't available" / "User not found" state.
+// The page is rendered for: deleted accounts, renamed accounts (URL stale),
+// suspended accounts, accounts that blocked you, typos. All warrant the
+// same response: tag "unavailable" in the tracker (the existing bucket
+// auto-clears if they reappear in your followers, so this is reversible).
+function detectAccountUnavailable() {
+  try {
+    const text = document.body?.innerText || "";
+    if (/Sorry,\s*this\s+page\s+isn'?t\s+available/i.test(text)) return true;
+    if (/User\s+not\s+found/i.test(text)) return true;
+    if (/The\s+link\s+you\s+followed\s+may\s+be\s+broken/i.test(text)) return true;
+    if (/page\s+may\s+have\s+been\s+removed/i.test(text)) return true;
+  } catch (e) {
+    // ignore
+  }
+  return false;
+}
+
 function buildPanel() {
   const panel = document.createElement("div");
   panel.id = "igtracker-overlay";
@@ -274,6 +292,10 @@ function buildPanel() {
 // ("X posts", "Y followers") rather than CSS selectors that'd break.
 function extractProfileFromDOM() {
   const out = {};
+  // If IG is showing "page not available", the longest text on the page is
+  // the error message — naive extraction would write it as the bio. Bail
+  // early; the unavailable-tag flow signals the state instead.
+  if (detectAccountUnavailable()) return out;
   try {
     const main = document.querySelector("main");
     const header = main?.querySelector("header") || document.querySelector("header") || main || document.body;
@@ -360,6 +382,35 @@ function detectPrivacyFromDOM() {
   return null;
 }
 
+async function handleUnavailable(panel, username, data) {
+  // Auto-tag as unavailable if not already. Idempotent — toggleTag
+  // is a no-op if the bucket already contains this user. The existing
+  // bucket logic auto-clears the flag if the account ever reappears in
+  // your followers (proof of life), so this is safely reversible.
+  const tags = data?.tags || {};
+  if (!tags.unavailable) {
+    toggleTag(username, "unavailable", true).catch(() => {});
+  }
+  panel.innerHTML = `
+    <div class="igt-head">
+      <span class="igt-title">IG Tracker</span>
+      <button class="igt-icon" data-action="collapse" title="Collapse">⇲</button>
+      <button class="igt-icon" data-action="close" title="Close">✕</button>
+    </div>
+    <div class="igt-body">
+      <div class="igt-username">${escapeHtml(username)}</div>
+      <div class="igt-rel igt-rel-warn">page not available</div>
+      <ul class="igt-lines">
+        <li>IG returned "Sorry, this page isn't available"</li>
+        <li>${tags.unavailable ? "already tagged ✕ unavailable" : "auto-tagged ✕ unavailable in your tracker"}</li>
+        <li class="igt-muted">tag will auto-clear if they reappear in your followers</li>
+      </ul>
+      <a class="igt-link" href="${_settings.trackerUrl}/?lookup=${encodeURIComponent(username)}" target="_blank" rel="noopener">↗ open in tracker</a>
+    </div>
+  `;
+  bindHeaderActions(panel);
+}
+
 function renderEmpty(panel, username, reason) {
   panel.innerHTML = `
     <div class="igt-head">
@@ -394,6 +445,15 @@ function renderPanel(panel, username, data) {
     renderEmpty(panel, username, "Tracker offline or not running.");
     return;
   }
+
+  // IG showed "page not available". Auto-tag the account as unavailable
+  // (idempotent — checks the existing tag state first) and short-circuit
+  // the normal panel render to a clear "page gone" state.
+  if (detectAccountUnavailable()) {
+    handleUnavailable(panel, username, data);
+    return;
+  }
+
   if (data.found === false && !data.currently_follower && !data.currently_following && !data.currently_pending && !data.currently_incoming_request) {
     renderEmpty(panel, username, "Never seen in any snapshot.");
     return;
