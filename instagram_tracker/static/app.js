@@ -365,7 +365,7 @@ bindClearButton({ inputId: "queue-input",  clearId: "queue-input-clear",  result
 // Safari (Mac + iOS 13.4+) inside a user-gesture handler. If the API is
 // blocked or unavailable, falls back to focusing the input so the user
 // can paste manually with Cmd+V / long-press.
-function bindPasteButton({ inputId, pasteId }) {
+function bindPasteButton({ inputId, pasteId, runAfter }) {
   const input = $(`#${inputId}`);
   const btn = $(`#${pasteId}`);
   if (!input || !btn) return;
@@ -410,6 +410,11 @@ function bindPasteButton({ inputId, pasteId }) {
       // input changed, so disabled-state updates immediately.
       input.dispatchEvent(new Event("input", { bubbles: true }));
       focusForManualPaste();
+      // Auto-run the card's primary action right after paste (look up /
+      // add to queue), so a single tap finishes the whole flow.
+      if (typeof runAfter === "function") {
+        runAfter();
+      }
     } catch (e) {
       // Most common failure: Safari blocks clipboard read outside a recent
       // user gesture, or the user denied the prompt.
@@ -418,8 +423,16 @@ function bindPasteButton({ inputId, pasteId }) {
     }
   });
 }
-bindPasteButton({ inputId: "lookup-input", pasteId: "lookup-paste" });
-bindPasteButton({ inputId: "queue-input",  pasteId: "queue-input-paste" });
+bindPasteButton({
+  inputId: "lookup-input",
+  pasteId: "lookup-paste",
+  runAfter: () => runCheck({ inputId: "lookup-input", resultId: "lookup-result", saveToQueue: false }),
+});
+bindPasteButton({
+  inputId: "queue-input",
+  pasteId: "queue-input-paste",
+  runAfter: () => runCheck({ inputId: "queue-input", resultId: "queue-result", saveToQueue: true }),
+});
 
 async function runCheck({ inputId, resultId, saveToQueue }) {
   const text = $(`#${inputId}`).value;
