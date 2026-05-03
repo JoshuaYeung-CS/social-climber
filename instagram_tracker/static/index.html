@@ -75,6 +75,7 @@
         <h2>Lists</h2>
         <select id="list-kind" class="full-select" hidden></select>
         <div id="list-pills" class="list-pills"></div>
+        <div id="list-description" class="list-description" hidden></div>
         <div class="search-row">
           <span class="search-icon" aria-hidden="true">
             <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -89,6 +90,7 @@
         <div id="filter-chips" class="filter-chips">
           <span class="filter-label">Show:</span>
           <button type="button" class="filter-chip active" data-filter="privacy:private">🔒 Private <span class="filter-count" data-filter-count="privacy:private">0</span></button>
+          <button type="button" class="filter-chip active" data-filter="privacy:likely_private">🔒 Likely private <span class="filter-count" data-filter-count="privacy:likely_private">0</span></button>
           <button type="button" class="filter-chip active" data-filter="privacy:likely_public">🌐 Likely public <span class="filter-count" data-filter-count="privacy:likely_public">0</span></button>
           <button type="button" class="filter-chip active" data-filter="privacy:unknown">? Unknown <span class="filter-count" data-filter-count="privacy:unknown">0</span></button>
           <button type="button" class="filter-chip-clear" id="filter-clear" hidden>Clear filters</button>

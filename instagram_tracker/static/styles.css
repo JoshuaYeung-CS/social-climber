@@ -933,6 +933,16 @@ code {
   gap: 10px;
   margin: 0 0 12px;
 }
+.list-description {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0 0 12px;
+}
 .kind-group { display: flex; flex-direction: column; gap: 6px; }
 .kind-group-label {
   font-size: 11px;

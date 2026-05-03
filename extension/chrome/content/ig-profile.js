@@ -807,20 +807,27 @@ function renderPanel(panel, username, data) {
   const observedPrivacy = detectPrivacyFromDOM();
   const userFollows = !!data.currently_following;
   const userHasPending = !!data.currently_pending;
+  // Three-tier privacy rule covering every scenario:
+  //   "🔒 private" → DOM banner observed (IG explicitly says so) OR
+  //     likely_private + currently_pending (pending exists ⇒ approval
+  //     required ⇒ private NOW). Both 100% certain.
+  //   "🔒 likely private" → likely_private inference (past pending
+  //     observed at some snapshot, but no current pending). Account
+  //     WAS private when the pending was captured; could have flipped
+  //     private→public after approving you, in which case it's now
+  //     public despite the historical evidence. The hedge protects
+  //     against this.
+  //   "🌐 likely public" → likely_public inference. Pre-follow snapshot
+  //     coverage + no pending observed. Strong, never airtight (brief
+  //     pending phase can resolve between snapshots).
+  //   (unlabeled) → unknown.
   if (observedPrivacy === "private") {
     lines.push(`🔒 private`);
-  } else if (data.privacy === "likely_private") {
-    // Ever-pending in any snapshot ⇒ account had a pending phase ⇒
-    // private (public accounts never go through pending). User
-    // accepts the rare private→public flip case as a tolerable edge
-    // and prefers the simpler un-hedged label here.
+  } else if (data.privacy === "likely_private" && userHasPending) {
     lines.push(`🔒 private`);
+  } else if (data.privacy === "likely_private") {
+    lines.push(`🔒 likely private`);
   } else if (data.privacy === "likely_public") {
-    // "public" is always hedged. The likely_public inference is
-    // "snapshots covered the pre-follow period and no pending was
-    // observed," strong but not airtight: a brief pending phase that
-    // resolved between snapshots could escape detection. Never claim
-    // un-hedged "public" anywhere in code.
     lines.push(`🌐 likely public`);
   }
 

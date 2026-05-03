@@ -659,11 +659,14 @@ function renderLookup(data) {
       <div class="facts">
         ${(() => {
           const confirmed = data.observation?.is_private === true;
+          // Three-tier rule covering every scenario:
+          //  "🔒 private"        — extension banner OR likely_private+pending now
+          //  "🔒 likely private" — likely_private without current pending
+          //                        (was private; private→public flip possible)
+          //  "🌐 likely public"  — likely_public inference (always hedged)
           if (confirmed) return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
-          // Ever-pending = private (public accounts never enter
-          // pending). User accepts the rare private→public flip as a
-          // tolerable edge case and prefers the simpler label.
-          if (data.privacy === "likely_private") return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
+          if (data.privacy === "likely_private" && data.currently_pending) return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
+          if (data.privacy === "likely_private") return `<div class="row"><span class="key">Privacy</span><span>🔒 likely private</span></div>`;
           if (data.privacy === "likely_public") return `<div class="row"><span class="key">Privacy</span><span>🌐 likely public</span></div>`;
           return "";
         })()}
@@ -833,6 +836,38 @@ async function showHistory(username) {
 }
 
 // ---------- lists ----------
+
+// Per-list description shown above the search bar when a list is open.
+// Keep each one short — one or two sentences max — so it explains the
+// definition without becoming a wall of text.
+const LIST_DESCRIPTIONS = {
+  everyone:                     "Every account that has appeared in any of your IG export tables across all imported snapshots — followers, following, pending, recently_unfollowed, or incoming follow requests. The widest possible 'have I ever interacted with this account?' set.",
+  all_followers:                "Accounts currently following you, per the latest snapshot. Excludes accounts you've tagged disabled / unavailable / random_request.",
+  all_following:                "Accounts you currently follow, per the latest snapshot, plus extension-confirmed follows that haven't been ingested into a snapshot yet.",
+  mutuals:                      "Accounts that follow you AND that you follow.",
+  not_following_you_back:       "Accounts you follow but who don't follow you back. Excludes accounts who've sent you an incoming request you haven't acted on (those are 'requesting to follow back', not 'doesn't follow back').",
+  feeder_accounts:              "Accounts that follow you but you don't follow them. The opposite side of 'Don't follow you back'.",
+  pending:                      "Outbound follow requests you've sent that haven't been accepted yet, including extension-confirmed pending requests not yet visible in the IG export.",
+  incoming_requests:            "Inbound follow requests you haven't approved or rejected yet. Pulled directly from the latest IG export.",
+  renamed:                      "Accounts whose username changed across snapshots. Detected by sharing the same IG follow timestamp across non-overlapping snapshot ranges (IG preserves the timestamp through renames).",
+  ever_unfollowed_you:          "Accounts that left your followers list AND you didn't also unfollow them. The strict 'they (or IG) ended their following of you on their own' set. Excludes mutual breaks and accounts who briefly disappeared then came back.",
+  mutual_break_you_first:       "Mutual unfollows where you initiated: your unfollow timestamp is strictly before the last snapshot they appeared as a follower. They were still following you at the moment you unfollowed; they likely unfollowed back later.",
+  mutual_break_they_first:      "Mutual unfollows where they likely initiated, OR the events fell within the same snapshot window and we can't distinguish precisely. Catch-all for everything that isn't clearly 'you-first'.",
+  ever_removed_you_as_follower: "Accounts that left your following list without you actively unfollowing them. Most often: account blocked you, deactivated, or was made unreachable.",
+  you_unfollowed_ever:          "Every account you've ever unfollowed across all snapshots. Pulled from IG's recently_unfollowed log (which retains a few weeks per export, so this accumulates as snapshots are ingested).",
+  still_follow_after_drop:      "Accounts who unfollowed you (or were ever in 'Ever unfollowed you') that you still currently follow. Useful for spotting one-sided relationships you might want to clean up.",
+  ever_incoming_requests:       "Every account ever observed in your incoming-requests AND every account that has ever appeared in your followers (each follow implies a request happened — IG only retains the request log a few weeks but the resulting follow is permanent).",
+  real_requests:                "Cumulative incoming requests, with random_request-tagged accounts excluded. The 'genuinely worth triaging' subset.",
+  incoming_request_dropped:     "Accounts that requested to follow you but were never approved (never made it into your followers list across any snapshot). 'Requests you rejected or never acted on'.",
+  ever_requested_outgoing:      "Every account you've ever sent a follow request to (pending) plus every account you've ever followed (each follow implied a request).",
+  request_dropped:              "Outbound requests that never made it into your following list. 'Requests they didn't accept' — likely rejected or expired.",
+  favorite:                     "Accounts you've manually starred. Manual labels — the tag persists across snapshots.",
+  want_remove:                  "Accounts you've manually flagged for unfollowing later. Manual labels.",
+  watchlist:                    "Accounts you're waiting to follow back. Manual labels.",
+  disabled:                     "Accounts you've manually marked as gone (deactivated, deleted, blocked you). Auto-clears if they reappear in your followers (proof of life). Excluded from non-bucket lists.",
+  unavailable:                  "Accounts where the extension landed on Instagram's 'Sorry, this page isn't available' state. Auto-clears if they reappear in your followers. Excluded from non-bucket lists.",
+  random_request:               "Manual flag for incoming requests that look like spam / bots / random users. Excluded from 'real_requests' and other non-bucket lists.",
+};
 
 const LIST_KINDS = [
   ["everyone", "Everyone you've ever interacted with"],
@@ -1128,7 +1163,7 @@ $("#list-output")?.addEventListener("click", async (e) => {
 // applies after all chips are evaluated. "Clear filters" reactivates
 // all chips so everything shows.
 function updateFilterCounts(rows) {
-  const counts = { private: 0, likely_public: 0, unknown: 0 };
+  const counts = { private: 0, likely_private: 0, likely_public: 0, unknown: 0 };
   rows.forEach((r) => {
     const p = r.dataset.privacy || "unknown";
     counts[p] = (counts[p] || 0) + 1;
@@ -1442,19 +1477,24 @@ function renderListRow(item) {
   // date-precision ISO string when only a snapshot label is available.
   const parts = [];
 
-  // Privacy bucket for filter chips. Two-tier rule:
-  //   "private" — DOM banner observed OR likely_private (ever-pending
-  //     in any snapshot ⇒ approval-required ⇒ private. Public accounts
-  //     never produce pending entries, so this is logically conclusive
-  //     except for the rare private→public flip edge case which the
-  //     user accepts).
-  //   "likely_public" — inference (pre-follow snapshot coverage, no
-  //     pending observed). Never promoted to un-hedged "public" — a
-  //     brief pending phase could have resolved between snapshots.
-  //   "unknown" — no signal either way.
+  // Privacy bucket for filter chips. Three-tier rule covering every
+  // scenario:
+  //   "private"        — DOM banner observed by extension (privacy_confirmed_private)
+  //                      OR likely_private inference + currently_pending
+  //                      (pending now ⇒ private now, 100% certain).
+  //   "likely_private" — likely_private inference but no current pending.
+  //                      Was private when pending was captured; private→public
+  //                      flip is possible so we hedge to "likely".
+  //   "likely_public"  — likely_public inference (pre-follow coverage + no
+  //                      pending observed). Never un-hedged.
+  //   "unknown"        — no signal either way.
   let privacy = "unknown";
-  if (item.privacy_confirmed_private || item.privacy === "likely_private") {
+  if (item.privacy_confirmed_private) {
     privacy = "private";
+  } else if (item.privacy === "likely_private" && item.currently_pending) {
+    privacy = "private";
+  } else if (item.privacy === "likely_private") {
+    privacy = "likely_private";
   } else if (item.privacy === "likely_public") {
     privacy = "likely_public";
   }
@@ -1470,10 +1510,15 @@ function renderListRow(item) {
   if (item.following_via_extension) parts.push(`<span class="info-tag">via extension — not yet in export</span>`);
   if (item.mutual_since_at) parts.push(`mutual since ${escapeHtml(fmtDate(item.mutual_since_at))}`);
   if (item.history_status === "re-engaged") parts.push(`<span class="info-tag">re-engaged</span>`);
-  // Privacy display: "🔒 private" for any pending evidence (or banner),
-  // "🌐 likely public" for inferred public, unlabeled otherwise.
+  // Privacy display, ordered most-certain → least:
+  //   "🔒 private"        — DOM-banner-confirmed OR pending now.
+  //   "🔒 likely private" — past pending evidence, no current pending
+  //                          (flip case hedge).
+  //   "🌐 likely public"  — inference only.
   if (privacy === "private") {
     parts.push(`<span class="privacy-tag privacy-private">🔒 private</span>`);
+  } else if (privacy === "likely_private") {
+    parts.push(`<span class="privacy-tag privacy-private">🔒 likely private</span>`);
   } else if (privacy === "likely_public") {
     parts.push(`<span class="privacy-tag privacy-public">🌐 likely public</span>`);
   }
@@ -1649,6 +1694,17 @@ async function loadLists() {
     refreshActivePill();
     const kind = select.value || "everyone";
     refreshSortLabels(kind);
+    const descEl = $("#list-description");
+    if (descEl) {
+      const desc = LIST_DESCRIPTIONS[kind];
+      if (desc) {
+        descEl.textContent = desc;
+        descEl.hidden = false;
+      } else {
+        descEl.textContent = "";
+        descEl.hidden = true;
+      }
+    }
     const out = $("#list-output");
     out.dataset.listKind = kind;
     // For intersection, prefer the unsuppressed sections_full so that
