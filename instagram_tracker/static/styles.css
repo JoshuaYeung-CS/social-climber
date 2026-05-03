@@ -1035,10 +1035,26 @@ code {
 }
 .scan-details[open] summary::before { content: "▾ "; }
 .scan-detail-list {
-  max-height: 320px;
+  max-height: 360px;
   overflow-y: auto;
-  padding: 4px 12px 10px;
+  padding: 4px 12px 16px;
   border-top: 1px solid var(--border);
+  /* Hide the scrollbar visually — looks ugly mid-page on desktop and iOS
+     already hides it natively. The container is still scrollable via
+     wheel/touch/trackpad. A soft fade at the bottom hints at more content
+     when the list is taller than max-height. */
+  scrollbar-width: none;            /* Firefox */
+  -ms-overflow-style: none;          /* old IE / Edge */
+  -webkit-mask-image: linear-gradient(to bottom, black 90%, transparent);
+          mask-image: linear-gradient(to bottom, black 90%, transparent);
+}
+.scan-detail-list::-webkit-scrollbar { display: none; }
+/* Drop the fade once the user has scrolled to the bottom OR when content
+   doesn't overflow — both cases mean there's nothing below to hint at. */
+.scan-detail-list:not(.has-overflow),
+.scan-detail-list.scrolled-end {
+  -webkit-mask-image: none;
+          mask-image: none;
 }
 .scan-item {
   display: flex;

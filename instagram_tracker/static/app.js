@@ -220,6 +220,21 @@ async function refreshScanButton() {
 }
 refreshScanButton();
 
+// Toggles a "has-overflow" / "scrolled-end" class on a scrollable list so
+// the bottom-fade-mask (CSS) only shows when there's actually content
+// beyond the visible area. Run after rendering the details, then on scroll.
+function manageOverflowFade(el) {
+  if (!el) return;
+  const sync = () => {
+    const overflows = el.scrollHeight > el.clientHeight + 2;
+    el.classList.toggle("has-overflow", overflows);
+    const atBottom = overflows && (el.scrollTop + el.clientHeight >= el.scrollHeight - 4);
+    el.classList.toggle("scrolled-end", atBottom);
+  };
+  sync();
+  el.addEventListener("scroll", sync, { passive: true });
+}
+
 $("#scan-drive-btn")?.addEventListener("click", async () => {
   const btn = $("#scan-drive-btn");
   const status = $("#scan-status");
@@ -252,6 +267,15 @@ $("#scan-drive-btn")?.addEventListener("click", async () => {
         detailHtml = `<details class="scan-details"><summary class="muted small">Show ${result.details.length} per-file detail${result.details.length === 1 ? "" : "s"}</summary><div class="scan-detail-list">${items}</div></details>`;
       }
       status.innerHTML = summary + detailHtml;
+      // Initialise the fade-mask on first expand AND on subsequent expands
+      // (re-rendering the innerHTML wipes prior listeners).
+      const detailsEl = status.querySelector(".scan-details");
+      const listEl = status.querySelector(".scan-detail-list");
+      if (detailsEl && listEl) {
+        detailsEl.addEventListener("toggle", () => {
+          if (detailsEl.open) manageOverflowFade(listEl);
+        });
+      }
     }
     await loadHome();
   } catch (e) {
@@ -292,6 +316,13 @@ async function doImport(file) {
       ? `<details class="scan-details"><summary class="muted small">Show ${items.length} per-file detail${items.length === 1 ? "" : "s"}</summary><div class="scan-detail-list">${items.join("")}</div></details>`
       : "";
     status.innerHTML = summary + detailHtml;
+    const detailsEl = status.querySelector(".scan-details");
+    const listEl = status.querySelector(".scan-detail-list");
+    if (detailsEl && listEl) {
+      detailsEl.addEventListener("toggle", () => {
+        if (detailsEl.open) manageOverflowFade(listEl);
+      });
+    }
     _historyData = null;  // invalidate so the next History view refetches
     await loadHome();
     if (imported === 0 && skipped.length > 0) {
