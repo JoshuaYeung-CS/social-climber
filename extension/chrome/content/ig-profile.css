@@ -129,6 +129,25 @@
   text-decoration: none;
 }
 .igt-link:hover { color: #4f8cff; }
+.igt-vault-btn {
+  display: block;
+  width: 100%;
+  background: rgba(255, 180, 84, 0.10);
+  border: 1px solid rgba(255, 180, 84, 0.35);
+  color: #ffb454;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-bottom: 8px;
+  transition: all 100ms ease;
+}
+.igt-vault-btn:hover {
+  background: rgba(255, 180, 84, 0.18);
+  border-color: rgba(255, 180, 84, 0.55);
+  color: #ffd089;
+}
 .igt-pill {
   background: #18181b;
   color: #f1f1f3;

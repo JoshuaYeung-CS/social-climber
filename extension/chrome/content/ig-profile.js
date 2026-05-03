@@ -48,9 +48,10 @@ function isProfilePath(pathname) {
 }
 
 async function loadSettings() {
-  const stored = await chrome.storage.local.get(["trackerUrl", "showOverlay"]);
+  const stored = await chrome.storage.local.get(["trackerUrl", "vaultUrl", "showOverlay"]);
   return {
     trackerUrl: (stored.trackerUrl || "http://127.0.0.1:8000").replace(/\/$/, ""),
+    vaultUrl: (stored.vaultUrl || "").replace(/\/$/, ""),
     showOverlay: stored.showOverlay !== false,
   };
 }
@@ -89,6 +90,96 @@ async function toggleTag(username, flag, value) {
   });
   if (!r.ok) return null;
   return r.body;
+}
+
+// Find the largest currently-visible media element on the page. Used by
+// the Save to Vault button to capture whatever the user is actually
+// looking at (post viewer, story player, profile pic). Returns the
+// element + a guess at the kind based on the URL pattern.
+function findSaveableMedia() {
+  const candidates = Array.from(document.querySelectorAll("main img, main video, [role='dialog'] img, [role='dialog'] video"));
+  // Prefer videos (story / reel content) over images, and bigger over smaller.
+  let best = null;
+  let bestArea = 0;
+  for (const el of candidates) {
+    const r = el.getBoundingClientRect();
+    if (r.width < 80 || r.height < 80) continue;
+    // Exclude profile-pic header image — it's tiny relative to the post.
+    const isProfilePic = (el.alt || "").toLowerCase().includes("profile picture");
+    if (isProfilePic && bestArea > 0) continue;
+    const area = r.width * r.height + (el.tagName === "VIDEO" ? 1_000_000 : 0);
+    if (area > bestArea) {
+      best = el;
+      bestArea = area;
+    }
+  }
+  if (!best) return null;
+  const path = window.location.pathname;
+  let kind = "post";
+  if (/^\/stories\/highlights\//.test(path)) kind = "highlight";
+  else if (/^\/stories\//.test(path))         kind = "story";
+  else if (/^\/reel\//.test(path))            kind = "reel";
+  else if (/^\/p\//.test(path))               kind = "post";
+  else if (/^\/[^/]+\/?$/.test(path))         kind = "post"; // profile page — best guess
+  return {
+    element: best,
+    src: best.src || best.currentSrc,
+    media_type: best.tagName === "VIDEO" ? "video" : "image",
+    kind,
+  };
+}
+
+// Save the currently visible media to the vault. Fetches the bytes via
+// the background service worker (so cookies / signed URLs work, and we
+// dodge mixed-content blocking), base64-encodes, and POSTs to the vault.
+async function saveToVault(username) {
+  if (!_settings.vaultUrl) {
+    alert("Vault URL isn't set. Open the extension popup → Vault URL → Save settings.");
+    return;
+  }
+  const cap = findSaveableMedia();
+  if (!cap || !cap.src) {
+    alert("Couldn't find a media element on this page. Try opening a post / story / reel first.");
+    return;
+  }
+
+  // Fetch the bytes via the SW (avoids mixed-content + uses page cookies).
+  const r = await new Promise((resolve) => {
+    chrome.runtime.sendMessage(
+      { type: "tracker-fetch-bytes", url: cap.src },
+      (resp) => resolve(resp || { ok: false, error: "no response" })
+    );
+  });
+  if (!r.ok || !r.body) {
+    alert(`Couldn't download media: ${r.error || "unknown error"}`);
+    return;
+  }
+
+  // Probe the vault first so we can fail loudly if it's locked.
+  const health = await bgFetch(`${_settings.vaultUrl}/api/health`).catch(() => null);
+  if (!health || !health.ok) {
+    alert("Vault is offline. Mount the encrypted volume and run `python -m vault` first.");
+    return;
+  }
+
+  const save = await bgFetch(`${_settings.vaultUrl}/api/save`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      kind: cap.kind,
+      username: username,
+      ig_url: window.location.href,
+      ig_id: (window.location.pathname.match(/\/(?:p|reel|stories(?:\/highlights)?)\/([^/]+)/) || [])[1] || null,
+      media_url: cap.src,
+      media_type: cap.media_type,
+      media_bytes_b64: r.body,
+    }),
+  });
+  if (save.ok) {
+    alert(`Saved to vault: ${cap.kind} from @${username}`);
+  } else {
+    alert(`Save failed: ${save.error || save.status || "unknown"}`);
+  }
 }
 
 // Send an observed-profile snapshot back to the local tracker. Fire-and-
@@ -392,6 +483,13 @@ function renderPanel(panel, username, data) {
     return `<button class="igt-tag ${on ? "on" : ""}" data-flag="${flag}" title="${TAG_LABELS[flag]}">${TAG_SYMS[flag]}</button>`;
   }).join("");
 
+  // Save-to-vault button only appears when the user has set a vault URL
+  // in the popup. Without that, the vault feature is fully invisible —
+  // the main tracker app's identity is unchanged.
+  const saveBtn = _settings.vaultUrl
+    ? `<button class="igt-vault-btn" data-action="save-vault" title="Save current visible media to your encrypted vault">💾 Save to vault</button>`
+    : "";
+
   panel.innerHTML = `
     <div class="igt-head">
       <span class="igt-title">IG Tracker</span>
@@ -404,10 +502,14 @@ function renderPanel(panel, username, data) {
       <div class="igt-rel igt-rel-${relKind}">${escapeHtml(rel)}</div>
       ${lines.length ? `<ul class="igt-lines">${lines.map(l => `<li>${escapeHtml(l)}</li>`).join("")}</ul>` : ""}
       <div class="igt-tags">${tagBtns}</div>
+      ${saveBtn}
       <a class="igt-link" href="${_settings.trackerUrl}/?lookup=${encodeURIComponent(username)}" target="_blank" rel="noopener">↗ open in tracker</a>
     </div>
   `;
   bindHeaderActions(panel);
+  panel.querySelector("[data-action='save-vault']")?.addEventListener("click", () => {
+    saveToVault(username);
+  });
   panel.querySelectorAll(".igt-tag").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const flag = btn.dataset.flag;

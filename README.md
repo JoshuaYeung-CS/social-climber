@@ -109,6 +109,22 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 It will ask before overwriting. After regenerating you'll need to re-trust on devices that had the old cert.
 
+### Optional: encrypted media vault
+
+A separate, isolated module for personal-archival of media you actively view on Instagram. Lives at [vault/](vault/) with its own server, port (8765), database, and UI — completely separate from the main tracker. Refuses to run unless its encrypted volume is mounted.
+
+```bash
+./scripts/make-vault.sh                 # one-time: creates AES-256 sparsebundle, prompts for passphrase
+open "$HOME/Documents/IG Vault.sparsebundle"   # mount it (Finder prompts for passphrase)
+python -m vault                          # runs at http://localhost:8765
+```
+
+When done: stop the server (Ctrl-C) AND eject the volume in Finder.
+
+The browser extension (also opt-in) adds a "Save to vault" button to its overlay. Set Vault URL in the extension popup to enable.
+
+**Read [vault/SECURITY.md](vault/SECURITY.md) before relying on this.** Encryption protects against post-hoc disclosure (cold drive analysis, lost laptop). It does NOT protect against shoulder-surfing, screen-recording malware, or coercion. Use [scripts/check-screen-recording.sh](scripts/check-screen-recording.sh) to audit which apps have macOS Screen Recording permission.
+
 ## Project layout
 
 ```

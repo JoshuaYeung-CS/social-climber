@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0e0e10" />
+  <link rel="stylesheet" href="/styles.css" />
+  <title>IG Vault</title>
+</head>
+<body>
+  <header class="topbar">
+    <h1>IG Vault</h1>
+    <span class="muted small" id="count">0 items</span>
+  </header>
+  <main>
+    <div class="warn-banner">
+      <strong>Personal archival only.</strong> The vault is local-only,
+      encrypted at rest by macOS APFS. Don't share, post, or export
+      contents. Eject the volume in Finder when you're done to re-lock.
+    </div>
+    <div class="filter-row">
+      <input id="filter-user" placeholder="Filter by username…" type="search" />
+      <select id="filter-kind">
+        <option value="">All kinds</option>
+        <option value="story">Stories</option>
+        <option value="post">Posts</option>
+        <option value="highlight">Highlights</option>
+        <option value="reel">Reels</option>
+      </select>
+    </div>
+    <div id="grid" class="grid"></div>
+  </main>
+
+  <div id="viewer" class="viewer" hidden>
+    <div class="viewer-backdrop" data-close></div>
+    <div class="viewer-body">
+      <button class="viewer-close" data-close>×</button>
+      <div id="viewer-content"></div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

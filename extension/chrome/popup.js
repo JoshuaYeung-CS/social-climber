@@ -14,6 +14,7 @@
 const DEFAULT_TRACKER = "http://127.0.0.1:8000";
 const DEFAULTS = {
   trackerUrl: DEFAULT_TRACKER,
+  vaultUrl: "",            // empty = vault save button hidden
   igPassword: "",
   autosubmitGoogle: false,
   showOverlay: true,
@@ -49,6 +50,7 @@ async function checkTrackerReachable(url) {
 document.addEventListener("DOMContentLoaded", async () => {
   const settings = await loadSettings();
   el("tracker-url").value = settings.trackerUrl;
+  el("vault-url").value = settings.vaultUrl;
   el("ig-password").value = settings.igPassword;
   el("autosubmit-google").checked = settings.autosubmitGoogle;
   el("show-overlay").checked = settings.showOverlay;
@@ -81,7 +83,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   el("save-settings").addEventListener("click", async () => {
     const patch = {
       trackerUrl: el("tracker-url").value.trim() || DEFAULT_TRACKER,
-      igPassword: el("ig-password").value,           // empty = don't autofill
+      vaultUrl: el("vault-url").value.trim(),          // empty = save-to-vault button hidden
+      igPassword: el("ig-password").value,             // empty = don't autofill
       autosubmitGoogle: el("autosubmit-google").checked,
       showOverlay: el("show-overlay").checked,
     };

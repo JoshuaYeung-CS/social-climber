@@ -12,7 +12,9 @@
     "https://accountscenter.instagram.com/*",
     "https://accounts.google.com/*",
     "http://localhost:8000/*",
-    "http://127.0.0.1:8000/*"
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8765/*",
+    "http://127.0.0.1:8765/*"
   ],
   "action": {
     "default_popup": "popup.html",
