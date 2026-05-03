@@ -233,8 +233,12 @@ def _home_compute():
             # or following are likely IG-export quirks rather than real
             # unfollows or removals.
             ig_bounced = curr.pending | curr.incoming_requests
-            ever_removed = ever_left_following - ever_self - ig_bounced
-            ever_unfollowed_you -= ig_bounced
+            # "Came back" filter: an account currently in following (or
+            # followers) didn't remove you / didn't unfollow you — they had
+            # a one-snapshot blip in some past export and reappeared. See
+            # the matching comment in the lists path below.
+            ever_removed = ever_left_following - ever_self - ig_bounced - curr.following
+            ever_unfollowed_you = ever_unfollowed_you - ig_bounced - curr.followers
 
             # Strip rename chains so renames don't inflate "they unfollowed/removed you" counts.
             alias_map = q.username_alias_map(conn)
@@ -887,8 +891,16 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # so a disappearance from followers/following is probably an IG
         # export quirk, not a real unfollow/removal.
         ig_bounced = sd.pending | sd.incoming_requests
-        ever_removed_you = ever_left_following - ever_self - ig_bounced
-        ever_unfollowed_you = ever_unfollowed_you - ig_bounced
+        # "Came back" filter: if an account is CURRENTLY in your following
+        # (or followers, for the inbound side), they didn't remove you /
+        # didn't unfollow you. They just had a one-snapshot blip in some
+        # past export and reappeared. Without this, the cumulative set
+        # accumulates ~every account ever in following over many snapshots
+        # (each export occasionally drops random rows, IG export quirk),
+        # so "Ever removed you as follower" trends toward the size of
+        # current following rather than the count of real removals.
+        ever_removed_you = ever_left_following - ever_self - ig_bounced - sd.following
+        ever_unfollowed_you = ever_unfollowed_you - ig_bounced - sd.followers
 
         # Also exclude usernames that are part of a detected rename chain whose CURRENT
         # alias is still in your following/followers — they didn't really leave.
