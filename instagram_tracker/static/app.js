@@ -334,6 +334,30 @@ function bindCheckFlow({ inputId, buttonId, resultId, saveToQueue }) {
 bindCheckFlow({ inputId: "lookup-input", buttonId: "lookup-go", resultId: "lookup-result", saveToQueue: false });
 bindCheckFlow({ inputId: "queue-input",  buttonId: "queue-go",  resultId: "queue-result",  saveToQueue: true  });
 
+// One-click clear: empties the textarea + result panel and refocuses the
+// input so you can immediately type the next account without scrolling
+// back up. Hidden when the textarea is empty so the button doesn't take
+// up space when there's nothing to clear.
+function bindClearButton({ inputId, clearId, resultId }) {
+  const input = $(`#${inputId}`);
+  const btn = $(`#${clearId}`);
+  const result = $(`#${resultId}`);
+  if (!input || !btn) return;
+  const sync = () => {
+    btn.style.display = input.value || (result && result.innerHTML.trim()) ? "" : "none";
+  };
+  btn.addEventListener("click", () => {
+    input.value = "";
+    if (result) result.innerHTML = "";
+    sync();
+    input.focus();
+  });
+  input.addEventListener("input", sync);
+  sync();
+}
+bindClearButton({ inputId: "lookup-input", clearId: "lookup-clear", resultId: "lookup-result" });
+bindClearButton({ inputId: "queue-input",  clearId: "queue-clear",  resultId: "queue-result"  });
+
 async function runCheck({ inputId, resultId, saveToQueue }) {
   const text = $(`#${inputId}`).value;
   const lines = text.split(/\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));

@@ -120,7 +120,10 @@
         <h2>Look up account</h2>
         <p class="muted">Search a username or link to see full history. Bulk-paste many lines for a seen-vs-new report. Nothing gets added to the follow queue.</p>
         <textarea id="lookup-input" rows="3" placeholder="@username or instagram.com/...&#10;Add more lines for a bulk lookup."></textarea>
-        <button class="primary" id="lookup-go">Look up</button>
+        <div class="check-actions">
+          <button class="primary" id="lookup-go">Look up</button>
+          <button type="button" class="ghost-btn" id="lookup-clear">Clear</button>
+        </div>
         <div id="lookup-result"></div>
       </div>
 
@@ -128,7 +131,10 @@
         <h2>Add to follow queue</h2>
         <p class="muted">Paste accounts to triage and stage for following. New entries (never seen, never requested) get added to the Follow queue above.</p>
         <textarea id="queue-input" rows="3" placeholder="@username or instagram.com/...&#10;Add more lines for bulk."></textarea>
-        <button class="primary" id="queue-go">Add to queue</button>
+        <div class="check-actions">
+          <button class="primary" id="queue-go">Add to queue</button>
+          <button type="button" class="ghost-btn" id="queue-clear">Clear</button>
+        </div>
         <div id="queue-result"></div>
       </div>
     </section>
