@@ -450,6 +450,8 @@ function renderPanel(panel, username, data) {
     lines.push(`🔒 private`);
   } else if (data.privacy === "likely_private") {
     lines.push(`🔒 likely private`);
+  } else if (data.privacy === "likely_public" && (userFollows || userHasPending)) {
+    lines.push(`🌐 public`);
   } else if (data.privacy === "likely_public") {
     lines.push(`🌐 likely public`);
   }
