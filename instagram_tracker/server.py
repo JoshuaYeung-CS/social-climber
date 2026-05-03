@@ -1618,11 +1618,31 @@ def _lookup_compute(username: str, profile_url: str):
             currently_pending = username in sd.pending
             currently_incoming = username in sd.incoming_requests
 
+        # Latest extension-captured profile observation (counts, bio,
+        # verified, etc.). Returned alongside the snapshot data so the UI
+        # can render live profile facts without re-visiting the IG page.
+        obs_row = conn.execute(
+            "SELECT observed_at, display_name, bio, external_link, "
+            "follower_count, following_count, post_count, verified, "
+            "is_private, profile_pic_url "
+            "FROM profile_observations WHERE username = ?",
+            (username,),
+        ).fetchone()
+        observation = None
+        if obs_row is not None:
+            observation = {k: obs_row[k] for k in obs_row.keys()}
+            observation["verified"] = bool(observation.get("verified"))
+            ip = observation.get("is_private")
+            observation["is_private"] = (
+                None if ip is None else bool(ip)
+            )
+
         current_state = {
             "currently_following": currently_following,
             "currently_follower": currently_follower,
             "currently_pending": currently_pending,
             "currently_incoming_request": currently_incoming,
+            "observation": observation,
         }
 
         if summary is None:
@@ -1720,6 +1740,81 @@ def followup_clear():
 
 
 # ---------- tags ----------
+
+def _parse_count(s):
+    """Parse IG's count format ("1,234", "5.5K", "1.2M") into an integer.
+    Returns None on unparseable input — callers store NULL in that case."""
+    if s is None:
+        return None
+    try:
+        s = str(s).strip().replace(",", "").replace(" ", "")
+        if not s:
+            return None
+        mult = 1
+        if s[-1].upper() in "KMB":
+            mult = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000}[s[-1].upper()]
+            s = s[:-1]
+        return int(round(float(s) * mult))
+    except (ValueError, TypeError):
+        return None
+
+
+@app.post("/api/profile-observation")
+def profile_observation(payload: dict = Body(...)):
+    """Upsert a profile observation captured by the browser extension as the
+    user browses Instagram. Each call overwrites the previous observation
+    for that username — current state only, no history (the user can rely
+    on visiting the profile again if they want a refresh)."""
+    username = (payload.get("username") or "").strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Need 'username'.")
+    from datetime import datetime, timezone
+    fields = {
+        "username": username,
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "display_name":     (payload.get("display_name") or None),
+        "bio":              (payload.get("bio") or None),
+        "external_link":    (payload.get("external_link") or None),
+        "follower_count":   _parse_count(payload.get("followers")),
+        "following_count":  _parse_count(payload.get("following")),
+        "post_count":       _parse_count(payload.get("posts")),
+        "verified":         1 if payload.get("verified") else 0,
+        "is_private":       (1 if payload.get("is_private") is True
+                              else (0 if payload.get("is_private") is False else None)),
+        "profile_pic_url":  (payload.get("profile_pic") or None),
+    }
+    with db_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO profile_observations (
+                username, observed_at, display_name, bio, external_link,
+                follower_count, following_count, post_count, verified,
+                is_private, profile_pic_url
+            ) VALUES (
+                :username, :observed_at, :display_name, :bio, :external_link,
+                :follower_count, :following_count, :post_count, :verified,
+                :is_private, :profile_pic_url
+            )
+            ON CONFLICT(username) DO UPDATE SET
+                observed_at      = excluded.observed_at,
+                display_name     = COALESCE(excluded.display_name, display_name),
+                bio              = COALESCE(excluded.bio, bio),
+                external_link    = COALESCE(excluded.external_link, external_link),
+                follower_count   = COALESCE(excluded.follower_count, follower_count),
+                following_count  = COALESCE(excluded.following_count, following_count),
+                post_count       = COALESCE(excluded.post_count, post_count),
+                verified         = excluded.verified,
+                is_private       = COALESCE(excluded.is_private, is_private),
+                profile_pic_url  = COALESCE(excluded.profile_pic_url, profile_pic_url)
+            """,
+            fields,
+        )
+        conn.commit()
+    # Bumping the tag version is the cheapest way to invalidate the lookup
+    # cache so the next /api/lookup for this username picks up fresh data.
+    _bump_tag_version()
+    return {"ok": True}
+
 
 @app.get("/api/tags/{flag}")
 def list_tags(flag: str):

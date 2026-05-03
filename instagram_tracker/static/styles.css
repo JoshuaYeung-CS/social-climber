@@ -1320,6 +1320,42 @@ textarea {
 }
 .warn-banner.info-banner strong { color: var(--text); }
 .account-detail .url { font-size: 13px; color: var(--muted); word-break: break-all; }
+
+/* Observation block — live IG profile facts captured by the extension */
+.obs-block {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 12px 0;
+  font-size: 13px;
+}
+.obs-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.obs-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.obs-name {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+.obs-check { color: var(--accent); font-weight: 700; }
+.obs-counts { font-size: 13px; color: var(--text); margin-bottom: 4px; }
+.obs-counts strong { font-variant-numeric: tabular-nums; }
+.obs-bio { font-size: 12px; color: var(--muted); line-height: 1.4; margin: 4px 0; white-space: pre-wrap; }
+.obs-link { font-size: 12px; }
+.obs-link a { color: var(--accent); }
+.obs-private { font-size: 12px; color: var(--warn); margin-top: 6px; }
 .account-detail .url a { color: var(--accent); text-decoration: none; }
 .tag-toggles { display: flex; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
 .tag-toggle {

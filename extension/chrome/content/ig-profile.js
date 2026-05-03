@@ -91,6 +91,30 @@ async function toggleTag(username, flag, value) {
   return r.body;
 }
 
+// Send an observed-profile snapshot back to the local tracker. Fire-and-
+// forget — we don't await, the UI render shouldn't block on this. Only
+// posts when we actually picked up SOMETHING from the DOM (otherwise
+// we'd be sending empty rows that overwrite real data with NULLs).
+function sendProfileObservation(username, profile, privacyDom) {
+  const hasAnything = profile.posts || profile.followers || profile.following
+    || profile.bio || profile.display_name || profile.verified
+    || profile.profile_pic || profile.external_link
+    || privacyDom === "private";
+  if (!hasAnything) return;
+  // is_private: only send TRUE when DOM actually showed the banner. Don't
+  // send FALSE on banner-absent — could be a private account we follow.
+  const is_private = privacyDom === "private" ? true : null;
+  bgFetch(`${_settings.trackerUrl}/api/profile-observation`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      username,
+      ...profile,
+      is_private,
+    }),
+  }).catch(() => {});
+}
+
 function fmtDate(iso) {
   if (!iso) return "";
   const d = new Date(iso + (iso.length === 10 ? "T12:00:00Z" : ""));
@@ -232,13 +256,13 @@ function detectPrivacyFromDOM() {
     // Locked-emoji tends to appear in private profile titles for some locales.
     if (/🔒/.test(og)) return "private";
 
-    // Public detection: presence of post-grid images with the alt-text
-    // pattern IG uses, AND the page body contains a "posts"/"followers"
-    // counts line. Both must be true to avoid false positives on the
-    // logged-out splash page or transient render states.
-    const postImages = document.querySelectorAll('main img[alt*="Photo by"], main img[alt*="Post by"]').length;
-    const hasCounters = /\d[\d,. KMm]*\s+(posts|followers|following)/i.test(text);
-    if (postImages > 0 && hasCounters) return "public";
+    // We deliberately don't return "public" from the DOM. A private
+    // account you ALREADY FOLLOW renders the same way a public account
+    // does — posts visible, no banner — so the absence of the banner
+    // can't prove public. The lookup endpoint's snapshot-derived
+    // likely_public inference handles that case via observation: if you
+    // followed someone with no prior pending entry, that's the public
+    // signal, not anything visible in the current DOM.
   } catch (e) {
     // DOM access can throw during very early page lifecycle — fall through.
   }
@@ -322,7 +346,6 @@ function renderPanel(panel, username, data) {
   // Private" message), it's definitely public.
   const observedPrivacy = detectPrivacyFromDOM();
   if (observedPrivacy === "private") lines.push(`🔒 private (confirmed)`);
-  else if (observedPrivacy === "public") lines.push(`🌐 public (confirmed)`);
   else if (data.privacy === "likely_private") lines.push(`🔒 likely private`);
   else if (data.privacy === "likely_public") lines.push(`🌐 likely public`);
 
@@ -331,6 +354,10 @@ function renderPanel(panel, username, data) {
   // tracker DB at all (only what IG's data export gives us is). Showing
   // them lets the overlay double as a "snapshot of who they are right now".
   const profile = extractProfileFromDOM();
+  // Persist what we observed back to the local tracker DB so the rest of
+  // the app (lookup, lists) can show these facts even when not on the IG
+  // page. Fire-and-forget — doesn't block the render.
+  sendProfileObservation(username, profile, observedPrivacy);
   const countsParts = [];
   if (profile.posts)      countsParts.push(`${profile.posts} posts`);
   if (profile.followers)  countsParts.push(`${profile.followers} followers`);

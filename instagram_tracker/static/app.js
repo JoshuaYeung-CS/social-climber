@@ -585,11 +585,34 @@ function renderLookup(data) {
       </div>
     `;
   }
+  // Live profile facts captured by the browser extension when the user
+  // last visited this account on instagram.com. Optional — empty if the
+  // extension hasn't observed this profile yet.
+  const obs = data.observation;
+  const obsBlock = obs ? `
+    <div class="obs-block">
+      <div class="obs-head">
+        <span class="obs-label">Live page facts</span>
+        <span class="muted small">observed ${escapeHtml(fmtDate(obs.observed_at?.slice(0, 10)) || "")}</span>
+      </div>
+      ${obs.display_name ? `<div class="obs-name">${escapeHtml(obs.display_name)}${obs.verified ? ' <span class="obs-check">✓</span>' : ""}</div>` : (obs.verified ? `<div class="obs-name"><span class="obs-check">✓ verified</span></div>` : "")}
+      ${(obs.post_count != null || obs.follower_count != null || obs.following_count != null) ? `<div class="obs-counts">${[
+        obs.post_count != null ? `<strong>${obs.post_count.toLocaleString()}</strong> posts` : "",
+        obs.follower_count != null ? `<strong>${obs.follower_count.toLocaleString()}</strong> followers` : "",
+        obs.following_count != null ? `<strong>${obs.following_count.toLocaleString()}</strong> following` : "",
+      ].filter(Boolean).join(" · ")}</div>` : ""}
+      ${obs.bio ? `<div class="obs-bio">${escapeHtml(obs.bio)}</div>` : ""}
+      ${obs.external_link ? `<div class="obs-link"><a href="${escapeAttr(obs.external_link)}" target="_blank" rel="noopener">${escapeHtml(obs.external_link)}</a></div>` : ""}
+      ${obs.is_private === true ? `<div class="obs-private">🔒 private (confirmed via page banner)</div>` : ""}
+    </div>
+  ` : "";
+
   return `
     <div class="account-detail">
       <h3>${escapeHtml(data.username)}</h3>
       <div class="url"><a href="${escapeAttr(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a></div>
       ${renderTagToggles(data.tags)}
+      ${obsBlock}
       ${data.aliases && data.aliases.length > 1 ? `<div class="warn-banner info-banner">↪ This account has been renamed. Aliases (oldest → newest): ${data.aliases.map((a) => a === data.username ? `<strong>${escapeHtml(a)}</strong>` : `<a href="#" class="alias-link" data-username="${escapeAttr(a)}">${escapeHtml(a)}</a>`).join(" → ")}</div>` : ""}
       ${data.follow_runs_count > 1 ? `<div class="warn-banner">⚠ You've followed this person <strong>${data.follow_runs_count} separate times</strong> across history.</div>` : ""}
       ${data.follower_runs_count > 1 ? `<div class="warn-banner">⚠ They've followed you <strong>${data.follower_runs_count} separate times</strong> across history.</div>` : ""}

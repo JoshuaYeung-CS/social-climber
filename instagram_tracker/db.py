@@ -100,6 +100,26 @@ CREATE TABLE IF NOT EXISTS followup_queue (
     source_input TEXT,
     added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Live profile facts pulled from the IG page DOM by the browser
+-- extension as the user browses. Not part of the official IG export
+-- (which only gives username + href + timestamp). Each observation
+-- overwrites the previous one for that username — current state only.
+-- `is_private` is 1 only when we saw the literal "Account is Private"
+-- banner; NULL otherwise (we can't prove public from the DOM).
+CREATE TABLE IF NOT EXISTS profile_observations (
+    username TEXT PRIMARY KEY,
+    observed_at TEXT NOT NULL,
+    display_name TEXT,
+    bio TEXT,
+    external_link TEXT,
+    follower_count INTEGER,
+    following_count INTEGER,
+    post_count INTEGER,
+    verified INTEGER NOT NULL DEFAULT 0,
+    is_private INTEGER,
+    profile_pic_url TEXT
+);
 """
 
 
