@@ -997,10 +997,12 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
 
         now = datetime.now(timezone.utc)
 
-        # Snapshot id -> label/created_at for resolving "when did <X> happen"
+        # Snapshot id -> label/created_at/taken_at for resolving "when did <X>
+        # happen". taken_at is the canonical chronological time (parsed from
+        # the export's filename); created_at is when the import ran.
         snap_meta: dict[int, dict] = {}
         for s in q.list_snapshots(conn):
-            snap_meta[s.id] = {"label": s.label, "created_at": s.created_at}
+            snap_meta[s.id] = {"label": s.label, "created_at": s.created_at, "taken_at": s.taken_at}
 
         def parse_label_date(label: str | None):
             if not label or len(label) < 10 or label[4] != "-":
@@ -1260,6 +1262,27 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
                 text, severity = bucket_status(kind, u)
                 row["bucket_status"] = text
                 row["bucket_status_kind"] = severity
+            # "Last followed you" semantics: the snapshot we LAST observed
+            # them as a follower. The unfollow itself happened sometime
+            # between this snapshot's taken_at and the next one's. Use the
+            # snapshot's taken_at (chronological time) as the timestamp —
+            # NOT the per-row export_timestamp, which is when they originally
+            # started following you (a fact IG persists across every snapshot
+            # they remain a follower in, so it never changes).
+            #
+            # Separately, expose `started_following_you_ts` so the row can
+            # still show the precise moment they began following — that fact
+            # is meaningful and accurate.
+            def _last_seen_follower_dt(sid: int):
+                meta = snap_meta.get(sid, {})
+                ta = meta.get("taken_at")
+                if ta:
+                    try:
+                        return datetime.fromisoformat(ta.replace("Z", "+00:00"))
+                    except ValueError:
+                        pass
+                return parse_label_date(meta.get("label"))
+
             if kind == "not_following_you_back":
                 last_sid = last_followers_sid.get(u)
                 if last_sid is None:
@@ -1267,18 +1290,18 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
                     row["last_followed_you_at"] = None
                     row["last_followed_you_days_ago"] = None
                 else:
-                    # Prefer the per-row export timestamp (exact second IG
-                    # recorded) over the snapshot label (date-precise).
-                    exact_ts = last_followed_you_ts.get(u)
-                    if exact_ts:
-                        d = datetime.fromtimestamp(exact_ts, tz=timezone.utc)
-                        row["last_followed_you_ts"] = exact_ts
-                    else:
-                        d = parse_label_date(snap_meta.get(last_sid, {}).get("label"))
+                    d = _last_seen_follower_dt(last_sid)
                     row["ever_followed_you"] = True
-                    row["last_followed_you_at"] = d.date().isoformat() if d else None
-                    row["last_followed_you_days_ago"] = (now - d).days if d else None
+                    if d:
+                        if d.tzinfo is None:
+                            d = d.replace(tzinfo=timezone.utc)
+                        row["last_followed_you_at"] = d.date().isoformat()
+                        row["last_followed_you_days_ago"] = (now - d).days
+                        row["last_followed_you_ts"] = int(d.timestamp())
                     row["last_followed_you_snapshot_id"] = last_sid
+                    started_ts = last_followed_you_ts.get(u)
+                    if started_ts:
+                        row["started_following_you_ts"] = started_ts
 
             # History-list dates: populate the chronological field that's actually
             # meaningful for the row's list, so the sort dropdown does the right
@@ -1286,15 +1309,16 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
             if kind in LAST_FOLLOWED_YOU_KINDS and "last_followed_you_at" not in row:
                 last_sid = last_in_followers_sid.get(u)
                 if last_sid is not None:
-                    exact_ts = last_followed_you_ts.get(u)
-                    if exact_ts:
-                        d = datetime.fromtimestamp(exact_ts, tz=timezone.utc)
-                        row["last_followed_you_ts"] = exact_ts
-                    else:
-                        d = parse_label_date(snap_meta.get(last_sid, {}).get("label"))
+                    d = _last_seen_follower_dt(last_sid)
                     if d:
+                        if d.tzinfo is None:
+                            d = d.replace(tzinfo=timezone.utc)
                         row["last_followed_you_at"] = d.date().isoformat()
                         row["last_followed_you_days_ago"] = (now - d).days
+                        row["last_followed_you_ts"] = int(d.timestamp())
+                    started_ts = last_followed_you_ts.get(u)
+                    if started_ts:
+                        row["started_following_you_ts"] = started_ts
             if kind in LAST_IN_FOLLOWING_KINDS:
                 last_sid = last_in_following_sid.get(u)
                 if last_sid is not None:

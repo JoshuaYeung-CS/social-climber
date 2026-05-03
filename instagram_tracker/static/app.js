@@ -1216,8 +1216,19 @@ function renderListRow(item) {
   if (item.aliases && item.aliases.length > 1) parts.push(`<span class="info-tag">renamed: ${escapeHtml(item.aliases.join(' → '))}</span>`);
   if (item.ever_followed_you === false) parts.push(`<span class="never">never followed back</span>`);
   else if (item.ever_followed_you === true) {
-    if (item.last_followed_you_ts) parts.push(`stopped following you on ${escapeHtml(fmtDateTime(item.last_followed_you_ts))}`);
-    else if (item.last_followed_you_at) parts.push(`stopped following you on ${escapeHtml(fmtDate(item.last_followed_you_at))}`);
+    // started_following_you_ts is IG's exact moment they began following you
+    // (preserved across snapshots). last_followed_you_ts is the snapshot
+    // taken_at of the LAST snapshot we observed them as a follower — the
+    // unfollow itself happened sometime after that, but we don't know
+    // exactly when (only as precise as our snapshot cadence).
+    if (item.started_following_you_ts) {
+      parts.push(`they followed you on ${escapeHtml(fmtDateTime(item.started_following_you_ts))}`);
+    }
+    if (item.last_followed_you_ts) {
+      parts.push(`last seen as follower around ${escapeHtml(fmtDateTime(item.last_followed_you_ts))}`);
+    } else if (item.last_followed_you_at) {
+      parts.push(`last seen as follower around ${escapeHtml(fmtDate(item.last_followed_you_at))}`);
+    }
   }
   sub = parts.join(" · ");
 

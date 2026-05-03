@@ -15,6 +15,7 @@ class SnapshotMeta:
     created_at: str
     label: str | None
     source_path: str | None
+    taken_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -33,10 +34,13 @@ def list_snapshots(conn: sqlite3.Connection) -> list[SnapshotMeta]:
     """Snapshots in chronological order (taken_at ASC, id as tiebreaker for
     same-second imports)."""
     rows = conn.execute(
-        "SELECT id, created_at, label, source_path FROM snapshots "
+        "SELECT id, created_at, label, source_path, taken_at FROM snapshots "
         "ORDER BY taken_at ASC, id ASC"
     ).fetchall()
-    return [SnapshotMeta(r["id"], r["created_at"], r["label"], r["source_path"]) for r in rows]
+    return [
+        SnapshotMeta(r["id"], r["created_at"], r["label"], r["source_path"], r["taken_at"])
+        for r in rows
+    ]
 
 
 def latest_id(conn: sqlite3.Connection) -> int | None:
