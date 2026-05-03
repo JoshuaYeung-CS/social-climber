@@ -625,11 +625,8 @@ function renderLookup(data) {
       <div class="facts">
         ${(() => {
           const confirmed = data.observation?.is_private === true;
-          const directContact = data.currently_following || data.currently_pending;
           if (confirmed) return `<div class="row"><span class="key">Privacy</span><span>🔒 private (banner shown)</span></div>`;
-          if (data.privacy === "likely_private" && directContact) return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
           if (data.privacy === "likely_private") return `<div class="row"><span class="key">Privacy</span><span>🔒 likely private</span></div>`;
-          if (data.privacy === "likely_public" && directContact) return `<div class="row"><span class="key">Privacy</span><span>🌐 public</span></div>`;
           if (data.privacy === "likely_public") return `<div class="row"><span class="key">Privacy</span><span>🌐 likely public</span></div>`;
           return "";
         })()}
@@ -1350,23 +1347,16 @@ function renderListRow(item) {
   if (item.unfollowed_ts) parts.push(`you unfollowed ${escapeHtml(fmtDateTime(item.unfollowed_ts))}`);
   if (item.mutual_since_at) parts.push(`mutual since ${escapeHtml(fmtDate(item.mutual_since_at))}`);
   if (item.history_status === "re-engaged") parts.push(`<span class="info-tag">re-engaged</span>`);
-  // Drop the "likely" hedge when we have direct confirmation. Two paths:
-  //   - private: extension saw the literal "Account is Private" banner
-  //     (privacy_confirmed_private), OR you sent a request that was
-  //     accepted (likely_private + you currently follow / have pending
-  //     — only private accounts gate behind a request).
-  //   - public: you currently follow them AND inference flagged them
-  //     public. The follow happened with no pending step observed in
-  //     your dense snapshot history → very reliably public.
-  const directContact = item.currently_following || item.currently_pending;
+  // "private" without the "likely" hedge ONLY when the extension actually
+  // visited the IG profile page and saw the "Account is Private" banner.
+  // Inference from snapshot history stays "likely" — even when reliable
+  // (likely_private + you-follow is high confidence), keeping the hedge
+  // makes the label accurately reflect what we know for certain vs what
+  // we deduced. Lower expectation that "private" means "I actually saw it".
   if (item.privacy_confirmed_private) {
-    parts.push(`<span class="privacy-tag privacy-private">🔒 private</span>`);
-  } else if (item.privacy === "likely_private" && directContact) {
     parts.push(`<span class="privacy-tag privacy-private">🔒 private</span>`);
   } else if (item.privacy === "likely_private") {
     parts.push(`<span class="privacy-tag privacy-private">🔒 likely private</span>`);
-  } else if (item.privacy === "likely_public" && directContact) {
-    parts.push(`<span class="privacy-tag privacy-public">🌐 public</span>`);
   } else if (item.privacy === "likely_public") {
     parts.push(`<span class="privacy-tag privacy-public">🌐 likely public</span>`);
   }
