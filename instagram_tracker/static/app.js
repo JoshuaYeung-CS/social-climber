@@ -359,6 +359,50 @@ function bindClearButton({ inputId, clearId, resultId }) {
 bindClearButton({ inputId: "lookup-input", clearId: "lookup-clear",       resultId: "lookup-result" });
 bindClearButton({ inputId: "queue-input",  clearId: "queue-input-clear",  resultId: "queue-result"  });
 
+// Paste button: pulls clipboard text and appends to the textarea (with a
+// newline separator if there's existing content). Uses the async Clipboard
+// API which works on Chrome/Edge/Firefox over localhost or HTTPS, and on
+// Safari (Mac + iOS 13.4+) inside a user-gesture handler. If the API is
+// blocked or unavailable, falls back to focusing the input so the user
+// can paste manually with Cmd+V / long-press.
+function bindPasteButton({ inputId, pasteId }) {
+  const input = $(`#${inputId}`);
+  const btn = $(`#${pasteId}`);
+  if (!input || !btn) return;
+  btn.addEventListener("click", async () => {
+    if (!navigator.clipboard || !navigator.clipboard.readText) {
+      input.focus();
+      toast("Clipboard API not available. Long-press the box → Paste.");
+      return;
+    }
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text) {
+        input.focus();
+        toast("Clipboard is empty.");
+        return;
+      }
+      // Append with a newline separator so multiple paste clicks build up
+      // a bulk list without overwriting prior content.
+      const trimmed = (input.value || "").replace(/\s+$/, "");
+      input.value = trimmed ? trimmed + "\n" + text : text;
+      // Notify the bound clear-button (and any other listeners) that the
+      // input changed, so disabled-state updates immediately.
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus();
+      // Move caret to the end so further typing appends naturally.
+      input.setSelectionRange(input.value.length, input.value.length);
+    } catch (e) {
+      // Most common failure: Safari blocks clipboard read outside a recent
+      // user gesture, or the user denied the prompt. Surface a clear hint.
+      input.focus();
+      toast("Couldn't read clipboard — paste manually with Cmd+V or long-press.");
+    }
+  });
+}
+bindPasteButton({ inputId: "lookup-input", pasteId: "lookup-paste" });
+bindPasteButton({ inputId: "queue-input",  pasteId: "queue-input-paste" });
+
 async function runCheck({ inputId, resultId, saveToQueue }) {
   const text = $(`#${inputId}`).value;
   const lines = text.split(/\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
