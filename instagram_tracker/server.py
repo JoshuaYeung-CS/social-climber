@@ -238,13 +238,13 @@ def _home_compute():
             # a one-snapshot blip in some past export and reappeared. See
             # the matching comment in the lists path below.
             ever_removed = ever_left_following - ever_self - ig_bounced - curr.following
-            # Symmetric "you initiated" filter for the inbound side:
-            # accounts where YOU also unfollowed (in ever_self) shouldn't
-            # show up as "they unfollowed you" — that case is a mutual
-            # break or an IG quirk where unfollowing them caused their
-            # row to drop from your followers export. ever_removed already
-            # subtracts ever_self for the same reason.
-            ever_unfollowed_you = ever_unfollowed_you - ig_bounced - curr.followers - ever_self
+            # Split the inbound "they ended their following of me" set:
+            #   ever_unfollowed_you (strict): they unfollowed, you didn't
+            #     also unfollow — pure inbound action.
+            #   mutual_breaks: both ends broke — they dropped AND you also
+            #     unfollowed (or removed them as a follower).
+            ever_unfollowed_you_inbound = ever_unfollowed_you - ig_bounced - curr.followers - ever_self
+            mutual_breaks = (ever_unfollowed_you - ig_bounced - curr.followers) & ever_self
 
             # Strip rename chains so renames don't inflate "they unfollowed/removed you" counts.
             alias_map = q.username_alias_map(conn)
@@ -254,7 +254,8 @@ def _home_compute():
                     return False
                 return any(a in in_set for a in chain if a != u)
 
-            ever_unfollowed_you = {u for u in ever_unfollowed_you if not aliases_active(u, curr.followers)}
+            ever_unfollowed_you_inbound = {u for u in ever_unfollowed_you_inbound if not aliases_active(u, curr.followers)}
+            mutual_breaks = {u for u in mutual_breaks if not aliases_active(u, curr.followers)}
             ever_removed = {u for u in ever_removed if not aliases_active(u, curr.following)}
 
             # Strip disabled- and unavailable-tagged accounts from these counts too.
@@ -263,8 +264,10 @@ def _home_compute():
                 | {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
                 | {r["username"] for r in tags_mod.list_with_flag(conn, "random_request")}
             )
-            ever_unfollowed_you -= suppressed_home
+            ever_unfollowed_you_inbound -= suppressed_home
+            mutual_breaks -= suppressed_home
             ever_removed -= suppressed_home
+            ever_unfollowed_you = ever_unfollowed_you_inbound | mutual_breaks
 
             # Drop anyone who's now following you back — they re-followed, so
             # they're no longer "an unfollower you still follow". History is
@@ -360,7 +363,8 @@ def _home_compute():
                 "pending": len(active_pending),
                 "incoming_requests": len(active_incoming),
                 # Cumulative (ever) counts:
-                "ever_unfollowed_you": len(ever_unfollowed_you),
+                "ever_unfollowed_you": len(ever_unfollowed_you_inbound),
+                "mutual_breaks": len(mutual_breaks),
                 "ever_removed_you_as_follower": len(ever_removed),
                 "ever_you_unfollowed": len(ever_self),
                 "still_follow_after_drop": len(still_follow_them),
@@ -912,7 +916,18 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # unfollowed you" event. Without this, mutual-break rows show up
         # in "Ever unfollowed you" labeled as "you unfollowed [date]",
         # which is confusing in a list that's about THEIR action.
-        ever_unfollowed_you = ever_unfollowed_you - ig_bounced - sd.followers - ever_self
+        # Capture the "raw" inbound set BEFORE the self-unfollow exclusion,
+        # so we can split the population into:
+        #   ever_unfollowed_you (strict): they unfollowed AND you didn't
+        #     reciprocate — pure inbound action.
+        #   mutual_breaks: both ends of the relationship broke — they
+        #     dropped from your followers AND you also unfollowed them
+        #     (or removed them as a follower, which IG records as the
+        #     same drop). Useful to see, separate from pure inbound.
+        # Both sets share the came-back / ig-bounced filtering since
+        # those are about IG export quirks, not the user's intent.
+        ever_unfollowed_you_inbound = ever_unfollowed_you - ig_bounced - sd.followers - ever_self
+        mutual_breaks = (ever_unfollowed_you - ig_bounced - sd.followers) & ever_self
 
         # Also exclude usernames that are part of a detected rename chain whose CURRENT
         # alias is still in your following/followers — they didn't really leave.
@@ -924,10 +939,18 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
             return any(a in in_set for a in chain if a != u)
 
         ever_removed_you = {u for u in ever_removed_you if not aliases_active(u, sd.following)}
-        ever_unfollowed_you = {u for u in ever_unfollowed_you if not aliases_active(u, sd.followers)}
+        ever_unfollowed_you_inbound = {u for u in ever_unfollowed_you_inbound if not aliases_active(u, sd.followers)}
+        mutual_breaks = {u for u in mutual_breaks if not aliases_active(u, sd.followers)}
 
-        sections["ever_unfollowed_you"] = sorted(ever_unfollowed_you)
+        sections["ever_unfollowed_you"] = sorted(ever_unfollowed_you_inbound)
+        sections["mutual_breaks"] = sorted(mutual_breaks)
         sections["ever_removed_you_as_follower"] = sorted(ever_removed_you)
+        # Keep the original raw set name available for "still_follow_after_drop"
+        # below — the user-still-follows logic should consider both pure
+        # inbound unfollows AND mutual breaks (since the user re-following
+        # someone post-mutual-break is still a "follow but no follow-back"
+        # situation worth surfacing).
+        ever_unfollowed_you = ever_unfollowed_you_inbound | mutual_breaks
         # Subset of ever_unfollowed_you that you still follow AND who aren't
         # currently following you back. Once they re-follow (mutual again),
         # they fall off this list — the unfollow event itself stays in the
@@ -1158,6 +1181,7 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
             "not_following_you_back",
             "they_unfollowed_you",
             "ever_unfollowed_you",
+            "mutual_breaks",
             "unfollowers_you_still_follow",
         }
         # "Last appeared in your following" date: kinds where they used to
