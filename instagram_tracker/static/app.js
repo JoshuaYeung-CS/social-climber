@@ -1245,6 +1245,54 @@ function applySort(items, mode) {
   return arr;
 }
 
+// Chunked-rendering helper for very long lists (e.g. all_followers, ~1400
+// rows). Single innerHTML assignment for that many DOM nodes blocks the
+// main thread for 800-1500ms. Chunking lets the browser paint the first
+// screen of rows in <100ms, then progressively appends the rest while
+// the user can already start scrolling / interacting.
+//
+// Search/select/sort handlers re-fire after each chunk via the input
+// event the calling code dispatches; they read data-search attributes
+// off rendered rows, so a row that's been painted is searchable even
+// while later chunks are still being added.
+const _RENDER_FIRST = 120;     // visible above-the-fold first paint
+const _RENDER_CHUNK = 300;     // subsequent batch size
+let _renderToken = 0;          // bumps on each new render — old chunks abort
+
+function renderRowsChunked(out, items, renderFn) {
+  _renderToken += 1;
+  const myToken = _renderToken;
+
+  // First chunk: render synchronously so the user sees rows immediately.
+  out.innerHTML = items.slice(0, _RENDER_FIRST).map(renderFn).join("");
+  if (items.length <= _RENDER_FIRST) return;
+
+  // Remaining chunks: append progressively. Yield to the browser between
+  // each so the layout/paint cost is spread out, not bunched.
+  let idx = _RENDER_FIRST;
+  function paint() {
+    // If a different render started while we were waiting (user clicked
+    // another pill, navigated away, etc.), abandon — don't paint stale
+    // rows into the wrong list.
+    if (myToken !== _renderToken) return;
+    if (idx >= items.length) return;
+    const slice = items.slice(idx, idx + _RENDER_CHUNK);
+    const frag = document.createRange().createContextualFragment(
+      slice.map(renderFn).join("")
+    );
+    out.appendChild(frag);
+    idx += _RENDER_CHUNK;
+    if (idx < items.length) {
+      requestAnimationFrame(paint);
+    } else {
+      // Final chunk done — re-run search so any active filter applies to
+      // newly-painted rows.
+      applyListSearch();
+    }
+  }
+  requestAnimationFrame(paint);
+}
+
 function renderListRow(item) {
   // Build the small grey sub-line and the right-side chip.
   let sub = "";
@@ -1497,7 +1545,12 @@ async function loadLists() {
       }
       out.innerHTML = html.join("");
     } else {
-      out.innerHTML = items.map(renderListRow).join("");
+      // Chunked render: paint first ~120 rows synchronously so the user
+      // sees something immediately, then append the rest in 300-row
+      // batches via requestAnimationFrame so the browser can layout +
+      // paint between chunks. For short lists this is identical to the
+      // single-pass render; only kicks in past the threshold.
+      renderRowsChunked(out, items, renderListRow);
     }
     // Re-apply any active search after rendering so a sort change (which
     // re-renders the rows) keeps the filter live.
