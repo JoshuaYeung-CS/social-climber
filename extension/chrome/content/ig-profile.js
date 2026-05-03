@@ -186,6 +186,11 @@ async function saveToVault(username) {
 // forget — we don't await, the UI render shouldn't block on this. Only
 // posts when we actually picked up SOMETHING from the DOM (otherwise
 // we'd be sending empty rows that overwrite real data with NULLs).
+// Returns the bgFetch promise so callers can await — used by the
+// follow-button observer which needs to refetch lookup AFTER the POST
+// has actually landed in the DB. Otherwise the callback re-renders with
+// the old (un-bridged) snapshot data and the panel stays stuck on
+// "Never seen in any snapshot" even though the green flash already fired.
 function sendProfileObservation(username, profile, privacyDom, extra = {}) {
   const buttonState = extra.follow_button_state || detectFollowButtonState();
   const hasAnything = profile.posts || profile.followers || profile.following
@@ -193,16 +198,10 @@ function sendProfileObservation(username, profile, privacyDom, extra = {}) {
     || profile.profile_pic || profile.external_link
     || privacyDom === "private"
     || buttonState;
-  if (!hasAnything) return;
-  // is_private: only send TRUE when DOM actually showed the banner. Don't
-  // send FALSE on banner-absent — could be a private account we follow.
+  if (!hasAnything) return Promise.resolve(null);
   const is_private = privacyDom === "private" ? true : null;
-  // is_unavailable: when we successfully extract profile data (counts,
-  // bio, etc.) the page is loading normally → not unavailable. Sending
-  // false explicitly clears any stale is_unavailable=true from a prior
-  // observation if the account came back online.
   const is_unavailable = false;
-  bgFetch(`${_settings.trackerUrl}/api/profile-observation`, {
+  return bgFetch(`${_settings.trackerUrl}/api/profile-observation`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -213,7 +212,7 @@ function sendProfileObservation(username, profile, privacyDom, extra = {}) {
       follow_button_state: buttonState,
       button_state_changed: !!extra.button_state_changed,
     }),
-  }).catch(() => {});
+  }).catch(() => null);
 }
 
 // Watch the Follow / Requested / Following button for state changes. Used
@@ -231,33 +230,27 @@ function watchFollowButtonChanges(username) {
       const wasNeutral = lastState === null || lastState === "not_following" || lastState === "follow_back_available";
       const newRelationship = wasNeutral && (next === "requested" || next === "following");
       if (newRelationship) {
-        // POST a state-changed observation so the tracker records the
-        // event timestamp (won't wait for the next export).
+        // Show the green flash immediately so feedback is fast.
+        if (_panelEl && _lastUsername === username && _panelOpen) {
+          flashRequestedConfirmation(_panelEl, next);
+        }
+        // POST the observation, AWAIT the round trip, then refetch +
+        // re-render. Without the await, the lookup ran before the DB
+        // write landed and the panel stayed stuck on "Never seen".
         sendProfileObservation(
           username,
           extractProfileFromDOM(),
           detectPrivacyFromDOM(),
           { follow_button_state: next, button_state_changed: true }
-        );
-        // Update overlay: show the green flash + re-fetch lookup so the
-        // panel content reflects the just-recorded state (drops "Never
-        // seen in any snapshot" → shows "you sent a follow request").
-        if (_panelEl && _lastUsername === username && _panelOpen) {
+        ).then(() => {
+          if (!_panelEl || _lastUsername !== username || !_panelOpen) return;
+          return fetchLookup(username);
+        }).then((fresh) => {
+          if (!fresh || !_panelEl || _lastUsername !== username || !_panelOpen) return;
+          renderPanel(_panelEl, username, fresh);
+          // Re-flash since renderPanel just rebuilt the overlay body.
           flashRequestedConfirmation(_panelEl, next);
-          // Wait a tick so the observation write has reached the DB,
-          // then re-fetch + render.
-          setTimeout(() => {
-            if (_panelEl && _lastUsername === username && _panelOpen) {
-              fetchLookup(username).then((fresh) => {
-                if (fresh && _panelEl && _lastUsername === username) {
-                  renderPanel(_panelEl, username, fresh);
-                  // Re-flash since renderPanel just wiped the overlay body.
-                  flashRequestedConfirmation(_panelEl, next);
-                }
-              });
-            }
-          }, 350);
-        }
+        });
       } else {
         // State changed (e.g. Following → Follow if user unfollowed) — record
         // the new state but don't flash the confirmation.
