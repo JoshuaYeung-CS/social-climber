@@ -55,28 +55,40 @@ async function loadSettings() {
   };
 }
 
+// All HTTP to the local tracker is delegated to the background service
+// worker. Fetching directly from this content script would hit Chrome's
+// mixed-content block (instagram.com is HTTPS, the tracker is HTTP).
+async function bgFetch(url, init) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(
+      { type: "tracker-fetch", url, init },
+      (resp) => {
+        if (chrome.runtime.lastError) {
+          resolve({ ok: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        resolve(resp || { ok: false, error: "no response" });
+      }
+    );
+  });
+}
+
 async function fetchLookup(username) {
-  try {
-    const r = await fetch(`${_settings.trackerUrl}/api/lookup?account=${encodeURIComponent(username)}`);
-    if (!r.ok) return null;
-    return await r.json();
-  } catch (e) {
-    return null;
-  }
+  const r = await bgFetch(
+    `${_settings.trackerUrl}/api/lookup?account=${encodeURIComponent(username)}`
+  );
+  if (!r.ok) return null;
+  return r.body;
 }
 
 async function toggleTag(username, flag, value) {
-  try {
-    const r = await fetch(`${_settings.trackerUrl}/api/tags`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ account: username, flag, value }),
-    });
-    if (!r.ok) return null;
-    return await r.json();
-  } catch (e) {
-    return null;
-  }
+  const r = await bgFetch(`${_settings.trackerUrl}/api/tags`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ account: username, flag, value }),
+  });
+  if (!r.ok) return null;
+  return r.body;
 }
 
 function fmtDate(iso) {
