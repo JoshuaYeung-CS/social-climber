@@ -1380,6 +1380,8 @@ function renderListRow(item) {
   else if (item.pending_since_at && !item.pending_ts) parts.push(`requested ${escapeHtml(fmtDate(item.pending_since_at))}`);
   if (item.incoming_ts) parts.push(`they requested ${escapeHtml(fmtDateTime(item.incoming_ts))}`);
   if (item.unfollowed_ts) parts.push(`you unfollowed ${escapeHtml(fmtDateTime(item.unfollowed_ts))}`);
+  if (item.pending_via_extension) parts.push(`<span class="info-tag">via extension — not yet in export</span>`);
+  if (item.following_via_extension) parts.push(`<span class="info-tag">via extension — not yet in export</span>`);
   if (item.mutual_since_at) parts.push(`mutual since ${escapeHtml(fmtDate(item.mutual_since_at))}`);
   if (item.history_status === "re-engaged") parts.push(`<span class="info-tag">re-engaged</span>`);
   // Drop the "likely" hedge in three cases, all genuinely certain:

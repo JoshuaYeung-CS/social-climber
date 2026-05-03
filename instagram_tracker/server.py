@@ -321,6 +321,25 @@ def _home_compute():
             active_pending = curr.pending - suppressed_home
             active_incoming = curr.incoming_requests - suppressed_home
 
+            # Extension-bridged pending/following: union in the rows the
+            # extension recorded as "requested" / "following" but the
+            # snapshot hasn't caught up to yet. Auto-clears once the next
+            # export ingests them (they'll already be in active_pending).
+            ext_bridged_pending = {
+                r["username"] for r in conn.execute(
+                    "SELECT username FROM profile_observations "
+                    "WHERE follow_button_state = 'requested'"
+                ).fetchall()
+            } - suppressed_home - active_pending - active_following
+            ext_bridged_following = {
+                r["username"] for r in conn.execute(
+                    "SELECT username FROM profile_observations "
+                    "WHERE follow_button_state = 'following'"
+                ).fetchall()
+            } - suppressed_home - active_following
+            active_pending = active_pending | ext_bridged_pending
+            active_following = active_following | ext_bridged_following
+
             summary = {
                 "snapshot_id": latest,
                 "followers": len(active_followers),
@@ -1559,6 +1578,25 @@ def _lists_apply_overlay(pure: dict) -> dict:
                 "SELECT username FROM profile_observations WHERE is_unavailable = 1"
             ).fetchall()
         }
+        # Pending requests confirmed by the extension's button-state observer
+        # but not yet reflected in any export. We surface these in the
+        # "pending" section so the count + list update instantly when the
+        # user clicks Follow on a private account.
+        ext_pending_usernames = {
+            r["username"]
+            for r in conn.execute(
+                "SELECT username FROM profile_observations "
+                "WHERE follow_button_state = 'requested'"
+            ).fetchall()
+        }
+        # Same for "following" — public account follow not yet in export.
+        ext_following_usernames = {
+            r["username"]
+            for r in conn.execute(
+                "SELECT username FROM profile_observations "
+                "WHERE follow_button_state = 'following'"
+            ).fetchall()
+        }
     suppressed = {
         u for u, t in flagged.items()
         if t.get("disabled") or t.get("unavailable") or t.get("random_request")
@@ -1618,6 +1656,64 @@ def _lists_apply_overlay(pure: dict) -> dict:
             if r["username"] in confirmed_unavailable:
                 r["bucket_status"] = "still gone (extension confirms)"
                 r["bucket_status_kind"] = "good"
+
+    # Extension-confirmed pending requests not yet reflected in any export.
+    # Append minimal rows to the "pending" section so the count + list
+    # update instantly when the user clicks Follow on a private account.
+    # These get auto-removed on the next export when the snapshot catches up
+    # (the username will then be in the regular pending set).
+    sd_pending_set = set(pure["ctx"]["sd_pending"])
+    sd_following_set = set(pure["ctx"]["sd_following"])
+    new_pending = ext_pending_usernames - sd_pending_set - sd_following_set - suppressed
+    if new_pending:
+        existing_pending = {r["username"] for r in annotated.get("pending", [])}
+        for u in sorted(new_pending - existing_pending):
+            user_flags = flagged.get(u, {})
+            row = {
+                "username": u,
+                "currently_following": False,
+                "currently_follower": False,
+                "currently_pending": True,
+                "currently_incoming_request": False,
+                "relationship": "request pending",
+                "relationship_kind": "info",
+                "pending_via_extension": True,
+            }
+            for f in _TAG_FLAGS:
+                row[f] = user_flags.get(f, False)
+            if u in confirmed_private:
+                row["privacy_confirmed_private"] = True
+            annotated.setdefault("pending", []).append(row)
+        # Re-sort pending: most-recently-requested first (extension-confirmed
+        # ones go to the top since they have no pending_since_at to sort by).
+        annotated["pending"].sort(
+            key=lambda r: (
+                0 if r.get("pending_via_extension") else 1,
+                -(r.get("pending_ts") or 0),
+                r["username"],
+            )
+        )
+
+    new_following = ext_following_usernames - sd_following_set - suppressed
+    if new_following:
+        existing_all_fol = {r["username"] for r in annotated.get("all_following", [])}
+        for u in sorted(new_following - existing_all_fol):
+            user_flags = flagged.get(u, {})
+            row = {
+                "username": u,
+                "currently_following": True,
+                "currently_follower": False,
+                "currently_pending": False,
+                "currently_incoming_request": False,
+                "relationship": "doesn't follow back",
+                "relationship_kind": "warn",
+                "following_via_extension": True,
+            }
+            for f in _TAG_FLAGS:
+                row[f] = user_flags.get(f, False)
+            if u in confirmed_private:
+                row["privacy_confirmed_private"] = True
+            annotated.setdefault("all_following", []).append(row)
 
     # Bucket priority sort.
     for bk in _BUCKET_KINDS_SET:
@@ -1684,11 +1780,30 @@ def _lookup_compute(username: str, profile_url: str):
                 None if iu is None else bool(iu)
             )
 
+        # Bridge the gap between extension observation and next export:
+        # if the extension confirmed the user just clicked Follow on a
+        # private account (button_state="requested") and the snapshot
+        # doesn't yet reflect it, treat them as pending. Same for
+        # following — public account follow that hasn't been exported yet.
+        # Cleared automatically when the next export refreshes the
+        # snapshot OR when the extension observes a state revert.
+        pending_via_extension = following_via_extension = False
+        if observation is not None:
+            obs_btn = observation.get("follow_button_state")
+            if obs_btn == "requested" and not currently_pending and not currently_following:
+                currently_pending = True
+                pending_via_extension = True
+            elif obs_btn == "following" and not currently_following:
+                currently_following = True
+                following_via_extension = True
+
         current_state = {
             "currently_following": currently_following,
             "currently_follower": currently_follower,
             "currently_pending": currently_pending,
             "currently_incoming_request": currently_incoming,
+            "pending_via_extension": pending_via_extension,
+            "following_via_extension": following_via_extension,
             "observation": observation,
         }
 
