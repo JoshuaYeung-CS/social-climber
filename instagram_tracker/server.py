@@ -1534,6 +1534,16 @@ def _lists_apply_overlay(pure: dict) -> dict:
         return pure
     with db_conn() as conn:
         flagged = tags_mod.all_flagged_usernames(conn)
+        # Set of usernames the extension confirmed are private (saw the
+        # banner on the IG page). Cheap query; ~one row per profile the
+        # user has visited. Used to upgrade rows from "likely private" →
+        # "private" in the lists + modal display.
+        confirmed_private = {
+            r["username"]
+            for r in conn.execute(
+                "SELECT username FROM profile_observations WHERE is_private = 1"
+            ).fetchall()
+        }
     suppressed = {
         u for u, t in flagged.items()
         if t.get("disabled") or t.get("unavailable") or t.get("random_request")
@@ -1557,6 +1567,8 @@ def _lists_apply_overlay(pure: dict) -> dict:
             user_flags = flagged.get(u, {})
             for f in _TAG_FLAGS:
                 row[f] = user_flags.get(f, False)
+            if u in confirmed_private:
+                row["privacy_confirmed_private"] = True
             out_full.append(row)
             if u not in suppressed:
                 out.append(row)
@@ -1567,6 +1579,9 @@ def _lists_apply_overlay(pure: dict) -> dict:
     for flag in _TAG_FLAGS:
         usernames = sorted(u for u, t in flagged.items() if t.get(flag))
         bucket_rows = [_build_bucket_row(ctx, flagged, u, flag) for u in usernames]
+        for r in bucket_rows:
+            if r["username"] in confirmed_private:
+                r["privacy_confirmed_private"] = True
         annotated[flag] = bucket_rows
         sections_full[flag] = bucket_rows
     # NFB sort.

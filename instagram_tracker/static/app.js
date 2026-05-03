@@ -623,7 +623,15 @@ function renderLookup(data) {
       ${data.follow_runs_count > 1 ? `<div class="warn-banner">⚠ You've followed this person <strong>${data.follow_runs_count} separate times</strong> across history.</div>` : ""}
       ${data.follower_runs_count > 1 ? `<div class="warn-banner">⚠ They've followed you <strong>${data.follower_runs_count} separate times</strong> across history.</div>` : ""}
       <div class="facts">
-        ${data.privacy && data.privacy !== "unknown" ? `<div class="row"><span class="key">Privacy</span><span>${data.privacy === "likely_private" ? "🔒 likely private" : "🌐 likely public"}</span></div>` : ""}
+        ${(() => {
+          const confirmed = data.observation?.is_private === true;
+          const directContact = data.currently_following || data.currently_pending;
+          if (confirmed) return `<div class="row"><span class="key">Privacy</span><span>🔒 private (banner shown)</span></div>`;
+          if (data.privacy === "likely_private" && directContact) return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
+          if (data.privacy === "likely_private") return `<div class="row"><span class="key">Privacy</span><span>🔒 likely private</span></div>`;
+          if (data.privacy === "likely_public") return `<div class="row"><span class="key">Privacy</span><span>🌐 likely public</span></div>`;
+          return "";
+        })()}
         <div class="row"><span class="key">Ever followed</span><span>${data.ever_followed ? `yes (${data.follow_runs_count}× run${data.follow_runs_count === 1 ? "" : "s"})` : "no"}</span></div>
         <div class="row"><span class="key">Ever requested</span><span>${data.ever_requested ? "yes" : "no"}</span></div>
         <div class="row"><span class="key">Ever followed you</span><span>${data.ever_was_follower ? `yes (${data.follower_runs_count}× run${data.follower_runs_count === 1 ? "" : "s"})` : "no"}</span></div>
@@ -1341,8 +1349,20 @@ function renderListRow(item) {
   if (item.unfollowed_ts) parts.push(`you unfollowed ${escapeHtml(fmtDateTime(item.unfollowed_ts))}`);
   if (item.mutual_since_at) parts.push(`mutual since ${escapeHtml(fmtDate(item.mutual_since_at))}`);
   if (item.history_status === "re-engaged") parts.push(`<span class="info-tag">re-engaged</span>`);
-  if (item.privacy === "likely_private") parts.push(`<span class="privacy-tag privacy-private">🔒 likely private</span>`);
-  else if (item.privacy === "likely_public") parts.push(`<span class="privacy-tag privacy-public">🌐 likely public</span>`);
+  // Drop the "likely" hedge when we have direct confirmation: either the
+  // extension saw the "Account is Private" banner on the page (writes
+  // privacy_confirmed_private), OR the user currently follows / has a
+  // pending request to a likely-private account (sending + getting
+  // accepted IS the confirmation that the account is private).
+  if (item.privacy_confirmed_private) {
+    parts.push(`<span class="privacy-tag privacy-private">🔒 private</span>`);
+  } else if (item.privacy === "likely_private" && (item.currently_following || item.currently_pending)) {
+    parts.push(`<span class="privacy-tag privacy-private">🔒 private</span>`);
+  } else if (item.privacy === "likely_private") {
+    parts.push(`<span class="privacy-tag privacy-private">🔒 likely private</span>`);
+  } else if (item.privacy === "likely_public") {
+    parts.push(`<span class="privacy-tag privacy-public">🌐 likely public</span>`);
+  }
   if (item.aliases && item.aliases.length > 1) parts.push(`<span class="info-tag">renamed: ${escapeHtml(item.aliases.join(' → '))}</span>`);
   if (item.ever_followed_you === false) parts.push(`<span class="never">never followed back</span>`);
   else if (item.ever_followed_you === true) {
