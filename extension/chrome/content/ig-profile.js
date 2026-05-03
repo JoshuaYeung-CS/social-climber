@@ -35,6 +35,53 @@ let _settings = null;
 let _lastUsername = null;
 let _panelOpen = true;
 let _panelEl = null;
+// Set to true once we detect the extension was reloaded out from under us
+// (chrome.runtime.id becomes undefined when the SW is gone). Old content
+// scripts in long-lived IG tabs still run, but every chrome.* call throws
+// "Extension context invalidated". Once flipped, we stop calling chrome.*
+// and tear down observers so the page goes silent until reload.
+let _extensionDead = false;
+
+function extensionAlive() {
+  if (_extensionDead) return false;
+  try {
+    if (!chrome?.runtime?.id) {
+      handleExtensionDeath();
+      return false;
+    }
+    return true;
+  } catch (e) {
+    handleExtensionDeath();
+    return false;
+  }
+}
+
+function handleExtensionDeath() {
+  if (_extensionDead) return;
+  _extensionDead = true;
+  if (_followBtnObserver) {
+    try { _followBtnObserver.disconnect(); } catch {}
+    _followBtnObserver = null;
+  }
+  if (_privacyRecheckTimer) {
+    clearTimeout(_privacyRecheckTimer);
+    _privacyRecheckTimer = null;
+  }
+  // Surface a tiny notice in the existing panel if it's still on screen so
+  // the user knows the overlay went stale until they refresh the page.
+  if (_panelEl) {
+    try {
+      const body = _panelEl.querySelector(".igt-body");
+      if (body && !_panelEl.querySelector(".igt-dead-notice")) {
+        const note = document.createElement("div");
+        note.className = "igt-dead-notice igt-muted";
+        note.style.marginTop = "8px";
+        note.textContent = "extension reloaded — refresh page to reconnect";
+        body.appendChild(note);
+      }
+    } catch {}
+  }
+}
 
 function isProfilePath(pathname) {
   // Match /<username>/ or /<username>/<subpath>/ but exclude reserved roots.
@@ -60,17 +107,29 @@ async function loadSettings() {
 // worker. Fetching directly from this content script would hit Chrome's
 // mixed-content block (instagram.com is HTTPS, the tracker is HTTP).
 async function bgFetch(url, init) {
+  if (!extensionAlive()) {
+    return { ok: false, error: "extension context invalidated" };
+  }
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage(
-      { type: "tracker-fetch", url, init },
-      (resp) => {
-        if (chrome.runtime.lastError) {
-          resolve({ ok: false, error: chrome.runtime.lastError.message });
-          return;
+    try {
+      chrome.runtime.sendMessage(
+        { type: "tracker-fetch", url, init },
+        (resp) => {
+          const err = chrome.runtime.lastError;
+          if (err) {
+            if (/Extension context invalidated|message port closed/i.test(err.message || "")) {
+              handleExtensionDeath();
+            }
+            resolve({ ok: false, error: err.message });
+            return;
+          }
+          resolve(resp || { ok: false, error: "no response" });
         }
-        resolve(resp || { ok: false, error: "no response" });
-      }
-    );
+      );
+    } catch (e) {
+      handleExtensionDeath();
+      resolve({ ok: false, error: e.message || String(e) });
+    }
   });
 }
 
@@ -144,11 +203,30 @@ async function saveToVault(username) {
   }
 
   // Fetch the bytes via the SW (avoids mixed-content + uses page cookies).
+  if (!extensionAlive()) {
+    alert("Extension was reloaded — refresh this page to reconnect.");
+    return;
+  }
   const r = await new Promise((resolve) => {
-    chrome.runtime.sendMessage(
-      { type: "tracker-fetch-bytes", url: cap.src },
-      (resp) => resolve(resp || { ok: false, error: "no response" })
-    );
+    try {
+      chrome.runtime.sendMessage(
+        { type: "tracker-fetch-bytes", url: cap.src },
+        (resp) => {
+          const err = chrome.runtime.lastError;
+          if (err) {
+            if (/Extension context invalidated|message port closed/i.test(err.message || "")) {
+              handleExtensionDeath();
+            }
+            resolve({ ok: false, error: err.message });
+            return;
+          }
+          resolve(resp || { ok: false, error: "no response" });
+        }
+      );
+    } catch (e) {
+      handleExtensionDeath();
+      resolve({ ok: false, error: e.message || String(e) });
+    }
   });
   if (!r.ok || !r.body) {
     alert(`Couldn't download media: ${r.error || "unknown error"}`);
@@ -225,6 +303,10 @@ function watchFollowButtonChanges(username) {
   if (!main) return null;
   let lastState = detectFollowButtonState();
   const observer = new MutationObserver(() => {
+    if (!extensionAlive()) {
+      try { observer.disconnect(); } catch {}
+      return;
+    }
     const next = detectFollowButtonState();
     if (next && next !== lastState) {
       const wasNeutral = lastState === null || lastState === "not_following" || lastState === "follow_back_available";
@@ -324,6 +406,18 @@ function fmtDateTime(ts) {
 //   "follow_back_available" — button says "Follow back" (rare; appears on
 //                              accounts who follow you that you don't yet)
 //   null               — couldn't find the button (own profile, error, etc.)
+function matchFollowState(s) {
+  const t = (s || "").trim();
+  if (!t) return null;
+  // Order matters: "follow back" must be tested before "follow", and
+  // "following" before "follow", since they share prefixes.
+  if (/^follow\s*back\b/.test(t)) return "follow_back_available";
+  if (/^following\b/.test(t)) return "following";
+  if (/^requested\b/.test(t)) return "requested";
+  if (/^follow\b/.test(t)) return "not_following";
+  return null;
+}
+
 function detectFollowButtonState() {
   try {
     const main = document.querySelector("main");
@@ -331,18 +425,26 @@ function detectFollowButtonState() {
     if (!header) return null;
     const candidates = header.querySelectorAll("button, [role='button']");
     for (const el of candidates) {
-      // Normalize: collapse whitespace, lowercase. Then strip the trailing
-      // dropdown-indicator characters IG sometimes appends to the
-      // "Following" / "Requested" buttons (e.g. "Following ⌄"). Without
-      // this, the exact-equality check used to fail and the bridge
-      // never fired even when you were obviously following them.
-      let t = (el.textContent || "").trim().replace(/\s+/g, " ");
-      t = t.replace(/[▼▾⌵⌄▾▼v]+$/u, "").trim();
-      const lc = t.toLowerCase();
-      if (lc === "follow") return "not_following";
-      if (lc === "following") return "following";
-      if (lc === "requested") return "requested";
-      if (lc === "follow back") return "follow_back_available";
+      // Prefer aria-label on the button itself — IG sets these cleanly,
+      // and they don't get polluted by nested SVG icons.
+      const aria = (el.getAttribute("aria-label") || "").toLowerCase();
+      const ariaState = matchFollowState(aria);
+      if (ariaState) return ariaState;
+
+      // Fall back to textContent. IG embeds SVG icons with their own
+      // aria-labels (e.g. "Down chevron icon") which textContent
+      // concatenates without separators — "Following" + chevron icon
+      // becomes the literal string "FollowingDown chevron icon". Strip
+      // these known accessory phrases (and the unicode chevron variants
+      // that show up on some routes) before matching.
+      let t = (el.textContent || "").replace(/\s+/g, " ").toLowerCase().trim();
+      t = t
+        .replace(/down chevron icon|up chevron icon|chevron icon|chevron/g, "")
+        .replace(/[▼▾⌵⌄▾▼v]+/gu, "")
+        .replace(/\s+/g, " ")
+        .trim();
+      const txtState = matchFollowState(t);
+      if (txtState) return txtState;
     }
   } catch (e) {
     // ignore
@@ -445,12 +547,21 @@ function extractProfileFromDOM() {
     }
 
     // Bio: the next text block after the counts row, before the post grid.
-    // IG renders it as a span/div with no consistent class, but it's the
-    // longest free-form text in the header. Pick the longest header text
-    // node that's not the display name and isn't the counts row itself.
-    const bioCandidate = Array.from(header.querySelectorAll?.("span, div") || [])
+    // IG renders it as a span/div with no consistent class. Reject any
+    // candidate that contains a counts-row fragment ("5 posts", "1.5k
+    // followers", etc.) — those are ancestors of the actual bio that
+    // accidentally swallow the entire header. Also reject text that
+    // contains the "Followed by …" mutual-followers line, the username,
+    // or the display name. After filtering, take the longest remaining.
+    const username = (window.location.pathname.split("/").filter(Boolean)[0] || "").toLowerCase();
+    const looksLikeCountsRow = (t) => /\b\d[\d.,]*\s*(?:k|m|b)?\s+(?:posts?|followers?|following)\b/i.test(t);
+    const looksLikeMutualLine = (t) => /^followed\s+by\b/i.test(t.trim());
+    const bioCandidate = Array.from(header.querySelectorAll?.("span, div, h1") || [])
       .map((el) => (el.innerText || "").trim())
-      .filter((t) => t.length > 12 && t.length < 320 && !/posts|followers|following/i.test(t.split("\n")[0]))
+      .filter((t) => t.length > 0 && t.length < 320)
+      .filter((t) => !looksLikeCountsRow(t))
+      .filter((t) => !looksLikeMutualLine(t))
+      .filter((t) => t.toLowerCase() !== username)
       .filter((t) => t !== out.display_name)
       .sort((a, b) => b.length - a.length);
     if (bioCandidate.length > 0) out.bio = bioCandidate[0];
@@ -619,8 +730,19 @@ function renderPanel(panel, username, data) {
 
   const tags = data.tags || {};
   const followsYou = !!data.currently_follower;
-  const youFollow = !!data.currently_following;
-  const pending = !!data.currently_pending;
+  // Client-side bridge: the live page is the source of truth for the
+  // user→target direction. If the IG button says "Following" / "Requested"
+  // but the lookup says no relation (export hasn't refreshed, or the
+  // observation POST from this page hasn't landed yet), trust the live
+  // button. The next refresh will see the same state via the backend
+  // bridge once the observation row is recorded.
+  const liveBtnForBridge = livePagePresent ? (liveButtonState || detectFollowButtonState()) : null;
+  let youFollow = !!data.currently_following;
+  let pending = !!data.currently_pending;
+  if (!youFollow && !pending) {
+    if (liveBtnForBridge === "following") youFollow = true;
+    else if (liveBtnForBridge === "requested") pending = true;
+  }
   const incoming = !!data.currently_incoming_request;
 
   // Relationship pill.
