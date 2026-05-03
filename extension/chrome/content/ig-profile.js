@@ -809,22 +809,18 @@ function renderPanel(panel, username, data) {
   const userHasPending = !!data.currently_pending;
   if (observedPrivacy === "private") {
     lines.push(`🔒 private`);
-  } else if (data.privacy === "likely_private" && userHasPending) {
-    // likely_private + currently_pending = 100% private NOW. Pending
-    // means waiting for approval from a private account; the account
-    // can't be public if you currently have a pending request to it.
-    // (userFollows alone is NOT 100% — a private account that approved
-    // you can later flip to public, leaving your follow intact. The
-    // past pending phase still gets observed → likely_private — but
-    // the current state could be public. So we demote that case to
-    // "likely private" rather than risk falsifying definitely-private.)
-    lines.push(`🔒 private`);
   } else if (data.privacy === "likely_private") {
-    lines.push(`🔒 likely private`);
+    // Ever-pending in any snapshot ⇒ account had a pending phase ⇒
+    // private (public accounts never go through pending). User
+    // accepts the rare private→public flip case as a tolerable edge
+    // and prefers the simpler un-hedged label here.
+    lines.push(`🔒 private`);
   } else if (data.privacy === "likely_public") {
-    // Never promote to un-hedged "public" — likely_public is "snapshots
-    // covered pre-follow + no pending observed," strong but not airtight
-    // (brief pending phase could resolve between snapshots).
+    // "public" is always hedged. The likely_public inference is
+    // "snapshots covered the pre-follow period and no pending was
+    // observed," strong but not airtight: a brief pending phase that
+    // resolved between snapshots could escape detection. Never claim
+    // un-hedged "public" anywhere in code.
     lines.push(`🌐 likely public`);
   }
 

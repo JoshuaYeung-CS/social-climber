@@ -660,12 +660,10 @@ function renderLookup(data) {
         ${(() => {
           const confirmed = data.observation?.is_private === true;
           if (confirmed) return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
-          // 100% private = banner-confirmed OR currently-pending.
-          // userFollows alone is NOT 100% (private→public flip leaves
-          // your follow intact, so likely_private + userFollows could
-          // be a now-public account). See comment in ig-profile.js.
-          if (data.privacy === "likely_private" && data.currently_pending) return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
-          if (data.privacy === "likely_private") return `<div class="row"><span class="key">Privacy</span><span>🔒 likely private</span></div>`;
+          // Ever-pending = private (public accounts never enter
+          // pending). User accepts the rare private→public flip as a
+          // tolerable edge case and prefers the simpler label.
+          if (data.privacy === "likely_private") return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
           if (data.privacy === "likely_public") return `<div class="row"><span class="key">Privacy</span><span>🌐 likely public</span></div>`;
           return "";
         })()}
@@ -1130,7 +1128,7 @@ $("#list-output")?.addEventListener("click", async (e) => {
 // applies after all chips are evaluated. "Clear filters" reactivates
 // all chips so everything shows.
 function updateFilterCounts(rows) {
-  const counts = { private: 0, likely_private: 0, likely_public: 0, unknown: 0 };
+  const counts = { private: 0, likely_public: 0, unknown: 0 };
   rows.forEach((r) => {
     const p = r.dataset.privacy || "unknown";
     counts[p] = (counts[p] || 0) + 1;
@@ -1444,20 +1442,19 @@ function renderListRow(item) {
   // date-precision ISO string when only a snapshot label is available.
   const parts = [];
 
-  // Privacy bucket for filter chips. Reflects the *display* confidence
-  // level, not the raw server inference, so the chips group accounts
-  // by what the user sees: "private" (100% certain via banner OR
-  // currently_pending), "likely_private" (inference only — past
-  // pending evidence but no current pending, so a private→public flip
-  // could leave you currently following a now-public account),
-  // "likely_public" (inference only), or "unknown".
+  // Privacy bucket for filter chips. Two-tier rule:
+  //   "private" — DOM banner observed OR likely_private (ever-pending
+  //     in any snapshot ⇒ approval-required ⇒ private. Public accounts
+  //     never produce pending entries, so this is logically conclusive
+  //     except for the rare private→public flip edge case which the
+  //     user accepts).
+  //   "likely_public" — inference (pre-follow snapshot coverage, no
+  //     pending observed). Never promoted to un-hedged "public" — a
+  //     brief pending phase could have resolved between snapshots.
+  //   "unknown" — no signal either way.
   let privacy = "unknown";
-  if (item.privacy_confirmed_private) {
+  if (item.privacy_confirmed_private || item.privacy === "likely_private") {
     privacy = "private";
-  } else if (item.privacy === "likely_private" && item.currently_pending) {
-    privacy = "private";
-  } else if (item.privacy === "likely_private") {
-    privacy = "likely_private";
   } else if (item.privacy === "likely_public") {
     privacy = "likely_public";
   }
@@ -1473,19 +1470,10 @@ function renderListRow(item) {
   if (item.following_via_extension) parts.push(`<span class="info-tag">via extension — not yet in export</span>`);
   if (item.mutual_since_at) parts.push(`mutual since ${escapeHtml(fmtDate(item.mutual_since_at))}`);
   if (item.history_status === "re-engaged") parts.push(`<span class="info-tag">re-engaged</span>`);
-  // Privacy display, ordered most-certain → least:
-  //   1. "🔒 private" — DOM banner OR likely_private + direct contact.
-  //      Both are 100% certain (banner is IG's own claim; pending phase
-  //      can only happen for private accounts). Same display.
-  //   2. "🔒 likely private" — pending observation but no current contact.
-  //   3. "🌐 likely public" — inference (snapshots covered pre-follow,
-  //      no pending observed). Never promoted to un-hedged "public" —
-  //      a brief pending phase could have resolved between snapshots.
-  // Anything else stays unlabeled (= "?" unknown via the filter chip).
+  // Privacy display: "🔒 private" for any pending evidence (or banner),
+  // "🌐 likely public" for inferred public, unlabeled otherwise.
   if (privacy === "private") {
     parts.push(`<span class="privacy-tag privacy-private">🔒 private</span>`);
-  } else if (privacy === "likely_private") {
-    parts.push(`<span class="privacy-tag privacy-private">🔒 likely private</span>`);
   } else if (privacy === "likely_public") {
     parts.push(`<span class="privacy-tag privacy-public">🌐 likely public</span>`);
   }
