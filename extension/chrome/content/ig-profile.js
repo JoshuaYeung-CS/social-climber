@@ -574,23 +574,45 @@ function renderPanel(panel, username, data) {
     return;
   }
 
-  // "Never seen in any snapshot" — but ONLY if we also have no live
-  // extension observation. Once you click Follow on a never-seen profile,
-  // the button-state observer writes follow_button_state="requested" or
-  // "following" and we want the panel to show that fact, not the empty
-  // state.
+  // "Never seen in any snapshot" — but ONLY when we have no other source
+  // of info to render. Three live-data sources can rescue us from the
+  // empty state:
+  //   1. Backend observation (profile was previously visited via extension)
+  //   2. DOM extract right now (profile is loaded in the browser; we have
+  //      counts / bio / display name on the page even if the snapshot DB
+  //      has never seen this user before — public accounts the user just
+  //      navigated to are the common case)
+  //   3. Live follow-button state (just clicked Follow on a never-seen
+  //      profile — observation in flight, but the DOM already shows
+  //      "Requested" so we can render anyway)
+  const livePagePresent = !!(
+    document.querySelector("main header")
+  );
+  const liveProfile = livePagePresent ? extractProfileFromDOM() : {};
+  const liveButtonState = livePagePresent ? detectFollowButtonState() : null;
   const hasLiveObservation = data.observation && (
     data.observation.follow_button_state ||
     data.observation.is_private === true ||
     data.observation.is_unavailable === true ||
     data.observation.follower_count != null
   );
+  const hasLiveDOMData = !!(
+    liveProfile.posts ||
+    liveProfile.followers ||
+    liveProfile.following ||
+    liveProfile.bio ||
+    liveProfile.display_name ||
+    liveProfile.verified ||
+    liveButtonState === "requested" ||
+    liveButtonState === "following"
+  );
   if (data.found === false
       && !data.currently_follower
       && !data.currently_following
       && !data.currently_pending
       && !data.currently_incoming_request
-      && !hasLiveObservation) {
+      && !hasLiveObservation
+      && !hasLiveDOMData) {
     renderEmpty(panel, username, "Never seen in any snapshot.");
     return;
   }
@@ -663,10 +685,12 @@ function renderPanel(panel, username, data) {
   }
 
   // Live page facts — counts, verified badge, account category.
-  // Pulled fresh from the profile DOM each render; these aren't in the
-  // tracker DB at all (only what IG's data export gives us is). Showing
-  // them lets the overlay double as a "snapshot of who they are right now".
-  const profile = extractProfileFromDOM();
+  // Reuse the live extract from the early empty-state check above, so we
+  // don't walk the DOM twice. Falls back to a fresh extract if the empty-
+  // state check skipped it (livePagePresent was false).
+  const profile = (typeof liveProfile !== "undefined" && Object.keys(liveProfile).length)
+    ? liveProfile
+    : extractProfileFromDOM();
   // Persist what we observed back to the local tracker DB so the rest of
   // the app (lookup, lists) can show these facts even when not on the IG
   // page. Fire-and-forget — doesn't block the render.
