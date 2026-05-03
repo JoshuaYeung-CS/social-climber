@@ -446,8 +446,12 @@ function renderPanel(panel, username, data) {
   const userHasPending = !!data.currently_pending;
   if (observedPrivacy === "private") {
     lines.push(`🔒 private (banner shown)`);
+  } else if (data.privacy === "likely_private" && (userFollows || userHasPending)) {
+    lines.push(`🔒 private`);
   } else if (data.privacy === "likely_private") {
     lines.push(`🔒 likely private`);
+  } else if (data.privacy === "likely_public" && (userFollows || userHasPending)) {
+    lines.push(`🌐 public`);
   } else if (data.privacy === "likely_public") {
     lines.push(`🌐 likely public`);
   }
