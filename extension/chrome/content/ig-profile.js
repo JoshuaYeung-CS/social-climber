@@ -344,10 +344,24 @@ function renderPanel(panel, username, data) {
   // it definitely is. If the page is rendering a public-style header
   // (post count + post grid + "Follow" button without "Account is
   // Private" message), it's definitely public.
+  // Upgrade "likely_private" → "private" when we have direct contact
+  // evidence: you currently follow them (private accounts only let you
+  // follow via accepted request) or you have a pending request to them
+  // (request-required → private, period). The DOM banner check is the
+  // strongest signal but only fires for private profiles you don't
+  // already follow.
   const observedPrivacy = detectPrivacyFromDOM();
-  if (observedPrivacy === "private") lines.push(`🔒 private (confirmed)`);
-  else if (data.privacy === "likely_private") lines.push(`🔒 likely private`);
-  else if (data.privacy === "likely_public") lines.push(`🌐 likely public`);
+  const userFollows = !!data.currently_following;
+  const userHasPending = !!data.currently_pending;
+  if (observedPrivacy === "private") {
+    lines.push(`🔒 private (banner shown)`);
+  } else if (data.privacy === "likely_private" && (userFollows || userHasPending)) {
+    lines.push(`🔒 private`);
+  } else if (data.privacy === "likely_private") {
+    lines.push(`🔒 likely private`);
+  } else if (data.privacy === "likely_public") {
+    lines.push(`🌐 likely public`);
+  }
 
   // Live page facts — counts, verified badge, account category.
   // Pulled fresh from the profile DOM each render; these aren't in the
