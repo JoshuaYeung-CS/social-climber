@@ -1437,6 +1437,26 @@ function renderListRow(item) {
   // exact unix-second timestamp (*_ts) IG provides; fall back to the
   // date-precision ISO string when only a snapshot label is available.
   const parts = [];
+
+  // Privacy bucket for filter chips. Reflects the *display* confidence
+  // level, not the raw server inference, so the chips group accounts
+  // by what the user sees: "private" (100% certain via banner OR
+  // pending-phase + direct contact), "likely_private" (inferred only),
+  // "likely_public" (inferred only — never claim 100% public), or
+  // "unknown" when no signal. Computed up front because both the
+  // sub-line label below and the data-privacy attribute on the row need
+  // it; declaring it later was a temporal-dead-zone bug.
+  let privacy = "unknown";
+  if (item.privacy_confirmed_private) {
+    privacy = "private";
+  } else if (item.privacy === "likely_private" && (item.currently_following || item.currently_pending)) {
+    privacy = "private";
+  } else if (item.privacy === "likely_private") {
+    privacy = "likely_private";
+  } else if (item.privacy === "likely_public") {
+    privacy = "likely_public";
+  }
+
   if (item.followed_ts) parts.push(`you followed ${escapeHtml(fmtDateTime(item.followed_ts))}`);
   else if (item.followed_at) parts.push(`you followed ${escapeHtml(fmtDate(item.followed_at))}`);
   if (item.followers_ts) parts.push(`they followed you ${escapeHtml(fmtDateTime(item.followers_ts))}`);
@@ -1535,23 +1555,6 @@ function renderListRow(item) {
   // Selection support for multi-select mode (handled by CSS when the parent
   // .list-output is in select-mode and this row has aria-selected="true").
   const checkbox = `<span class="row-check" aria-hidden="true"></span>`;
-
-  // Privacy bucket for filter chips. Reflects the *display* confidence
-  // level, not the raw server inference, so the chips group accounts
-  // by what the user sees: "private" (100% certain via banner OR
-  // pending-phase + direct contact), "likely_private" (inferred only),
-  // "likely_public" (inferred only — never claim 100% public), or
-  // "unknown" when no signal.
-  let privacy = "unknown";
-  if (item.privacy_confirmed_private) {
-    privacy = "private";
-  } else if (item.privacy === "likely_private" && (item.currently_following || item.currently_pending)) {
-    privacy = "private";
-  } else if (item.privacy === "likely_private") {
-    privacy = "likely_private";
-  } else if (item.privacy === "likely_public") {
-    privacy = "likely_public";
-  }
 
   return `
     <div class="list-row${rowClass ? " " + rowClass : ""}" data-username="${escapeAttr(item.username)}" data-search="${escapeAttr(haystack)}" data-rel="${escapeAttr(rel)}" data-privacy="${escapeAttr(privacy)}">
