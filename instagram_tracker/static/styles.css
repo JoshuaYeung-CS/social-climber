@@ -1213,6 +1213,8 @@ textarea {
 }
 .ghost-btn.small { padding: 2px 10px; font-size: 16px; line-height: 1; }
 .ghost-btn:hover { color: var(--text); border-color: var(--accent); }
+.ghost-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.ghost-btn:disabled:hover { color: var(--muted); border-color: var(--border); }
 
 /* Check view: primary action + Clear button laid out side by side so the
    Clear sits flush next to "Look up" / "Add to queue" rather than stacking
