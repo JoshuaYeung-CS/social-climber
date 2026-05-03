@@ -661,7 +661,9 @@ function renderLookup(data) {
           if (confirmed) return `<div class="row"><span class="key">Privacy</span><span>🔒 private (banner shown)</span></div>`;
           if (data.privacy === "likely_private" && directContact) return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
           if (data.privacy === "likely_private") return `<div class="row"><span class="key">Privacy</span><span>🔒 likely private</span></div>`;
-          if (data.privacy === "likely_public" && directContact) return `<div class="row"><span class="key">Privacy</span><span>🌐 public</span></div>`;
+          // Never promote likely_public → public: the inference is
+          // strong but not 100% (a brief pending phase could be missed
+          // between snapshots). Stay "likely public".
           if (data.privacy === "likely_public") return `<div class="row"><span class="key">Privacy</span><span>🌐 likely public</span></div>`;
           return "";
         })()}
@@ -1444,13 +1446,17 @@ function renderListRow(item) {
   if (item.following_via_extension) parts.push(`<span class="info-tag">via extension — not yet in export</span>`);
   if (item.mutual_since_at) parts.push(`mutual since ${escapeHtml(fmtDate(item.mutual_since_at))}`);
   if (item.history_status === "re-engaged") parts.push(`<span class="info-tag">re-engaged</span>`);
-  // Five-label privacy display, ordered most-certain → least:
+  // Privacy display, ordered most-certain → least. Invariant:
+  // un-hedged "private" / "public" only when 100% certain.
   //   1. "🔒 private (banner shown)" — DOM-confirmed by extension visit.
-  //   2. "🔒 private" — pending → follow transition observed + you follow.
-  //      Logically airtight: only private accounts go through pending.
+  //   2. "🔒 private" — likely_private (pending phase observed) + you
+  //      currently follow or have a pending request. Logically airtight:
+  //      only private accounts go through pending.
   //   3. "🔒 likely private" — pending observation but no current contact.
-  //   4. "🌐 public" — no pending observed + you currently follow.
-  //   5. "🌐 likely public" — inference only, no current relationship.
+  //   4. "🌐 likely public" — inference (snapshots covered pre-follow,
+  //      no pending observed). Strong but not airtight: a brief pending
+  //      phase could have resolved between snapshots, so we never
+  //      promote to un-hedged "public".
   // Anything else stays unlabeled (= "?" unknown via the filter chip).
   const directContact = item.currently_following || item.currently_pending;
   if (item.privacy_confirmed_private) {
@@ -1459,8 +1465,6 @@ function renderListRow(item) {
     parts.push(`<span class="privacy-tag privacy-private">🔒 private</span>`);
   } else if (item.privacy === "likely_private") {
     parts.push(`<span class="privacy-tag privacy-private">🔒 likely private</span>`);
-  } else if (item.privacy === "likely_public" && directContact) {
-    parts.push(`<span class="privacy-tag privacy-public">🌐 public</span>`);
   } else if (item.privacy === "likely_public") {
     parts.push(`<span class="privacy-tag privacy-public">🌐 likely public</span>`);
   }
