@@ -338,11 +338,18 @@ function detectFollowButtonState() {
     if (!header) return null;
     const candidates = header.querySelectorAll("button, [role='button']");
     for (const el of candidates) {
-      const t = (el.textContent || "").trim();
-      if (t === "Follow") return "not_following";
-      if (t === "Requested") return "requested";
-      if (t === "Following") return "following";
-      if (t === "Follow back" || t === "Follow Back") return "follow_back_available";
+      // Normalize: collapse whitespace, lowercase. Then strip the trailing
+      // dropdown-indicator characters IG sometimes appends to the
+      // "Following" / "Requested" buttons (e.g. "Following ⌄"). Without
+      // this, the exact-equality check used to fail and the bridge
+      // never fired even when you were obviously following them.
+      let t = (el.textContent || "").trim().replace(/\s+/g, " ");
+      t = t.replace(/[▼▾⌵⌄▾▼v]+$/u, "").trim();
+      const lc = t.toLowerCase();
+      if (lc === "follow") return "not_following";
+      if (lc === "following") return "following";
+      if (lc === "requested") return "requested";
+      if (lc === "follow back") return "follow_back_available";
     }
   } catch (e) {
     // ignore
