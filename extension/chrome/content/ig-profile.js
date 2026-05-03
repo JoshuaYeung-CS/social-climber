@@ -239,9 +239,24 @@ function watchFollowButtonChanges(username) {
           detectPrivacyFromDOM(),
           { follow_button_state: next, button_state_changed: true }
         );
-        // Update overlay if it's still showing this username.
+        // Update overlay: show the green flash + re-fetch lookup so the
+        // panel content reflects the just-recorded state (drops "Never
+        // seen in any snapshot" → shows "you sent a follow request").
         if (_panelEl && _lastUsername === username && _panelOpen) {
           flashRequestedConfirmation(_panelEl, next);
+          // Wait a tick so the observation write has reached the DB,
+          // then re-fetch + render.
+          setTimeout(() => {
+            if (_panelEl && _lastUsername === username && _panelOpen) {
+              fetchLookup(username).then((fresh) => {
+                if (fresh && _panelEl && _lastUsername === username) {
+                  renderPanel(_panelEl, username, fresh);
+                  // Re-flash since renderPanel just wiped the overlay body.
+                  flashRequestedConfirmation(_panelEl, next);
+                }
+              });
+            }
+          }, 350);
         }
       } else {
         // State changed (e.g. Following → Follow if user unfollowed) — record
@@ -559,7 +574,23 @@ function renderPanel(panel, username, data) {
     return;
   }
 
-  if (data.found === false && !data.currently_follower && !data.currently_following && !data.currently_pending && !data.currently_incoming_request) {
+  // "Never seen in any snapshot" — but ONLY if we also have no live
+  // extension observation. Once you click Follow on a never-seen profile,
+  // the button-state observer writes follow_button_state="requested" or
+  // "following" and we want the panel to show that fact, not the empty
+  // state.
+  const hasLiveObservation = data.observation && (
+    data.observation.follow_button_state ||
+    data.observation.is_private === true ||
+    data.observation.is_unavailable === true ||
+    data.observation.follower_count != null
+  );
+  if (data.found === false
+      && !data.currently_follower
+      && !data.currently_following
+      && !data.currently_pending
+      && !data.currently_incoming_request
+      && !hasLiveObservation) {
     renderEmpty(panel, username, "Never seen in any snapshot.");
     return;
   }
@@ -595,6 +626,16 @@ function renderPanel(panel, username, data) {
   if (data.ever_was_follower && !followsYou) {
     if (lr?.label) lines.push(`last seen as follower ${fmtSnapshotLabel(lr.label)}`);
   }
+  // Observation-derived live state — meaningful when the snapshot data
+  // doesn't yet reflect the action (e.g. you just clicked Follow on a
+  // never-seen-before account; export hasn't run yet).
+  const obsBtnState = data.observation?.follow_button_state;
+  if (obsBtnState === "requested" && !data.currently_pending) {
+    lines.push(`🔵 you sent a follow request (pending acceptance)`);
+  } else if (obsBtnState === "following" && !data.currently_following) {
+    lines.push(`🟢 you started following them`);
+  }
+
   // Observed privacy from the actual IG page DOM beats inferred privacy
   // from snapshot history: if IG is showing "This Account is Private",
   // it definitely is. If the page is rendering a public-style header
