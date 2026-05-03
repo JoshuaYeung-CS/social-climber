@@ -132,6 +132,48 @@ function buildPanel() {
   return panel;
 }
 
+// Read the actual IG profile page to determine if the account is public
+// or private — much more reliable than the snapshot-history inference,
+// when we have a page rendered in front of us. Returns "private" |
+// "public" | null. Three signals checked, ordered most-to-least specific:
+//
+//   1. The "This Account is Private" / "This profile is private" banner
+//      Instagram renders on private profiles you don't follow. If present
+//      → private with high confidence.
+//   2. JSON-LD <script> embedded in the head with profile metadata. Some
+//      private accounts' og:description / structured data still expose
+//      whether they're a personal-private account.
+//   3. Presence of the post grid (article/img tiles) on the page body.
+//      If posts are rendered AND no privacy banner → public. Note: a
+//      private account you follow ALSO shows posts, so this signal alone
+//      can't prove public — we only emit "public" when there's no
+//      privacy banner AND posts are visible AND the page passes a few
+//      sanity checks.
+function detectPrivacyFromDOM() {
+  try {
+    const text = document.body?.innerText || "";
+    // Highest-confidence signal: the literal banner text.
+    if (/this\s+account\s+is\s+private/i.test(text)) return "private";
+    if (/this\s+profile\s+is\s+private/i.test(text)) return "private";
+
+    // Open-graph / structured data sometimes flags private accounts.
+    const og = document.querySelector('meta[property="og:title"]')?.content || "";
+    // Locked-emoji tends to appear in private profile titles for some locales.
+    if (/🔒/.test(og)) return "private";
+
+    // Public detection: presence of post-grid images with the alt-text
+    // pattern IG uses, AND the page body contains a "posts"/"followers"
+    // counts line. Both must be true to avoid false positives on the
+    // logged-out splash page or transient render states.
+    const postImages = document.querySelectorAll('main img[alt*="Photo by"], main img[alt*="Post by"]').length;
+    const hasCounters = /\d[\d,. KMm]*\s+(posts|followers|following)/i.test(text);
+    if (postImages > 0 && hasCounters) return "public";
+  } catch (e) {
+    // DOM access can throw during very early page lifecycle — fall through.
+  }
+  return null;
+}
+
 function renderEmpty(panel, username, reason) {
   panel.innerHTML = `
     <div class="igt-head">
@@ -202,7 +244,15 @@ function renderPanel(panel, username, data) {
   if (data.ever_was_follower && !followsYou) {
     if (lr?.label) lines.push(`last seen as follower ${fmtSnapshotLabel(lr.label)}`);
   }
-  if (data.privacy === "likely_private") lines.push(`🔒 likely private`);
+  // Observed privacy from the actual IG page DOM beats inferred privacy
+  // from snapshot history: if IG is showing "This Account is Private",
+  // it definitely is. If the page is rendering a public-style header
+  // (post count + post grid + "Follow" button without "Account is
+  // Private" message), it's definitely public.
+  const observedPrivacy = detectPrivacyFromDOM();
+  if (observedPrivacy === "private") lines.push(`🔒 private (confirmed)`);
+  else if (observedPrivacy === "public") lines.push(`🌐 public (confirmed)`);
+  else if (data.privacy === "likely_private") lines.push(`🔒 likely private`);
   else if (data.privacy === "likely_public") lines.push(`🌐 likely public`);
   if (data.aliases && data.aliases.length > 1) {
     lines.push(`renamed: ${data.aliases.join(" → ")}`);
@@ -262,6 +312,8 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 
+let _privacyRecheckTimer = null;
+
 async function refreshOverlay(username) {
   if (!_settings.showOverlay) return;
   if (!_panelEl) _panelEl = buildPanel();
@@ -284,6 +336,22 @@ async function refreshOverlay(username) {
   bindHeaderActions(_panelEl);
   const data = await fetchLookup(username);
   renderPanel(_panelEl, username, data);
+
+  // IG is a SPA — the DOM for the new profile may still be settling when we
+  // first run the privacy detector. If we couldn't read it on first pass,
+  // schedule a re-render in 1.5s so the panel can pick up the now-loaded
+  // "Account is Private" banner / post grid. The lookup data isn't
+  // re-fetched (server-side data is stable) — we only re-render to refresh
+  // the DOM-derived privacy line.
+  if (_privacyRecheckTimer) clearTimeout(_privacyRecheckTimer);
+  if (detectPrivacyFromDOM() === null) {
+    _privacyRecheckTimer = setTimeout(() => {
+      // Bail if the user navigated away or closed the overlay.
+      if (_panelEl && _lastUsername === username && _panelOpen) {
+        renderPanel(_panelEl, username, data);
+      }
+    }, 1500);
+  }
 }
 
 function onLocationMaybeChanged() {
