@@ -1697,6 +1697,12 @@ def _lists_apply_overlay(pure: dict) -> dict:
     new_following = ext_following_usernames - sd_following_set - suppressed
     if new_following:
         existing_all_fol = {r["username"] for r in annotated.get("all_following", [])}
+        existing_nfb = {r["username"] for r in annotated.get("not_following_you_back", [])}
+        # Mirror current_lists' definition of nfb: following \ followers \
+        # incoming_requests. An account that's currently requesting to
+        # follow you back is "requesting to follow back," not "doesn't
+        # follow back," and shouldn't show up in the nfb list.
+        sd_incoming_set = set(pure["ctx"]["sd_incoming_requests"])
         for u in sorted(new_following - existing_all_fol):
             user_flags = flagged.get(u, {})
             row = {
@@ -1714,6 +1720,16 @@ def _lists_apply_overlay(pure: dict) -> dict:
             if u in confirmed_private:
                 row["privacy_confirmed_private"] = True
             annotated.setdefault("all_following", []).append(row)
+            # Extension-bridged follows aren't in s.followers (we never know
+            # whether they follow back from a profile visit), so by the
+            # current_lists definition they belong in not_following_you_back
+            # too. Skip if they're in incoming_requests — that case is
+            # "requesting to follow back," not "doesn't follow back."
+            # Without this, the per-list counts diverge from the
+            # all_following total — bug surfaced as "Mutuals + Don't follow
+            # back ≠ All following".
+            if u not in existing_nfb and u not in sd_incoming_set:
+                annotated.setdefault("not_following_you_back", []).append(dict(row))
 
     # Bucket priority sort.
     for bk in _BUCKET_KINDS_SET:
