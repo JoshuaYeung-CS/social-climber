@@ -809,9 +809,15 @@ function renderPanel(panel, username, data) {
   const userHasPending = !!data.currently_pending;
   if (observedPrivacy === "private") {
     lines.push(`🔒 private`);
-  } else if (data.privacy === "likely_private" && (userFollows || userHasPending)) {
-    // likely_private + direct contact = 100% private. Same display as
-    // banner-confirmed since both are equally certain.
+  } else if (data.privacy === "likely_private" && userHasPending) {
+    // likely_private + currently_pending = 100% private NOW. Pending
+    // means waiting for approval from a private account; the account
+    // can't be public if you currently have a pending request to it.
+    // (userFollows alone is NOT 100% — a private account that approved
+    // you can later flip to public, leaving your follow intact. The
+    // past pending phase still gets observed → likely_private — but
+    // the current state could be public. So we demote that case to
+    // "likely private" rather than risk falsifying definitely-private.)
     lines.push(`🔒 private`);
   } else if (data.privacy === "likely_private") {
     lines.push(`🔒 likely private`);

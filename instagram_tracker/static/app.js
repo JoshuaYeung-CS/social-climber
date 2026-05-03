@@ -657,13 +657,13 @@ function renderLookup(data) {
       <div class="facts">
         ${(() => {
           const confirmed = data.observation?.is_private === true;
-          const directContact = data.currently_following || data.currently_pending;
           if (confirmed) return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
-          if (data.privacy === "likely_private" && directContact) return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
+          // 100% private = banner-confirmed OR currently-pending.
+          // userFollows alone is NOT 100% (private→public flip leaves
+          // your follow intact, so likely_private + userFollows could
+          // be a now-public account). See comment in ig-profile.js.
+          if (data.privacy === "likely_private" && data.currently_pending) return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
           if (data.privacy === "likely_private") return `<div class="row"><span class="key">Privacy</span><span>🔒 likely private</span></div>`;
-          // Never promote likely_public → public: the inference is
-          // strong but not 100% (a brief pending phase could be missed
-          // between snapshots). Stay "likely public".
           if (data.privacy === "likely_public") return `<div class="row"><span class="key">Privacy</span><span>🌐 likely public</span></div>`;
           return "";
         })()}
@@ -1441,15 +1441,14 @@ function renderListRow(item) {
   // Privacy bucket for filter chips. Reflects the *display* confidence
   // level, not the raw server inference, so the chips group accounts
   // by what the user sees: "private" (100% certain via banner OR
-  // pending-phase + direct contact), "likely_private" (inferred only),
-  // "likely_public" (inferred only — never claim 100% public), or
-  // "unknown" when no signal. Computed up front because both the
-  // sub-line label below and the data-privacy attribute on the row need
-  // it; declaring it later was a temporal-dead-zone bug.
+  // currently_pending), "likely_private" (inference only — past
+  // pending evidence but no current pending, so a private→public flip
+  // could leave you currently following a now-public account),
+  // "likely_public" (inference only), or "unknown".
   let privacy = "unknown";
   if (item.privacy_confirmed_private) {
     privacy = "private";
-  } else if (item.privacy === "likely_private" && (item.currently_following || item.currently_pending)) {
+  } else if (item.privacy === "likely_private" && item.currently_pending) {
     privacy = "private";
   } else if (item.privacy === "likely_private") {
     privacy = "likely_private";
