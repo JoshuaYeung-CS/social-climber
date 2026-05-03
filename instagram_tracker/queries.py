@@ -390,6 +390,71 @@ def detect_renames(conn: sqlite3.Connection) -> list[dict]:
     return out
 
 
+def split_mutual_breaks_by_initiator(
+    conn: sqlite3.Connection, usernames: set[str]
+) -> tuple[set[str], set[str]]:
+    """For accounts in a mutual-break set (both you and they ended the
+    relationship), determine who initiated by comparing your unfollow
+    timestamp to the last snapshot they were a follower.
+
+    Returns (you_first, they_first).
+      you_first: your unfollow timestamp is strictly before the taken_at
+        of the last snapshot they appeared in your followers — they were
+        still following you when you unfollowed, so you initiated.
+      they_first: everything else — they had already dropped (or the
+        events happened in the same snapshot window and we can't
+        distinguish precisely; default to "they first" so the headline
+        list ("you initiated") only contains rows we're confident about).
+    """
+    if not usernames:
+        return set(), set()
+    placeholders = ",".join("?" * len(usernames))
+    args = list(usernames)
+
+    my_ts_map: dict[str, int] = {}
+    for r in conn.execute(
+        f"""
+        SELECT username, MAX(export_timestamp) AS ts
+        FROM recently_unfollowed
+        WHERE username IN ({placeholders}) AND export_timestamp IS NOT NULL
+        GROUP BY username
+        """,
+        args,
+    ).fetchall():
+        if r["ts"] is not None:
+            my_ts_map[r["username"]] = int(r["ts"])
+
+    their_last_ts_map: dict[str, int] = {}
+    for r in conn.execute(
+        f"""
+        SELECT followers.username AS username, MAX(snapshots.taken_at) AS taken_at
+        FROM followers
+        JOIN snapshots ON followers.snapshot_id = snapshots.id
+        WHERE followers.username IN ({placeholders})
+        GROUP BY followers.username
+        """,
+        args,
+    ).fetchall():
+        try:
+            dt = datetime.fromisoformat(r["taken_at"])
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            their_last_ts_map[r["username"]] = int(dt.timestamp())
+        except (ValueError, TypeError):
+            pass
+
+    you_first: set[str] = set()
+    they_first: set[str] = set()
+    for u in usernames:
+        my_ts = my_ts_map.get(u)
+        their_ts = their_last_ts_map.get(u)
+        if my_ts is not None and their_ts is not None and my_ts < their_ts:
+            you_first.add(u)
+        else:
+            they_first.add(u)
+    return you_first, they_first
+
+
 def username_alias_map(conn: sqlite3.Connection) -> dict[str, list[str]]:
     """Returns username -> ordered list of all aliases (including itself) per detected chain.
     Order is oldest -> newest by first-appearance snapshot."""

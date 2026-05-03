@@ -107,7 +107,8 @@ async function loadHome() {
         ["Feeders", s.feeder_accounts, "feeder_accounts"],
         ["Pending", s.pending, "pending"],
         ["Ever unfollowed you", s.ever_unfollowed_you ?? 0, "ever_unfollowed_you"],
-        ["Mutual breaks (you both unfollowed)", s.mutual_breaks ?? 0, "mutual_breaks"],
+        ["Mutual · you unfollowed first", s.mutual_break_you_first ?? 0, "mutual_break_you_first"],
+        ["Mutual · they unfollowed first", s.mutual_break_they_first ?? 0, "mutual_break_they_first"],
         ["Ever removed you as follower", s.ever_removed_you_as_follower ?? 0, "ever_removed_you_as_follower"],
         ["You ever unfollowed", s.ever_you_unfollowed ?? 0, "you_unfollowed_ever"],
         ["You still follow them after they unfollowed you", s.still_follow_after_drop ?? 0, "still_follow_after_drop"],
@@ -850,7 +851,8 @@ const LIST_KINDS = [
   ["ever_requested_outgoing", "Ever requested to follow"],
   ["request_dropped", "Follow Request Rejected"],
   ["ever_unfollowed_you", "Ever unfollowed you (only)"],
-  ["mutual_breaks", "Mutual breaks (you both unfollowed)"],
+  ["mutual_break_you_first", "Mutual · you unfollowed first"],
+  ["mutual_break_they_first", "Mutual · they unfollowed first"],
   ["ever_removed_you_as_follower", "Ever removed you as a follower"],
   ["you_unfollowed_ever", "You ever unfollowed"],
   ["still_follow_after_drop", "You still follow people who unfollowed you"],
@@ -880,7 +882,7 @@ function buildListKindOptions() {
 // once loadLists has data.
 const LIST_GROUPS = [
   { label: "Current",  kinds: ["everyone", "all_followers", "all_following", "mutuals", "not_following_you_back", "feeder_accounts", "pending", "incoming_requests", "renamed"] },
-  { label: "History",  kinds: ["ever_unfollowed_you", "mutual_breaks", "ever_removed_you_as_follower", "you_unfollowed_ever", "still_follow_after_drop"] },
+  { label: "History",  kinds: ["ever_unfollowed_you", "mutual_break_you_first", "mutual_break_they_first", "ever_removed_you_as_follower", "you_unfollowed_ever", "still_follow_after_drop"] },
   { label: "Requests", kinds: ["ever_incoming_requests", "real_requests", "incoming_request_dropped", "ever_requested_outgoing", "request_dropped"] },
   { label: "Tags",     kinds: ["favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"] },
 ];
@@ -1314,7 +1316,8 @@ const SORT_DATE_HINT = {
   mutuals:                      "by when you became mutual",
   not_following_you_back:       "by when they last followed you",
   ever_unfollowed_you:          "by when they last followed you",
-  mutual_breaks:                "by when they last followed you",
+  mutual_break_you_first:       "by when they last followed you",
+  mutual_break_they_first:      "by when they last followed you",
   ever_removed_you_as_follower: "by when they last appeared in your following",
   you_unfollowed_ever:          "by when you unfollowed them",
   recently_unfollowed:          "by when you unfollowed them",

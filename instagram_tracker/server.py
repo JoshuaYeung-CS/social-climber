@@ -268,6 +268,7 @@ def _home_compute():
             mutual_breaks -= suppressed_home
             ever_removed -= suppressed_home
             ever_unfollowed_you = ever_unfollowed_you_inbound | mutual_breaks
+            mb_you_first_home, mb_they_first_home = q.split_mutual_breaks_by_initiator(conn, mutual_breaks)
 
             # Drop anyone who's now following you back — they re-followed, so
             # they're no longer "an unfollower you still follow". History is
@@ -364,7 +365,8 @@ def _home_compute():
                 "incoming_requests": len(active_incoming),
                 # Cumulative (ever) counts:
                 "ever_unfollowed_you": len(ever_unfollowed_you_inbound),
-                "mutual_breaks": len(mutual_breaks),
+                "mutual_break_you_first": len(mb_you_first_home),
+                "mutual_break_they_first": len(mb_they_first_home),
                 "ever_removed_you_as_follower": len(ever_removed),
                 "ever_you_unfollowed": len(ever_self),
                 "still_follow_after_drop": len(still_follow_them),
@@ -942,8 +944,15 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         ever_unfollowed_you_inbound = {u for u in ever_unfollowed_you_inbound if not aliases_active(u, sd.followers)}
         mutual_breaks = {u for u in mutual_breaks if not aliases_active(u, sd.followers)}
 
+        # Split mutual breaks by who initiated. you_first = my unfollow
+        # ts predates their last-as-follower snapshot (clear evidence I
+        # acted first while they were still following). they_first =
+        # everything else, which conservatively includes same-window
+        # cases the snapshot cadence can't disambiguate.
+        mb_you_first, mb_they_first = q.split_mutual_breaks_by_initiator(conn, mutual_breaks)
         sections["ever_unfollowed_you"] = sorted(ever_unfollowed_you_inbound)
-        sections["mutual_breaks"] = sorted(mutual_breaks)
+        sections["mutual_break_you_first"] = sorted(mb_you_first)
+        sections["mutual_break_they_first"] = sorted(mb_they_first)
         sections["ever_removed_you_as_follower"] = sorted(ever_removed_you)
         # Keep the original raw set name available for "still_follow_after_drop"
         # below — the user-still-follows logic should consider both pure
@@ -1181,7 +1190,8 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
             "not_following_you_back",
             "they_unfollowed_you",
             "ever_unfollowed_you",
-            "mutual_breaks",
+            "mutual_break_you_first",
+            "mutual_break_they_first",
             "unfollowers_you_still_follow",
         }
         # "Last appeared in your following" date: kinds where they used to
