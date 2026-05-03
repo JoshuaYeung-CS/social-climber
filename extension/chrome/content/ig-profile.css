@@ -148,6 +148,22 @@
   border-color: rgba(255, 180, 84, 0.55);
   color: #ffd089;
 }
+.igt-flash {
+  background: rgba(62, 207, 142, 0.15);
+  border: 1px solid rgba(62, 207, 142, 0.4);
+  color: #3ecf8e;
+  font-size: 11px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  text-align: center;
+  animation: igt-flash-in 200ms ease-out;
+}
+@keyframes igt-flash-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 .igt-pill {
   background: #18181b;
   color: #f1f1f3;

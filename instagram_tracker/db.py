@@ -118,7 +118,9 @@ CREATE TABLE IF NOT EXISTS profile_observations (
     post_count INTEGER,
     verified INTEGER NOT NULL DEFAULT 0,
     is_private INTEGER,
-    profile_pic_url TEXT
+    profile_pic_url TEXT,
+    follow_button_state TEXT,
+    follow_state_changed_at TEXT
 );
 """
 
@@ -167,6 +169,13 @@ def connect(db_path: Path) -> sqlite3.Connection:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN random_request INTEGER NOT NULL DEFAULT 0")
     if "random_request_added_at" not in cols:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN random_request_added_at TEXT")
+
+    # profile_observations new columns for live button-state observation
+    obs_cols = {row[1] for row in conn.execute("PRAGMA table_info(profile_observations)").fetchall()}
+    if obs_cols and "follow_button_state" not in obs_cols:
+        conn.execute("ALTER TABLE profile_observations ADD COLUMN follow_button_state TEXT")
+    if obs_cols and "follow_state_changed_at" not in obs_cols:
+        conn.execute("ALTER TABLE profile_observations ADD COLUMN follow_state_changed_at TEXT")
 
     snap_cols = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
     if "content_hash" not in snap_cols:

@@ -1356,6 +1356,7 @@ textarea {
 .obs-link { font-size: 12px; }
 .obs-link a { color: var(--accent); }
 .obs-private { font-size: 12px; color: var(--warn); margin-top: 6px; }
+.obs-button-state { font-size: 12px; color: var(--accent); margin-top: 4px; }
 .account-detail .url a { color: var(--accent); text-decoration: none; }
 .tag-toggles { display: flex; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
 .tag-toggle {

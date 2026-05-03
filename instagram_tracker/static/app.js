@@ -610,6 +610,21 @@ function renderLookup(data) {
       ${obs.bio ? `<div class="obs-bio">${escapeHtml(obs.bio)}</div>` : ""}
       ${obs.external_link ? `<div class="obs-link"><a href="${escapeAttr(obs.external_link)}" target="_blank" rel="noopener">${escapeHtml(obs.external_link)}</a></div>` : ""}
       ${obs.is_private === true ? `<div class="obs-private">🔒 private (confirmed via page banner)</div>` : ""}
+      ${(() => {
+        const s = obs.follow_button_state;
+        if (!s) return "";
+        const labels = {
+          requested:               "🔵 you sent a follow request (button: Requested)",
+          following:               "🟢 you currently follow them (button: Following)",
+          not_following:           "⚪ you don't follow them yet (button: Follow)",
+          follow_back_available:   "🟡 they follow you, you don't yet (button: Follow back)",
+        };
+        const label = labels[s] || `button: ${s}`;
+        const when = obs.follow_state_changed_at
+          ? ` · changed ${escapeHtml(fmtDate(obs.follow_state_changed_at.slice(0, 10)) || "")}`
+          : "";
+        return `<div class="obs-button-state">${label}${when}</div>`;
+      })()}
     </div>
   ` : "";
 

@@ -186,11 +186,13 @@ async function saveToVault(username) {
 // forget — we don't await, the UI render shouldn't block on this. Only
 // posts when we actually picked up SOMETHING from the DOM (otherwise
 // we'd be sending empty rows that overwrite real data with NULLs).
-function sendProfileObservation(username, profile, privacyDom) {
+function sendProfileObservation(username, profile, privacyDom, extra = {}) {
+  const buttonState = extra.follow_button_state || detectFollowButtonState();
   const hasAnything = profile.posts || profile.followers || profile.following
     || profile.bio || profile.display_name || profile.verified
     || profile.profile_pic || profile.external_link
-    || privacyDom === "private";
+    || privacyDom === "private"
+    || buttonState;
   if (!hasAnything) return;
   // is_private: only send TRUE when DOM actually showed the banner. Don't
   // send FALSE on banner-absent — could be a private account we follow.
@@ -202,8 +204,67 @@ function sendProfileObservation(username, profile, privacyDom) {
       username,
       ...profile,
       is_private,
+      follow_button_state: buttonState,
+      button_state_changed: !!extra.button_state_changed,
     }),
   }).catch(() => {});
+}
+
+// Watch the Follow / Requested / Following button for state changes. Used
+// after the initial overlay render so we can react when the user clicks
+// Follow on a private profile (button changes Follow → Requested) or
+// Follow on a public one (Follow → Following). Both events are valuable
+// to the tracker before the next official IG export reflects them.
+function watchFollowButtonChanges(username) {
+  const main = document.querySelector("main");
+  if (!main) return null;
+  let lastState = detectFollowButtonState();
+  const observer = new MutationObserver(() => {
+    const next = detectFollowButtonState();
+    if (next && next !== lastState) {
+      const wasNeutral = lastState === null || lastState === "not_following" || lastState === "follow_back_available";
+      const newRelationship = wasNeutral && (next === "requested" || next === "following");
+      if (newRelationship) {
+        // POST a state-changed observation so the tracker records the
+        // event timestamp (won't wait for the next export).
+        sendProfileObservation(
+          username,
+          extractProfileFromDOM(),
+          detectPrivacyFromDOM(),
+          { follow_button_state: next, button_state_changed: true }
+        );
+        // Update overlay if it's still showing this username.
+        if (_panelEl && _lastUsername === username && _panelOpen) {
+          flashRequestedConfirmation(_panelEl, next);
+        }
+      } else {
+        // State changed (e.g. Following → Follow if user unfollowed) — record
+        // the new state but don't flash the confirmation.
+        sendProfileObservation(
+          username,
+          extractProfileFromDOM(),
+          detectPrivacyFromDOM(),
+          { follow_button_state: next, button_state_changed: true }
+        );
+      }
+      lastState = next;
+    }
+  });
+  observer.observe(main, { childList: true, subtree: true, characterData: true });
+  return observer;
+}
+
+// Briefly highlight the overlay to confirm the request/follow was recorded.
+function flashRequestedConfirmation(panel, state) {
+  const body = panel.querySelector(".igt-body");
+  if (!body) return;
+  const note = document.createElement("div");
+  note.className = "igt-flash";
+  note.textContent = state === "requested"
+    ? "✓ recorded: you sent a follow request"
+    : "✓ recorded: you started following them";
+  body.insertBefore(note, body.firstChild);
+  setTimeout(() => { note.remove(); }, 4000);
 }
 
 function fmtDate(iso) {
@@ -237,6 +298,35 @@ function fmtDateTime(ts) {
   return d.toLocaleString("en-US", sameYear
     ? { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }
     : { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+// Read the current state of the Follow / Following / Requested button on
+// the profile header. Returns one of:
+//   "not_following"    — button says "Follow"
+//   "requested"        — button says "Requested" (you sent a request that
+//                        hasn't been accepted yet — happens for private
+//                        accounts you tap Follow on)
+//   "following"        — you currently follow them (button says "Following")
+//   "follow_back_available" — button says "Follow back" (rare; appears on
+//                              accounts who follow you that you don't yet)
+//   null               — couldn't find the button (own profile, error, etc.)
+function detectFollowButtonState() {
+  try {
+    const main = document.querySelector("main");
+    const header = main?.querySelector("header") || document.querySelector("header");
+    if (!header) return null;
+    const candidates = header.querySelectorAll("button, [role='button']");
+    for (const el of candidates) {
+      const t = (el.textContent || "").trim();
+      if (t === "Follow") return "not_following";
+      if (t === "Requested") return "requested";
+      if (t === "Following") return "following";
+      if (t === "Follow back" || t === "Follow Back") return "follow_back_available";
+    }
+  } catch (e) {
+    // ignore
+  }
+  return null;
 }
 
 // Detect IG's "Sorry, this page isn't available" / "User not found" state.
@@ -607,6 +697,7 @@ function escapeHtml(s) {
 }
 
 let _privacyRecheckTimer = null;
+let _followBtnObserver = null;
 
 async function refreshOverlay(username) {
   if (!_settings.showOverlay) return;
@@ -630,6 +721,12 @@ async function refreshOverlay(username) {
   bindHeaderActions(_panelEl);
   const data = await fetchLookup(username);
   renderPanel(_panelEl, username, data);
+
+  // Tear down any prior follow-button observer (from a previous profile)
+  // and start a fresh one for this username. Catches the user clicking
+  // Follow on the IG page → button state changes → we record it.
+  if (_followBtnObserver) { _followBtnObserver.disconnect(); _followBtnObserver = null; }
+  _followBtnObserver = watchFollowButtonChanges(username);
 
   // IG is a SPA — the DOM for the new profile may still be settling when we
   // first run the privacy detector. If we couldn't read it on first pass,

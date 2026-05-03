@@ -1639,7 +1639,8 @@ def _lookup_compute(username: str, profile_url: str):
         obs_row = conn.execute(
             "SELECT observed_at, display_name, bio, external_link, "
             "follower_count, following_count, post_count, verified, "
-            "is_private, profile_pic_url "
+            "is_private, profile_pic_url, follow_button_state, "
+            "follow_state_changed_at "
             "FROM profile_observations WHERE username = ?",
             (username,),
         ).fetchone()
@@ -1784,6 +1785,9 @@ def profile_observation(payload: dict = Body(...)):
     if not username:
         raise HTTPException(status_code=400, detail="Need 'username'.")
     from datetime import datetime, timezone
+    # Live follow-button state observed in the extension. One of:
+    # not_following / requested / following / follow_back_available / null.
+    button_state = payload.get("follow_button_state") or None
     fields = {
         "username": username,
         "observed_at": datetime.now(timezone.utc).isoformat(),
@@ -1797,6 +1801,10 @@ def profile_observation(payload: dict = Body(...)):
         "is_private":       (1 if payload.get("is_private") is True
                               else (0 if payload.get("is_private") is False else None)),
         "profile_pic_url":  (payload.get("profile_pic") or None),
+        "follow_button_state": button_state,
+        "follow_state_changed_at": (
+            datetime.now(timezone.utc).isoformat() if payload.get("button_state_changed") else None
+        ),
     }
     with db_conn() as conn:
         conn.execute(
@@ -1804,11 +1812,13 @@ def profile_observation(payload: dict = Body(...)):
             INSERT INTO profile_observations (
                 username, observed_at, display_name, bio, external_link,
                 follower_count, following_count, post_count, verified,
-                is_private, profile_pic_url
+                is_private, profile_pic_url, follow_button_state,
+                follow_state_changed_at
             ) VALUES (
                 :username, :observed_at, :display_name, :bio, :external_link,
                 :follower_count, :following_count, :post_count, :verified,
-                :is_private, :profile_pic_url
+                :is_private, :profile_pic_url, :follow_button_state,
+                :follow_state_changed_at
             )
             ON CONFLICT(username) DO UPDATE SET
                 observed_at      = excluded.observed_at,
@@ -1820,7 +1830,9 @@ def profile_observation(payload: dict = Body(...)):
                 post_count       = COALESCE(excluded.post_count, post_count),
                 verified         = excluded.verified,
                 is_private       = COALESCE(excluded.is_private, is_private),
-                profile_pic_url  = COALESCE(excluded.profile_pic_url, profile_pic_url)
+                profile_pic_url  = COALESCE(excluded.profile_pic_url, profile_pic_url),
+                follow_button_state = COALESCE(excluded.follow_button_state, follow_button_state),
+                follow_state_changed_at = COALESCE(excluded.follow_state_changed_at, follow_state_changed_at)
             """,
             fields,
         )
