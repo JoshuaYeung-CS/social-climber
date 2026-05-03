@@ -626,7 +626,7 @@ function renderLookup(data) {
       ].filter(Boolean).join(" · ")}</div>` : ""}
       ${obs.bio ? `<div class="obs-bio">${escapeHtml(obs.bio)}</div>` : ""}
       ${obs.external_link ? `<div class="obs-link"><a href="${escapeAttr(obs.external_link)}" target="_blank" rel="noopener">${escapeHtml(obs.external_link)}</a></div>` : ""}
-      ${obs.is_private === true ? `<div class="obs-private">🔒 private (confirmed via page banner)</div>` : ""}
+      ${obs.is_private === true ? `<div class="obs-private">🔒 private</div>` : ""}
       ${(() => {
         const s = obs.follow_button_state;
         if (!s) return "";
@@ -658,7 +658,7 @@ function renderLookup(data) {
         ${(() => {
           const confirmed = data.observation?.is_private === true;
           const directContact = data.currently_following || data.currently_pending;
-          if (confirmed) return `<div class="row"><span class="key">Privacy</span><span>🔒 private (banner shown)</span></div>`;
+          if (confirmed) return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
           if (data.privacy === "likely_private" && directContact) return `<div class="row"><span class="key">Privacy</span><span>🔒 private</span></div>`;
           if (data.privacy === "likely_private") return `<div class="row"><span class="key">Privacy</span><span>🔒 likely private</span></div>`;
           // Never promote likely_public → public: the inference is
@@ -1018,9 +1018,11 @@ function applyListSearch() {
     const m = (c.dataset.filter || "").match(/^privacy:(.+)$/);
     if (m) allowedPrivacy.add(m[1]);
   });
-  // If all three filters are off, treat it as "show everything" rather than
-  // hiding the entire list — saves the user from a blank-list state.
-  const filterOn = allowedPrivacy.size > 0 && allowedPrivacy.size < 3;
+  // If every filter is on (or none are), treat as "show everything" so
+  // the user never lands on an empty filtered list. Match the count of
+  // visible chips.
+  const totalChips = $$(".filter-chip").length;
+  const filterOn = allowedPrivacy.size > 0 && allowedPrivacy.size < totalChips;
 
   let visible = 0;
   for (const row of rows) {
@@ -1124,7 +1126,7 @@ $("#list-output")?.addEventListener("click", async (e) => {
 // applies after all chips are evaluated. "Clear filters" reactivates
 // all chips so everything shows.
 function updateFilterCounts(rows) {
-  const counts = { likely_private: 0, likely_public: 0, unknown: 0 };
+  const counts = { private: 0, likely_private: 0, likely_public: 0, unknown: 0 };
   rows.forEach((r) => {
     const p = r.dataset.privacy || "unknown";
     counts[p] = (counts[p] || 0) + 1;
@@ -1446,26 +1448,20 @@ function renderListRow(item) {
   if (item.following_via_extension) parts.push(`<span class="info-tag">via extension — not yet in export</span>`);
   if (item.mutual_since_at) parts.push(`mutual since ${escapeHtml(fmtDate(item.mutual_since_at))}`);
   if (item.history_status === "re-engaged") parts.push(`<span class="info-tag">re-engaged</span>`);
-  // Privacy display, ordered most-certain → least. Invariant:
-  // un-hedged "private" / "public" only when 100% certain.
-  //   1. "🔒 private (banner shown)" — DOM-confirmed by extension visit.
-  //   2. "🔒 private" — likely_private (pending phase observed) + you
-  //      currently follow or have a pending request. Logically airtight:
-  //      only private accounts go through pending.
-  //   3. "🔒 likely private" — pending observation but no current contact.
-  //   4. "🌐 likely public" — inference (snapshots covered pre-follow,
-  //      no pending observed). Strong but not airtight: a brief pending
-  //      phase could have resolved between snapshots, so we never
-  //      promote to un-hedged "public".
+  // Privacy display, ordered most-certain → least:
+  //   1. "🔒 private" — DOM banner OR likely_private + direct contact.
+  //      Both are 100% certain (banner is IG's own claim; pending phase
+  //      can only happen for private accounts). Same display.
+  //   2. "🔒 likely private" — pending observation but no current contact.
+  //   3. "🌐 likely public" — inference (snapshots covered pre-follow,
+  //      no pending observed). Never promoted to un-hedged "public" —
+  //      a brief pending phase could have resolved between snapshots.
   // Anything else stays unlabeled (= "?" unknown via the filter chip).
-  const directContact = item.currently_following || item.currently_pending;
-  if (item.privacy_confirmed_private) {
-    parts.push(`<span class="privacy-tag privacy-private">🔒 private (banner shown)</span>`);
-  } else if (item.privacy === "likely_private" && directContact) {
+  if (privacy === "private") {
     parts.push(`<span class="privacy-tag privacy-private">🔒 private</span>`);
-  } else if (item.privacy === "likely_private") {
+  } else if (privacy === "likely_private") {
     parts.push(`<span class="privacy-tag privacy-private">🔒 likely private</span>`);
-  } else if (item.privacy === "likely_public") {
+  } else if (privacy === "likely_public") {
     parts.push(`<span class="privacy-tag privacy-public">🌐 likely public</span>`);
   }
   if (item.aliases && item.aliases.length > 1) parts.push(`<span class="info-tag">renamed: ${escapeHtml(item.aliases.join(' → '))}</span>`);
@@ -1540,8 +1536,22 @@ function renderListRow(item) {
   // .list-output is in select-mode and this row has aria-selected="true").
   const checkbox = `<span class="row-check" aria-hidden="true"></span>`;
 
-  // Privacy bucket for filter chips. unknown when we have no inference yet.
-  const privacy = item.privacy || "unknown";
+  // Privacy bucket for filter chips. Reflects the *display* confidence
+  // level, not the raw server inference, so the chips group accounts
+  // by what the user sees: "private" (100% certain via banner OR
+  // pending-phase + direct contact), "likely_private" (inferred only),
+  // "likely_public" (inferred only — never claim 100% public), or
+  // "unknown" when no signal.
+  let privacy = "unknown";
+  if (item.privacy_confirmed_private) {
+    privacy = "private";
+  } else if (item.privacy === "likely_private" && (item.currently_following || item.currently_pending)) {
+    privacy = "private";
+  } else if (item.privacy === "likely_private") {
+    privacy = "likely_private";
+  } else if (item.privacy === "likely_public") {
+    privacy = "likely_public";
+  }
 
   return `
     <div class="list-row${rowClass ? " " + rowClass : ""}" data-username="${escapeAttr(item.username)}" data-search="${escapeAttr(haystack)}" data-rel="${escapeAttr(rel)}" data-privacy="${escapeAttr(privacy)}">

@@ -808,22 +808,17 @@ function renderPanel(panel, username, data) {
   const userFollows = !!data.currently_following;
   const userHasPending = !!data.currently_pending;
   if (observedPrivacy === "private") {
-    lines.push(`🔒 private (banner shown)`);
+    lines.push(`🔒 private`);
   } else if (data.privacy === "likely_private" && (userFollows || userHasPending)) {
-    // likely_private is set only when the inference saw a pending phase
-    // (observed pending <= follow, or pending earlier in snapshot order).
-    // Public accounts never enter pending → this is 100% private when
-    // combined with the direct-contact signal (you currently follow OR
-    // currently pending). Promote without "likely".
+    // likely_private + direct contact = 100% private. Same display as
+    // banner-confirmed since both are equally certain.
     lines.push(`🔒 private`);
   } else if (data.privacy === "likely_private") {
     lines.push(`🔒 likely private`);
   } else if (data.privacy === "likely_public") {
-    // Never promote to "🌐 public" — the inference is "snapshots covered
-    // the pre-follow period AND no pending was observed," but a brief
-    // pending phase could have been resolved between snapshots. Strong
-    // signal, not 100%. Stay as "likely public" regardless of whether
-    // you currently follow them.
+    // Never promote to un-hedged "public" — likely_public is "snapshots
+    // covered pre-follow + no pending observed," strong but not airtight
+    // (brief pending phase could resolve between snapshots).
     lines.push(`🌐 likely public`);
   }
 
