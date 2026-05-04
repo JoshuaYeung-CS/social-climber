@@ -151,15 +151,28 @@ async function stepClickRow(label) {
 }
 
 async function uncheckAll() {
-  // Find all checked checkboxes in the open dialog and click to uncheck.
-  const checkedBoxes = document.querySelectorAll(
-    "[role='checkbox'][aria-checked='true'], input[type='checkbox']:checked"
+  // Multi-pass uncheck: clicking a box can re-render its parent block
+  // and reveal new checked boxes (e.g., a section that was collapsed
+  // expands as Meta updates the form state). Keep iterating until a
+  // pass finds nothing checked, or we hit the safety cap.
+  const SELECTOR = (
+    "[role='checkbox'][aria-checked='true'], " +
+    "[role='checkbox'][aria-checked='mixed'], " +
+    "input[type='checkbox']:checked"
   );
-  console.log(`[IG Tracker] Unchecking ${checkedBoxes.length} boxes`);
-  for (const box of checkedBoxes) {
-    box.scrollIntoView({ block: "center", behavior: "instant" });
-    box.click();
-    await sleep(40);
+  for (let pass = 0; pass < 6; pass++) {
+    const checkedBoxes = Array.from(document.querySelectorAll(SELECTOR));
+    if (checkedBoxes.length === 0) {
+      if (pass === 0) console.log("[IG Tracker] uncheckAll: nothing was checked");
+      break;
+    }
+    console.log(`[IG Tracker] uncheckAll pass ${pass + 1}: ${checkedBoxes.length} box(es)`);
+    for (const box of checkedBoxes) {
+      box.scrollIntoView({ block: "center", behavior: "instant" });
+      box.click();
+      await sleep(50);
+    }
+    await sleep(SETTLE_MS);
   }
 }
 
