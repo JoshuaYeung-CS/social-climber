@@ -2070,10 +2070,10 @@ function renderActivityLog() {
       header = `<div class="al-day">${escapeHtml(dayLabel(t))}</div>`;
     }
     return header + `
-      <div class="al-row">
+      <div class="al-row clickable" data-username="${escapeAttr(e.username)}" title="Click for full account history">
         <span class="al-time-cell">${escapeHtml(time)}</span>
         <span class="al-kind-pill al-${meta.cls}">${escapeHtml(meta.label)}</span>
-        <span class="al-name" data-username="${escapeAttr(e.username)}">${escapeHtml(e.username)}</span>
+        <span class="al-name">${escapeHtml(e.username)}</span>
         <a class="al-open" href="https://www.instagram.com/${encodeURIComponent(e.username)}/" target="_blank" rel="noopener" title="Open on Instagram" onclick="event.stopPropagation()">↗</a>
       </div>
     `;
@@ -2114,8 +2114,15 @@ function renderActivityLog() {
       renderActivityLog();
     })
   );
-  $$(".al-name", out).forEach((el) =>
-    el.addEventListener("click", () => openAccountModal(el.dataset.username))
+  // Whole row is clickable to open the account-detail modal — gives the
+  // user "what happened with this account" context without having to
+  // aim at the small username text.
+  $$(".al-row.clickable", out).forEach((el) =>
+    el.addEventListener("click", (e) => {
+      // Don't fire when the user clicked the ↗ Open-on-Instagram link.
+      if (e.target.closest(".al-open")) return;
+      openAccountModal(el.dataset.username);
+    })
   );
   const moreBtn = out.querySelector(".al-more");
   if (moreBtn) {

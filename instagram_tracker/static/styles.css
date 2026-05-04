@@ -575,6 +575,9 @@ code {
   font-size: 13px;
 }
 .al-row:last-child { border-bottom: 0; }
+.al-row.clickable { cursor: pointer; transition: background 100ms ease; }
+.al-row.clickable:hover { background: rgba(255, 255, 255, 0.04); }
+.al-row .al-name { font-weight: 500; }
 .al-time-cell {
   font-variant-numeric: tabular-nums;
   font-size: 12px;
