@@ -108,6 +108,49 @@ document.addEventListener("DOMContentLoaded", async () => {
     status.textContent = text;
     setTimeout(() => { status.textContent = ""; }, 3000);
   }
+  el("save-all-tabs").addEventListener("click", async () => {
+    // Collect every open Instagram profile URL across windows and POST
+    // them in a batch to /api/followup/add. The tracker dedupes against
+    // its existing queue + the user's current followers/following so
+    // already-known accounts don't get re-queued.
+    const settings = await loadSettings();
+    const tabs = await chrome.tabs.query({});
+    const items = [];
+    const seen = new Set();
+    for (const t of tabs) {
+      const url = t.url || "";
+      // Match a profile URL like /<username>/ — exclude obvious non-profile
+      // paths (post pages, reels, stories, accounts/center, explore, etc).
+      const m = url.match(/^https:\/\/(?:www\.)?instagram\.com\/([A-Za-z0-9._]{1,30})\/?(?:\?|$|#)/);
+      if (!m) continue;
+      const username = m[1].toLowerCase();
+      const RESERVED = new Set([
+        "explore", "reels", "direct", "p", "accounts", "accountscenter",
+        "tv", "stories", "web", "about", "developer", "legal", "press",
+      ]);
+      if (RESERVED.has(username)) continue;
+      if (seen.has(username)) continue;
+      seen.add(username);
+      items.push({ username, profile_url: `https://www.instagram.com/${username}/`, input: username });
+    }
+    if (items.length === 0) {
+      flashStatus("no IG profile tabs open");
+      return;
+    }
+    flashStatus(`saving ${items.length} tab${items.length === 1 ? "" : "s"}…`);
+    try {
+      const r = await fetch(`${settings.trackerUrl}/api/followup/add`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      const data = await r.json();
+      flashStatus(`queued ${data.added}/${items.length} (total ${data.total})`);
+    } catch (e) {
+      flashStatus(`failed: ${e.message}`);
+    }
+  });
+
   el("toggle-followers-only").addEventListener("click", () =>
     sendOneShot({ type: "toggle-followers-only" }, "done — only F+F checked"));
   el("set-format-json").addEventListener("click", () =>

@@ -5,7 +5,8 @@
   "description": "Auto-fills the Instagram data export wizard and overlays your local IG Tracker history on profile pages.",
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "tabs"
   ],
   "host_permissions": [
     "https://www.instagram.com/*",
