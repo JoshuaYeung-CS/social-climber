@@ -115,18 +115,38 @@ function findByText(text, within = document) {
   return null;
 }
 
-// Find the parent row containing a label, then the toggle/checkbox in it.
+// Find the parent row containing a label.
+//
+// Same robustness approach as findByText: walk every element, find the
+// LEAF whose direct text equals the target, then climb up to the
+// nearest clickable ancestor (which is the row we want to click). The
+// older first-line approach failed when Meta wrapped the label in
+// multiple span layers — the parent's first line was empty whitespace
+// or the screen-reader hint, not the visible label.
 function findRowByLabel(text, within = document) {
   const target = String(text).trim().toLowerCase();
-  const all = within.querySelectorAll("div, label, li");
+  if (!target) return null;
+  const all = within.querySelectorAll("*");
+  // Pass 1: leaf node with direct text equal to target.
   for (const el of all) {
-    const direct = el.querySelector(":scope > div, :scope > span, :scope > label");
-    const ownText = (el.textContent || "").trim().toLowerCase();
-    // Match if the row's first line is the target, not just contains it.
-    const firstLine = ownText.split("\n")[0].trim();
-    if (firstLine === target || firstLine.startsWith(target + " ")) {
-      return el;
-    }
+    const dt = _directText(el).toLowerCase();
+    if (dt === target) return _climbToClickable(el);
+  }
+  // Pass 2: any element whose total textContent first line is the
+  // target, not too long (so we don't return the whole dialog).
+  for (const el of all) {
+    const t = (el.textContent || "").trim().toLowerCase();
+    if (!t) continue;
+    const firstLine = t.split(/\n|·|·/)[0].trim();
+    if (firstLine === target && t.length < 200) return _climbToClickable(el);
+  }
+  // Pass 3: starts-with match for cases where the label is followed by
+  // a single space + value (e.g. "Format HTML").
+  for (const el of all) {
+    const t = (el.textContent || "").trim().toLowerCase();
+    if (!t) continue;
+    const firstLine = t.split(/\n|·|·/)[0].trim();
+    if (firstLine.startsWith(target + " ") && t.length < 200) return _climbToClickable(el);
   }
   return null;
 }
