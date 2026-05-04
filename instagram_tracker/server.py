@@ -2309,6 +2309,31 @@ def get_media(username: str, media_id: str, ext: str):
                         headers={"Cache-Control": "private, max-age=3600"})
 
 
+@app.get("/api/media-summary")
+def media_summary():
+    """Top-level summary of the local media archive: per-user counts +
+    sizes. Used by the home view's 'Archived media' tile so the user
+    can see at a glance how much they've stored and click in to browse
+    a specific account's archive."""
+    if not _MEDIA_DIR.is_dir():
+        return {"users": [], "total_items": 0, "total_bytes": 0}
+    users = []
+    total_items = 0
+    total_bytes = 0
+    for d in sorted(_MEDIA_DIR.iterdir()):
+        if not d.is_dir():
+            continue
+        files = [p for p in d.iterdir() if p.is_file()]
+        if not files:
+            continue
+        size = sum(p.stat().st_size for p in files)
+        users.append({"username": d.name, "count": len(files), "bytes": size})
+        total_items += len(files)
+        total_bytes += size
+    users.sort(key=lambda u: -u["count"])
+    return {"users": users, "total_items": total_items, "total_bytes": total_bytes}
+
+
 @app.get("/api/media-list/{username}")
 def list_media(username: str):
     """List all archived media filenames for a username. Used by the

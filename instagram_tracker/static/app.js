@@ -174,9 +174,40 @@ async function loadHome() {
     $("#count-unavailable").textContent = data.bucket_counts.unavailable ?? 0;
     $("#count-random_request").textContent = data.bucket_counts.random_request ?? 0;
     $("#count-now_public").textContent = data.bucket_counts.now_public ?? 0;
+    loadArchiveCard();
   } catch (e) {
     console.error(e);
     toast(`Couldn't load home: ${e.message}`);
+  }
+}
+
+// Surface the local media archive on the home view. Hidden entirely
+// when nothing has been auto-archived yet (the auto-archive setting
+// defaults off, so most users won't see this card).
+async function loadArchiveCard() {
+  const card = $("#archive-card");
+  if (!card) return;
+  try {
+    const r = await fetch("/api/media-summary");
+    if (!r.ok) { card.hidden = true; return; }
+    const data = await r.json();
+    if (!data.users || data.users.length === 0) { card.hidden = true; return; }
+    card.hidden = false;
+    const totalMb = (data.total_bytes / 1024 / 1024).toFixed(1);
+    $("#archive-summary").textContent =
+      `${data.total_items} item${data.total_items === 1 ? "" : "s"} across ${data.users.length} account${data.users.length === 1 ? "" : "s"} · ${totalMb} MB`;
+    $("#archive-users").innerHTML = data.users.map((u) => {
+      const sizeKb = (u.bytes / 1024).toFixed(0);
+      return `<a class="archive-user" data-username="${escapeAttr(u.username)}" href="#" title="${escapeAttr(u.username)} · ${u.count} items · ${sizeKb} KB">@${escapeHtml(u.username)} <span class="muted small">${u.count}</span></a>`;
+    }).join("");
+    $$(".archive-user", card).forEach((el) =>
+      el.addEventListener("click", (e) => {
+        e.preventDefault();
+        openAccountModal(el.dataset.username);
+      })
+    );
+  } catch {
+    card.hidden = true;
   }
 }
 
@@ -579,6 +610,7 @@ async function openAccount(account, { resultId = "lookup-result", saveToQueue = 
     const data = await api.get(`/api/lookup?account=${encodeURIComponent(account)}`);
     const result = $(`#${resultId}`);
     result.innerHTML = renderLookup(data);
+    loadArchivedMediaForModal(data.username);
     bindTagToggles(result, data.username, data.tags);
 
     if (saveToQueue && data.found === false) {
@@ -689,9 +721,51 @@ function renderLookup(data) {
         ${data.first_requested_snapshot ? `<div class="row"><span class="key">First requested</span><span>#${data.first_requested_snapshot.snapshot_id} ${escapeHtml(cleanLabel(data.first_requested_snapshot.label))}</span></div>` : ""}
         ${data.last_requested_snapshot ? `<div class="row"><span class="key">Last requested</span><span>#${data.last_requested_snapshot.snapshot_id} ${escapeHtml(cleanLabel(data.last_requested_snapshot.label))}</span></div>` : ""}
       </div>
+      <div class="archived-media-block" data-username="${escapeAttr(data.username)}"></div>
       <button class="primary" data-action="show-history" data-username="${escapeAttr(data.username)}">Show full history</button>
     </div>
   `;
+}
+
+// Async loader for the archived-media gallery in the account modal.
+// Called after renderLookup paints; fetches the archive list for the
+// username and renders thumbnails. Hidden entirely when nothing is
+// archived for this user (which is the common case when the
+// auto-archive setting hasn't been turned on).
+async function loadArchivedMediaForModal(username) {
+  const block = document.querySelector(`.archived-media-block[data-username="${cssEscape(username)}"]`);
+  if (!block) return;
+  try {
+    const r = await fetch(`/api/media-list/${encodeURIComponent(username)}`);
+    if (!r.ok) return;
+    const data = await r.json();
+    const items = data.items || [];
+    if (items.length === 0) {
+      block.innerHTML = "";
+      return;
+    }
+    const tiles = items.map((item) => {
+      const isVideo = item.ext === "mp4";
+      const url = item.url;
+      const open = `<a class="archived-tile" href="${escapeAttr(url)}" target="_blank" rel="noopener" title="Open ${escapeAttr(item.media_id)} (${(item.size / 1024).toFixed(0)} KB)">`;
+      if (isVideo) {
+        return `${open}<video src="${escapeAttr(url)}" muted preload="metadata"></video><span class="archived-badge">▶</span></a>`;
+      }
+      return `${open}<img src="${escapeAttr(url)}" alt="${escapeAttr(item.media_id)}" /></a>`;
+    }).join("");
+    const totalKb = (items.reduce((a, b) => a + b.size, 0) / 1024).toFixed(0);
+    block.innerHTML = `
+      <h4 class="archived-heading">📦 Archived media <span class="muted small">${items.length} item${items.length === 1 ? "" : "s"} · ${totalKb} KB total</span></h4>
+      <div class="archived-grid">${tiles}</div>
+    `;
+  } catch {
+    /* ignore — endpoint not reachable, just leave empty */
+  }
+}
+
+function cssEscape(s) {
+  if (typeof CSS !== "undefined" && CSS.escape) return CSS.escape(s);
+  return String(s).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 }
 
 function renderTagToggles(tags) {
@@ -858,6 +932,7 @@ async function openAccountModal(username, push = true) {
     const data = await api.get(`/api/lookup?account=${encodeURIComponent(username)}`);
     $("#account-detail").innerHTML = renderLookup(data);
     bindTagToggles($("#account-detail"), data.username, data.tags);
+    loadArchivedMediaForModal(data.username);
   } catch (e) {
     $("#account-detail").innerHTML =
       `<div class="warn-banner">Couldn't load ${escapeHtml(username)}: ${escapeHtml(e.message)}</div>`;
