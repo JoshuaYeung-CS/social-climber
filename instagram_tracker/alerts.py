@@ -27,6 +27,20 @@ def _parse_iso(value: str | None) -> datetime | None:
         return None
 
 
+def _privacy_label(status: str, now_public: bool = False) -> str:
+    """Short privacy badge for inclusion in alert messages. Mirrors the
+    site-wide invariant: "🔒 private" for any pending evidence, "🌐 public"
+    for user-confirmed flips, "🌐 likely public" for inference, "?" when
+    we have no signal."""
+    if now_public:
+        return "🌐 public"
+    if status == "likely_private":
+        return "🔒 private"
+    if status == "likely_public":
+        return "🌐 likely public"
+    return "? unknown"
+
+
 def compute_alerts(conn: sqlite3.Connection) -> dict:
     latest = latest_id(conn)
     if latest is None:
@@ -57,6 +71,20 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
         | {r["username"] for r in list_with_flag(conn, "unavailable")}
         | {r["username"] for r in list_with_flag(conn, "random_request")}
     )
+    # Pre-load privacy + now_public for any usernames that might appear
+    # in alerts, so each alert message can include a "(🔒 private)" /
+    # "(🌐 likely public)" badge without per-alert queries.
+    def _privacy_for(usernames: list[str]) -> tuple[dict, set]:
+        if not usernames:
+            return {}, set()
+        priv = privacy_status_bulk(conn, usernames)
+        ph = ",".join("?" * len(usernames))
+        np = {r["username"] for r in conn.execute(
+            f"SELECT username FROM profile_tags WHERE now_public = 1 AND username IN ({ph})",
+            usernames,
+        ).fetchall()}
+        return priv, np
+
     if previous is not None:
         prev = snapshot_data(conn, previous)
         curr = snapshot_data(conn, latest)
@@ -78,12 +106,24 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
         they_removed_you = left_following - curr.recently_unfollowed - bounced
         # (left_following & curr.recently_unfollowed) = you unfollowed them; not surfaced as an alert.
 
+        # Single privacy lookup covering every account that could end up
+        # in a diff alert.
+        diff_users = sorted(
+            lost_followers
+            | they_removed_you
+            | ((curr.followers - prev.followers) & curr.following & favorites)
+        )
+        diff_priv, diff_np = _privacy_for(diff_users)
+
+        def _badge(u: str) -> str:
+            return _privacy_label(diff_priv.get(u, "unknown"), u in diff_np)
+
         for u in sorted(lost_followers & favorites):
             diff_alerts.append({
                 "kind": "favorite_unfollowed_you",
                 "username": u,
                 "severity": "high",
-                "message": f"★ Favorite {u} unfollowed you.",
+                "message": f"★ Favorite {u} ({_badge(u)}) unfollowed you.",
                 "ts": latest_ts,
             })
 
@@ -92,7 +132,7 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "kind": "they_unfollowed_you",
                 "username": u,
                 "severity": "normal",
-                "message": f"{u} unfollowed you.",
+                "message": f"{u} ({_badge(u)}) unfollowed you.",
                 "ts": latest_ts,
             })
 
@@ -101,7 +141,7 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "kind": "favorite_removed_you",
                 "username": u,
                 "severity": "high",
-                "message": f"★ Favorite {u} removed you as a follower.",
+                "message": f"★ Favorite {u} ({_badge(u)}) removed you as a follower.",
                 "ts": latest_ts,
             })
 
@@ -110,7 +150,7 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "kind": "they_removed_you_as_follower",
                 "username": u,
                 "severity": "normal",
-                "message": f"{u} removed you as a follower.",
+                "message": f"{u} ({_badge(u)}) removed you as a follower.",
                 "ts": latest_ts,
             })
 
@@ -120,7 +160,7 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "kind": "favorite_now_follows_back",
                 "username": u,
                 "severity": "high",
-                "message": f"★ Favorite {u} now follows you back.",
+                "message": f"★ Favorite {u} ({_badge(u)}) now follows you back.",
                 "ts": latest_ts,
             })
 
@@ -133,7 +173,18 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
     curr = snapshot_data(conn, latest)
     cutoff = datetime.now(timezone.utc) - timedelta(days=WAITBACK_ALERT_DAYS)
     watchlist_entries = list_with_flag(conn, "watchlist")
-    privacy = privacy_status_bulk(conn, [e["username"] for e in watchlist_entries])
+    watchlist_usernames = [e["username"] for e in watchlist_entries]
+    privacy = privacy_status_bulk(conn, watchlist_usernames)
+    # Pull now_public tags for the watchlist set so we can render the
+    # accurate privacy badge (privacy_status_bulk doesn't see manual tags).
+    now_public_set: set[str] = set()
+    if watchlist_usernames:
+        ph = ",".join("?" * len(watchlist_usernames))
+        for r in conn.execute(
+            f"SELECT username FROM profile_tags WHERE now_public = 1 AND username IN ({ph})",
+            watchlist_usernames,
+        ).fetchall():
+            now_public_set.add(r["username"])
 
     for entry in watchlist_entries:
         u = entry["username"]
@@ -148,13 +199,17 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
             continue  # haven't waited the full week yet
         days = (datetime.now(timezone.utc) - added).days
         status = privacy.get(u, "unknown")
+        priv_label = _privacy_label(status, u in now_public_set)
         is_fav = u in favorites
         prefix = "★↺" if is_fav else "↺"
         fav_label = "★ Favorite " if is_fav else ""
-        if status == "likely_private":
-            msg = f"{prefix} {fav_label}{u} (private) accepted but hasn't followed you back in {days} days."
+        # For private accounts the user already cleared an approval gate,
+        # so the "they accepted but didn't follow back" framing is the
+        # informative one. For everyone else, just say the wait time.
+        if status == "likely_private" and u not in now_public_set:
+            msg = f"{prefix} {fav_label}{u} ({priv_label}) accepted but hasn't followed you back in {days} days."
         else:
-            msg = f"{prefix} {fav_label}{u} hasn't followed you back in {days} days."
+            msg = f"{prefix} {fav_label}{u} ({priv_label}) hasn't followed you back in {days} days."
         stateful.append({
             "kind": "waitback_overdue",
             "username": u,
@@ -186,6 +241,14 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
 
         wr_cutoff = datetime.now(timezone.utc) - timedelta(days=WANT_REMOVE_ALERT_DAYS)
         wr_privacy = privacy_status_bulk(conn, wr_usernames)
+        # now_public tag overrides the inferred privacy for the badge.
+        wr_now_public_set: set[str] = set()
+        ph = ",".join("?" * len(wr_usernames))
+        for r in conn.execute(
+            f"SELECT username FROM profile_tags WHERE now_public = 1 AND username IN ({ph})",
+            wr_usernames,
+        ).fetchall():
+            wr_now_public_set.add(r["username"])
         for entry in want_remove_entries:
             u = entry["username"]
             if u not in curr.following:
@@ -200,6 +263,7 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 continue  # haven't waited the threshold yet
             days = (datetime.now(timezone.utc) - followed_at).days
             status = wr_privacy.get(u, "unknown")
+            priv_label = _privacy_label(status, u in wr_now_public_set)
             is_fav = u in favorites
             prefix = "★✦" if is_fav else "✦"
             fav_label = "★ Favorite " if is_fav else ""
@@ -207,7 +271,7 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "kind": "want_remove_overdue",
                 "username": u,
                 "severity": "high" if is_fav else "normal",
-                "message": f"{prefix} {fav_label}{u} — tagged 'want to remove'; still doesn't follow you back after {days} days.",
+                "message": f"{prefix} {fav_label}{u} ({priv_label}) — tagged 'want to remove'; still doesn't follow you back after {days} days.",
                 "days": days,
                 "privacy": status,
                 "ts": int(followed_at.timestamp()),
