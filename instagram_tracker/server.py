@@ -425,7 +425,10 @@ def delete_snapshot(snapshot_id: int):
 def get_activity_log():
     # Activity log doesn't read tags — only snapshot data. Tag writes
     # don't need to invalidate it.
-    return _cached("activity_log", _activity_log_compute, deps=_DEPS_SNAPSHOT_ONLY)
+    # Tag version is a dep now: the activity log filters out accounts
+    # tagged unavailable/disabled/random_request, so a tag toggle should
+    # invalidate the cached log.
+    return _cached("activity_log", _activity_log_compute, deps=_DEPS_BOTH)
 
 
 def _activity_log_compute():
@@ -602,6 +605,21 @@ def _activity_log_compute():
 
             prev_sd = curr_sd
             prev_id = s.id
+
+        # Filter out events involving accounts the user has tagged as
+        # ✕ unavailable, ⚠ disabled, or 🎲 random_request. The user has
+        # already declared "this account is gone / spam," so surfacing
+        # their inevitable unfollows / removals in the activity log is
+        # noise that drowns out events from accounts the user actually
+        # cares about.
+        suppressed_users = {
+            r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")
+        } | {
+            r["username"] for r in tags_mod.list_with_flag(conn, "disabled")
+        } | {
+            r["username"] for r in tags_mod.list_with_flag(conn, "random_request")
+        }
+        events = [e for e in events if e["username"] not in suppressed_users]
 
         # Sort newest first by the precise timestamp; tiebreak by snapshot_id then username.
         events.sort(
@@ -780,6 +798,20 @@ def get_diff(old: int | None = None, new: int | None = None):
             q.snapshot_data(conn, old_id),
             q.snapshot_data(conn, new_id),
         )
+        # Filter out users tagged as gone (unavailable / disabled / random):
+        # they always show up in the unfollow / removal sections after the
+        # user marks them, but the user has already declared "this account
+        # is gone, stop bothering me about it."
+        suppressed = (
+            {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
+            | {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
+            | {r["username"] for r in tags_mod.list_with_flag(conn, "random_request")}
+        )
+        if suppressed:
+            sections = {
+                kind: [u for u in users if u not in suppressed]
+                for kind, users in sections.items()
+            }
         return {"old_snapshot_id": old_id, "new_snapshot_id": new_id, "sections": sections}
 
 
