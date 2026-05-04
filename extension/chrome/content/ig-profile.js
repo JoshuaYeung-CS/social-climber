@@ -97,11 +97,14 @@ function isProfilePath(pathname) {
 }
 
 async function loadSettings() {
-  const stored = await chrome.storage.local.get(["trackerUrl", "vaultUrl", "showOverlay"]);
+  const stored = await chrome.storage.local.get([
+    "trackerUrl", "vaultUrl", "showOverlay", "autoArchiveMedia",
+  ]);
   return {
     trackerUrl: (stored.trackerUrl || "http://127.0.0.1:8000").replace(/\/$/, ""),
     vaultUrl: (stored.vaultUrl || "").replace(/\/$/, ""),
     showOverlay: stored.showOverlay !== false,
+    autoArchiveMedia: !!stored.autoArchiveMedia,
   };
 }
 
@@ -1067,11 +1070,54 @@ function onLocationMaybeChanged() {
   if (!username) {
     if (_panelEl) { _panelEl.remove(); _panelEl = null; }
     _lastUsername = null;
+    // Even when not on a profile, the URL might be a single-post /
+    // reel page where we want to auto-archive media if the setting
+    // is on. Fire the archive check independently of the overlay.
+    if (_settings?.autoArchiveMedia) maybeArchiveCurrentMedia();
     return;
   }
   if (username === _lastUsername) return;
   _lastUsername = username;
   refreshOverlay(username);
+  if (_settings?.autoArchiveMedia) maybeArchiveCurrentMedia();
+}
+
+// Auto-archive: when the user lands on a single-post / single-reel /
+// single-story page, fetch the largest visible media element and post
+// the bytes to the local tracker. Idempotent server-side (skips if
+// the file already exists) so re-visits don't re-download.
+async function maybeArchiveCurrentMedia() {
+  if (!extensionAlive() || !_settings?.autoArchiveMedia) return;
+  const path = window.location.pathname;
+  // Single-post URL formats. Highlights / stories use a different
+  // pattern; deliberately skip them for the MVP since their content
+  // is ephemeral and the URL doesn't carry a stable id.
+  const m = path.match(/^\/(?:p|reel)\/([^\/]+)\/?/);
+  if (!m) return;
+  const mediaId = m[1];
+  // Wait briefly for the page to render the media element.
+  await new Promise((r) => setTimeout(r, 1200));
+  const cap = findSaveableMedia();
+  if (!cap || !cap.src) return;
+  const username = (cap.element.closest("article")?.querySelector('a[href^="/"]')?.getAttribute("href") || "")
+                     .replace(/^\//, "").replace(/\/$/, "").split("/")[0]
+                  || _lastUsername || "unknown";
+  // Fetch bytes via the SW (carries IG cookies, dodges mixed-content).
+  const r = await new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(
+        { type: "tracker-fetch-bytes", url: cap.src },
+        (resp) => resolve(resp || { ok: false })
+      );
+    } catch { resolve({ ok: false }); }
+  });
+  if (!r.ok || !r.body) return;
+  const ext = cap.media_type === "video" ? "mp4" : "jpg";
+  await bgFetch(`${_settings.trackerUrl}/api/media-bytes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, media_id: mediaId, ext, bytes_b64: r.body }),
+  }).catch(() => null);
 }
 
 (async function main() {

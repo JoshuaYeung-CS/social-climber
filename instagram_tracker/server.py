@@ -2244,6 +2244,96 @@ def get_profile_pic(username: str):
                         headers={"Cache-Control": "private, max-age=3600"})
 
 
+# ---------- generic media archive (posts / reels / stories) ----------
+
+_MEDIA_DIR = DB_PATH.parent / "media"
+
+
+def _media_path(username: str, media_id: str, ext: str) -> Path:
+    """Sanitized path for an archived media file under
+    data/media/<username>/<media_id>.<ext>. The username + media id
+    + ext components are restricted to safe chars to keep the resolved
+    path inside the media dir."""
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9._]{1,30}", username or ""):
+        raise HTTPException(status_code=400, detail="Invalid username.")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", media_id or ""):
+        raise HTTPException(status_code=400, detail="Invalid media id.")
+    if ext not in ("jpg", "png", "mp4", "webp"):
+        raise HTTPException(status_code=400, detail="Unsupported ext.")
+    user_dir = _MEDIA_DIR / username
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir / f"{media_id}.{ext}"
+
+
+@app.post("/api/media-bytes")
+def store_media(payload: dict = Body(...)):
+    """Receive base64-encoded media bytes from the extension and save
+    them under data/media/<username>/<media_id>.<ext>. Idempotent —
+    if the file already exists, returns ok without rewriting (so
+    content scripts can call this every page view without disk
+    churn). Hard-caps individual files at 25 MB to avoid runaway
+    storage from a malformed request."""
+    import base64
+    username = (payload.get("username") or "").strip()
+    media_id = (payload.get("media_id") or "").strip()
+    ext      = (payload.get("ext") or "jpg").strip().lower()
+    bytes_b64 = payload.get("bytes_b64")
+    if not username or not media_id or not bytes_b64:
+        raise HTTPException(status_code=400, detail="Need username, media_id, bytes_b64.")
+    path = _media_path(username, media_id, ext)
+    if path.exists():
+        return {"ok": True, "skipped": "exists", "path": str(path.relative_to(DB_PATH.parent))}
+    try:
+        data = base64.b64decode(bytes_b64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64.")
+    if len(data) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Media too large (>25MB).")
+    path.write_bytes(data)
+    return {"ok": True, "size": len(data), "path": str(path.relative_to(DB_PATH.parent))}
+
+
+@app.get("/api/media/{username}/{media_id}.{ext}")
+def get_media(username: str, media_id: str, ext: str):
+    """Serve a previously-archived media file. Browser-cacheable for an
+    hour since the file path encodes both the user and the media id."""
+    path = _media_path(username, media_id, ext)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Media not archived.")
+    media_type = {
+        "jpg": "image/jpeg", "png": "image/png",
+        "webp": "image/webp", "mp4": "video/mp4",
+    }.get(ext, "application/octet-stream")
+    return FileResponse(path, media_type=media_type,
+                        headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.get("/api/media-list/{username}")
+def list_media(username: str):
+    """List all archived media filenames for a username. Used by the
+    tracker UI's per-account modal to show 'X archived posts' with
+    direct links back to the served files."""
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9._]{1,30}", username or ""):
+        raise HTTPException(status_code=400, detail="Invalid username.")
+    d = _MEDIA_DIR / username
+    if not d.is_dir():
+        return {"username": username, "items": []}
+    items = []
+    for p in sorted(d.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        if not p.is_file():
+            continue
+        stem, _, ext = p.name.rpartition(".")
+        items.append({
+            "media_id": stem,
+            "ext": ext,
+            "url": f"/api/media/{username}/{p.name}",
+            "size": p.stat().st_size,
+        })
+    return {"username": username, "items": items}
+
+
 @app.get("/api/tags/{flag}")
 def list_tags(flag: str):
     with db_conn() as conn:

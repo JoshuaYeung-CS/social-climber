@@ -19,6 +19,7 @@ const DEFAULTS = {
   notificationEmail: "",   // used by the "Fill notification email" quick-button
   autosubmitGoogle: false,
   showOverlay: true,
+  autoArchiveMedia: false, // opt-in: download bytes of every post/reel viewed
 };
 
 async function loadSettings() {
@@ -56,6 +57,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   el("notification-email").value = settings.notificationEmail || "";
   el("autosubmit-google").checked = settings.autosubmitGoogle;
   el("show-overlay").checked = settings.showOverlay;
+  el("auto-archive-media").checked = settings.autoArchiveMedia;
 
   await checkTrackerReachable(settings.trackerUrl);
 
@@ -130,6 +132,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       notificationEmail: el("notification-email").value.trim(),
       autosubmitGoogle: el("autosubmit-google").checked,
       showOverlay: el("show-overlay").checked,
+      autoArchiveMedia: el("auto-archive-media").checked,
     };
     await saveSettings(patch);
     el("save-settings").textContent = "Saved ✓";
