@@ -1974,11 +1974,23 @@ const ACTIVITY_KIND_META = {
   incoming_withdrawn:   { label: "their request withdrawn", cls: "muted" },
 };
 
+// "Significant" is a meta-filter — clicking it activates the set of kinds
+// that represent things that happened TO the user (unfollows, removals).
+// Useful when scrolling the activity log to find what changed without
+// being drowned in your own outbound actions.
+const SIGNIFICANT_KINDS = new Set(["unfollowed_you", "removed_you"]);
+
 const ACTIVITY_KIND_FILTERS = [
-  "all", "new_follower", "unfollowed_you", "you_followed", "you_unfollowed",
+  "all", "significant",
+  "new_follower", "unfollowed_you", "you_followed", "you_unfollowed",
   "removed_you", "you_requested", "they_accepted", "pending_withdrawn",
   "new_incoming_request", "you_accepted", "incoming_withdrawn",
 ];
+
+const ACTIVITY_PSEUDO_LABELS = {
+  all:         { label: "All",         cls: "muted" },
+  significant: { label: "⚠ Significant (unfollowers)", cls: "bad" },
+};
 
 // Multi-select kind filter. Empty Set means "show all kinds" (the All chip
 // is the implicit catch-all). Otherwise show only events whose kind is in
@@ -1997,9 +2009,16 @@ function renderActivityLog() {
   // unfiltered view. The All chip lights up only when no kinds are picked.
   const totalAll = _activityData.length;
   const noneSelected = kindFilter.size === 0;
+  // "Significant" chip is active when the current kind filter is exactly
+  // SIGNIFICANT_KINDS — same set, same size. Otherwise it's just a button.
+  const significantActive = kindFilter.size === SIGNIFICANT_KINDS.size
+    && [...SIGNIFICANT_KINDS].every((k) => kindFilter.has(k));
   const chips = ACTIVITY_KIND_FILTERS.map((k) => {
-    const m = k === "all" ? { label: "All", cls: "muted" } : ACTIVITY_KIND_META[k];
-    const active = k === "all" ? noneSelected : kindFilter.has(k);
+    const m = ACTIVITY_PSEUDO_LABELS[k] || ACTIVITY_KIND_META[k];
+    let active;
+    if (k === "all")              active = noneSelected;
+    else if (k === "significant") active = significantActive;
+    else                          active = kindFilter.has(k);
     return `<button type="button" class="al-chip al-${m.cls}${active ? " active" : ""}" data-kind="${k}">${escapeHtml(m.label)}</button>`;
   }).join("");
 
@@ -2070,6 +2089,14 @@ function renderActivityLog() {
       const k = el.dataset.kind;
       if (k === "all") {
         _activityKindFilter.clear();
+      } else if (k === "significant") {
+        // Toggle the significant-kinds preset. If currently active
+        // (exact match), clear back to All. Otherwise replace the
+        // filter with just SIGNIFICANT_KINDS.
+        const isActive = _activityKindFilter.size === SIGNIFICANT_KINDS.size
+          && [...SIGNIFICANT_KINDS].every((sk) => _activityKindFilter.has(sk));
+        _activityKindFilter.clear();
+        if (!isActive) SIGNIFICANT_KINDS.forEach((sk) => _activityKindFilter.add(sk));
       } else if (_activityKindFilter.has(k)) {
         _activityKindFilter.delete(k);
       } else {
