@@ -636,6 +636,26 @@ def _activity_log_compute():
             if not (e["kind"] in INBOUND_KINDS and e["username"] in ever_self)
         ]
 
+        # "Came back" filter: hide inbound break events for accounts
+        # that are CURRENTLY in your followers / following. If they
+        # unfollowed and later re-followed (mutual again now), the
+        # historical break event is misleading at a glance — the
+        # activity log should reflect the current state, not stale
+        # transient drops. Same logic that fixed the cumulative
+        # "Ever removed you as follower" → 1 inflation.
+        latest = q.latest_id(conn)
+        if latest is not None:
+            curr_sd = q.snapshot_data(conn, latest)
+            curr_followers = curr_sd.followers
+            curr_following = curr_sd.following
+            events = [
+                e for e in events
+                if not (
+                    (e["kind"] == "unfollowed_you" and e["username"] in curr_followers)
+                    or (e["kind"] == "removed_you" and e["username"] in curr_following)
+                )
+            ]
+
         # Sort newest first by the precise timestamp; tiebreak by snapshot_id then username.
         events.sort(
             key=lambda e: (e["timestamp"] or "", e["snapshot_id"], e["username"]),
@@ -837,6 +857,21 @@ def get_diff(old: int | None = None, new: int | None = None):
             u for u in sections.get("they_unfollowed_you", [])
             if u not in ever_self
         ]
+        # "Came back" filter: hide accounts currently in your followers
+        # / following. The historical break didn't stick — they returned —
+        # so listing them in the per-snapshot diff is misleading at a
+        # glance.
+        latest = q.latest_id(conn)
+        if latest is not None:
+            curr_sd = q.snapshot_data(conn, latest)
+            sections["they_unfollowed_you"] = [
+                u for u in sections.get("they_unfollowed_you", [])
+                if u not in curr_sd.followers
+            ]
+            sections["they_removed_you_as_follower"] = [
+                u for u in sections.get("they_removed_you_as_follower", [])
+                if u not in curr_sd.following
+            ]
         if suppressed:
             sections = {
                 kind: [u for u in users if u not in suppressed]
