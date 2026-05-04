@@ -2091,6 +2091,62 @@ def profile_observation(payload: dict = Body(...)):
     return {"ok": True}
 
 
+_PROFILE_PICS_DIR = DB_PATH.parent / "profile_pics"
+
+
+def _profile_pic_path(username: str) -> Path:
+    """Sanitized filesystem path for a username's locally stored profile pic.
+    IG usernames are alnum + . + _ (1-30 chars) so no escaping is required,
+    but we still defensively reject anything else to keep the path scoped
+    inside data/profile_pics/."""
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9._]{1,30}", username or ""):
+        raise HTTPException(status_code=400, detail="Invalid username for path.")
+    _PROFILE_PICS_DIR.mkdir(parents=True, exist_ok=True)
+    return _PROFILE_PICS_DIR / f"{username}.jpg"
+
+
+@app.post("/api/profile-pic-bytes")
+def store_profile_pic(payload: dict = Body(...)):
+    """Receive base64-encoded profile picture bytes from the extension and
+    save them to data/profile_pics/<username>.jpg. The IG CDN URL has a
+    short-lived signed token, so the URL we previously stored expires
+    after a few hours — local storage gives the modal/overlay a stable
+    image source for past observations.
+
+    Skips the write if the existing file is newer than 24 hours old
+    (mtime check) to avoid re-downloading on every page visit."""
+    import base64, time
+    username = (payload.get("username") or "").strip()
+    bytes_b64 = payload.get("bytes_b64")
+    if not username or not bytes_b64:
+        raise HTTPException(status_code=400, detail="Need 'username' and 'bytes_b64'.")
+    path = _profile_pic_path(username)
+    # 24h freshness skip — same picture probably hasn't changed.
+    if path.exists() and (time.time() - path.stat().st_mtime) < 86400:
+        return {"ok": True, "skipped": "fresh"}
+    try:
+        data = base64.b64decode(bytes_b64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64.")
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image too large (>5MB).")
+    path.write_bytes(data)
+    return {"ok": True, "size": len(data)}
+
+
+@app.get("/api/profile-pic/{username}")
+def get_profile_pic(username: str):
+    """Serve the locally-stored profile picture for `username`. Cache-
+    Controls allow the browser to reuse the response for an hour, since
+    the file path is stable for a given username."""
+    path = _profile_pic_path(username)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="No local pic for this user.")
+    return FileResponse(path, media_type="image/jpeg",
+                        headers={"Cache-Control": "private, max-age=3600"})
+
+
 @app.get("/api/tags/{flag}")
 def list_tags(flag: str):
     with db_conn() as conn:

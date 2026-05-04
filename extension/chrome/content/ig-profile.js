@@ -281,6 +281,15 @@ function sendProfileObservation(username, profile, privacyDom, extra = {}) {
   if (!hasAnything) return Promise.resolve(null);
   const is_private = privacyDom === "private" ? true : null;
   const is_unavailable = false;
+  // Fire-and-forget: when we've got a profile_pic URL, also try to
+  // download and persist the bytes locally. The IG CDN URL has a
+  // short-lived signed token (~hours), so a URL stored in observation
+  // expires; the local copy under data/profile_pics/<username>.jpg
+  // is the stable handle. The server endpoint skips the write when the
+  // local file is <24h old, so this is cheap on repeat visits.
+  if (profile.profile_pic) {
+    downloadAndStoreProfilePic(username, profile.profile_pic).catch(() => null);
+  }
   return bgFetch(`${_settings.trackerUrl}/api/profile-observation`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -292,6 +301,28 @@ function sendProfileObservation(username, profile, privacyDom, extra = {}) {
       follow_button_state: buttonState,
       button_state_changed: !!extra.button_state_changed,
     }),
+  }).catch(() => null);
+}
+
+async function downloadAndStoreProfilePic(username, picUrl) {
+  if (!extensionAlive() || !picUrl) return;
+  // Use the tracker-fetch-bytes channel (background SW) so we can
+  // bypass mixed-content + carry IG cookies for the CDN fetch.
+  const r = await new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(
+        { type: "tracker-fetch-bytes", url: picUrl },
+        (resp) => resolve(resp || { ok: false })
+      );
+    } catch {
+      resolve({ ok: false });
+    }
+  });
+  if (!r.ok || !r.body) return;
+  await bgFetch(`${_settings.trackerUrl}/api/profile-pic-bytes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, bytes_b64: r.body }),
   }).catch(() => null);
 }
 
@@ -876,7 +907,16 @@ function renderPanel(panel, username, data) {
       <button class="igt-icon" data-action="close" title="Close">✕</button>
     </div>
     <div class="igt-body">
-      ${profile.profile_pic ? `<a class="igt-pic-link" href="${escapeHtml(profile.profile_pic)}" target="_blank" rel="noopener" title="Click to open at full size"><img class="igt-pic" src="${escapeHtml(profile.profile_pic)}" alt="${escapeHtml(username)} profile picture" /></a>` : ""}
+      ${profile.profile_pic ? (() => {
+        // Prefer the locally-stored copy at /api/profile-pic/<username>
+        // when available — the IG CDN URL is signed and expires after
+        // hours, so previously-observed pics break click-to-enlarge.
+        // The local URL falls back to the IG CDN if the file isn't
+        // there yet (404), via the onerror handler.
+        const localUrl = `${_settings.trackerUrl}/api/profile-pic/${encodeURIComponent(username)}`;
+        const fallback = escapeHtml(profile.profile_pic);
+        return `<a class="igt-pic-link" href="${localUrl}" target="_blank" rel="noopener" title="Click to open at full size"><img class="igt-pic" src="${localUrl}" onerror="this.onerror=null;this.src='${fallback}';this.parentElement.href='${fallback}';" alt="${escapeHtml(username)} profile picture" /></a>`;
+      })() : ""}
       <div class="igt-username">${escapeHtml(username)}${profile.verified ? ' <span class="igt-check" title="Verified">✓</span>' : ""}</div>
       ${profile.display_name ? `<div class="igt-display-name">${escapeHtml(profile.display_name)}</div>` : ""}
       <div class="igt-rel igt-rel-${relKind}">${escapeHtml(rel)}</div>

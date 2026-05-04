@@ -650,8 +650,16 @@ function renderLookup(data) {
     </div>
   ` : "";
 
+  // Prefer the locally-stored profile pic. Falls back to the IG CDN URL
+  // if no local copy exists (404 on the local endpoint will hit onerror).
+  const localPicUrl = `/api/profile-pic/${encodeURIComponent(data.username)}`;
+  const cdnPicUrl = data.observation?.profile_pic_url || "";
+  const picBlock = cdnPicUrl
+    ? `<a class="account-pic-link" href="${escapeAttr(localPicUrl)}" target="_blank" rel="noopener" title="Click to open full-size"><img class="account-pic" src="${escapeAttr(localPicUrl)}" onerror="this.onerror=null;this.src='${escapeAttr(cdnPicUrl)}';this.parentElement.href='${escapeAttr(cdnPicUrl)}';" alt="${escapeAttr(data.username)} profile picture" /></a>`
+    : `<a class="account-pic-link" href="${escapeAttr(localPicUrl)}" target="_blank" rel="noopener" title="Click to open full-size (if available)"><img class="account-pic" src="${escapeAttr(localPicUrl)}" onerror="this.style.display='none'" alt="" /></a>`;
   return `
     <div class="account-detail">
+      ${picBlock}
       <h3>${escapeHtml(data.username)}</h3>
       <div class="url"><a href="${escapeAttr(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a></div>
       ${renderTagToggles(data.tags)}
