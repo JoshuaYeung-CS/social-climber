@@ -71,6 +71,8 @@ function showView(name, push = true) {
       history.pushState({ view: name }, "", `#${name}`);
     }
   }
+  _renderedView = name;
+  if (name !== "lists") _renderedListKind = null;
 }
 
 $$(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
@@ -734,14 +736,16 @@ function bindTagToggles(root, username, currentTags) {
 
 const modal = $("#account-modal");
 function closeModal() {
+  // If a history entry was pushed when the modal opened, calling
+  // history.back() lets the popstate handler hide the modal and decide
+  // whether a data refresh is warranted. Otherwise just hide directly.
   if (history.state?.modal) {
     history.back();
-  } else {
-    modal.hidden = true;
+    return;  // popstate handler will run; don't double-handle here
   }
+  modal.hidden = true;
   if (modalTaggedDirty) {
     modalTaggedDirty = false;
-    // Refresh whichever data view the user is on, so newly tagged accounts are reflected.
     const view = history.state?.view || "lists";
     if (view === "lists") loadLists();
     else if (view === "home") loadHome();
@@ -749,28 +753,55 @@ function closeModal() {
 }
 $$("[data-close]").forEach((el) => el.addEventListener("click", closeModal));
 
+// Track which view + list-kind is currently rendered, so popstate can
+// distinguish "user closed a modal back to the same list" from "user
+// actually navigated to a different view." Updated by showView() and
+// loadLists() at the end of each render.
+let _renderedView = "home";
+let _renderedListKind = null;
+
 // Browser back/forward integration.
 window.addEventListener("popstate", (e) => {
   const state = e.state || {};
-  // If popping out of a modal, hide it.
-  if (!modal.hidden && !state.modal) modal.hidden = true;
-  // If popping INTO a modal (forward), reopen it.
+  const goingToView = state.view || "home";
+  const goingToListKind = state.listKind || null;
+
+  // Case 1: popping out of a modal back to the same view+list.
+  // Just hide the modal — DO NOT re-render the underlying view, since
+  // re-rendering destroys scroll position and shows a loading spinner
+  // for no benefit. This is the main fix for "page reloads when I
+  // close a modal." Only refresh when a tag was actually changed
+  // inside the modal (modalTaggedDirty).
+  if (!modal.hidden && !state.modal
+      && goingToView === _renderedView
+      && goingToListKind === _renderedListKind) {
+    modal.hidden = true;
+    if (modalTaggedDirty) {
+      modalTaggedDirty = false;
+      if (goingToView === "lists") loadLists();
+      else if (goingToView === "home") loadHome();
+    }
+    return;
+  }
+
+  // Case 2: popping forward into a modal that was closed earlier.
   if (modal.hidden && state.modal) {
     openAccountModal(state.modal, false);
+    return;
   }
-  // Restore view + list kind.
-  const view = state.view || "home";
-  $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === view));
-  $$(".view").forEach((v) => v.classList.toggle("active", v.dataset.view === view));
-  if (view === "lists") {
-    if (state.listKind && [...select.options].some((o) => o.value === state.listKind)) {
-      select.value = state.listKind;
+
+  // Case 3: any actual view / list change — re-render appropriately.
+  if (!modal.hidden && !state.modal) modal.hidden = true;
+  $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === goingToView));
+  $$(".view").forEach((v) => v.classList.toggle("active", v.dataset.view === goingToView));
+  if (goingToView === "lists") {
+    if (goingToListKind && [...select.options].some((o) => o.value === goingToListKind)) {
+      select.value = goingToListKind;
     }
     loadLists();
-  } else if (view === "snapshots") loadSnapshots();
-  else if (view === "check") loadQueue();
-  else if (view === "home") loadHome();
-  // Modal close via popstate already triggered a refresh; clear the dirty flag.
+  } else if (goingToView === "snapshots") loadSnapshots();
+  else if (goingToView === "check") loadQueue();
+  else if (goingToView === "home") loadHome();
   modalTaggedDirty = false;
 });
 
@@ -1707,6 +1738,8 @@ async function loadLists() {
     }
     const out = $("#list-output");
     out.dataset.listKind = kind;
+    _renderedView = "lists";
+    _renderedListKind = kind;
     // For intersection, prefer the unsuppressed sections_full so that
     // suppressed-tagged users (disabled / unavailable / random_request) can
     // legitimately match a bucket pill. Without this, "all_following ∩
