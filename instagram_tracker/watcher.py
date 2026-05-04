@@ -76,6 +76,30 @@ def _looks_like_ig_folder(name: str) -> bool:
     return any(p.match(name) for p in _FOLDER_PATTERNS)
 
 
+def _load_skiplist() -> set[str]:
+    """Read data/import_skiplist.txt — one absolute path per line, # comments
+    allowed. Paths in the skiplist are silently ignored by _scan() so the
+    user can tag bad exports (truncated, partial, manually flagged) without
+    deleting the underlying folder from Drive. Returns a set of resolved
+    absolute path strings for fast lookup."""
+    skip_path = Path(__file__).resolve().parent.parent / "data" / "import_skiplist.txt"
+    if not skip_path.exists():
+        return set()
+    out: set[str] = set()
+    try:
+        for line in skip_path.read_text().splitlines():
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            try:
+                out.add(str(Path(s).expanduser().resolve()))
+            except Exception:
+                out.add(s)
+    except OSError as e:
+        log.warning("Could not read skiplist %s: %s", skip_path, e)
+    return out
+
+
 def _scan(root: Path) -> list[Path]:
     """Look for IG export artifacts at the root and a few likely subfolders.
 
@@ -108,11 +132,18 @@ def _scan(root: Path) -> list[Path]:
     # Dedup in case the same path is reachable from multiple candidate dirs.
     seen_paths: set[str] = set()
     deduped: list[Path] = []
+    skiplist = _load_skiplist()
+    skipped_count = 0
     for p in out:
         s = str(p.resolve())
+        if s in skiplist:
+            skipped_count += 1
+            continue
         if s not in seen_paths:
             seen_paths.add(s)
             deduped.append(p)
+    if skipped_count:
+        log.info("Skipped %d export(s) listed in import_skiplist.txt", skipped_count)
     return deduped
 
 
