@@ -621,6 +621,21 @@ def _activity_log_compute():
         }
         events = [e for e in events if e["username"] not in suppressed_users]
 
+        # Self-unfollow filter for inbound events. If the user has ever
+        # appeared in recently_unfollowed for this username, the user
+        # was at some point the initiator of the breakup. Showing
+        # 'unfollowed_you' or 'removed_you' for those accounts is
+        # misleading — even when IG's recently_unfollowed window has
+        # rolled over and the lag-based exclusion in the emit logic
+        # missed them. ever_self captures the cumulative outbound log
+        # so we can apply this filter retroactively.
+        ever_self = q.ever_self_unfollowed(conn)
+        INBOUND_KINDS = {"unfollowed_you", "removed_you"}
+        events = [
+            e for e in events
+            if not (e["kind"] in INBOUND_KINDS and e["username"] in ever_self)
+        ]
+
         # Sort newest first by the precise timestamp; tiebreak by snapshot_id then username.
         events.sort(
             key=lambda e: (e["timestamp"] or "", e["snapshot_id"], e["username"]),
@@ -794,9 +809,15 @@ def get_diff(old: int | None = None, new: int | None = None):
         old_id = old or q.previous_id(conn, new_id)
         if old_id is None:
             raise HTTPException(status_code=400, detail="No previous snapshot to compare against.")
+        # Pass ever_self_unfollowed so the diff distinguishes user-initiated
+        # unfollows from "they removed you" — the recently_unfollowed log
+        # has a 14-day window so without this, older self-unfollows look
+        # like the other party removed you.
+        ever_self = q.ever_self_unfollowed(conn)
         sections = diffs_mod.diff(
             q.snapshot_data(conn, old_id),
             q.snapshot_data(conn, new_id),
+            ever_self_unfollowed=ever_self,
         )
         # Filter out users tagged as gone (unavailable / disabled / random):
         # they always show up in the unfollow / removal sections after the
@@ -807,6 +828,15 @@ def get_diff(old: int | None = None, new: int | None = None):
             | {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
             | {r["username"] for r in tags_mod.list_with_flag(conn, "random_request")}
         )
+        # Self-unfollow filter on the inbound section: if the user has
+        # ever unfollowed someone, attributing a follower-drop to them
+        # is suspect — the drop is likely a consequence of (or response
+        # to) the user's outbound action, not "they unfollowed you out
+        # of the blue."
+        sections["they_unfollowed_you"] = [
+            u for u in sections.get("they_unfollowed_you", [])
+            if u not in ever_self
+        ]
         if suppressed:
             sections = {
                 kind: [u for u in users if u not in suppressed]
