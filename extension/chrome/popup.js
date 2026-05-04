@@ -80,6 +80,32 @@ document.addEventListener("DOMContentLoaded", async () => {
     await chrome.storage.local.set({ wizardRunRequested: Date.now() });
   });
 
+  el("toggle-followers-only").addEventListener("click", async () => {
+    // Send a one-shot message to whatever Meta page is in the active
+    // tab — the meta-export content script handles 'toggle-followers-only'
+    // by unchecking every box and ticking only "Followers and following".
+    // Doesn't trigger the rest of the wizard flow.
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab) return;
+    if (!/accountscenter\.instagram\.com|instagram\.com\/accounts\/center/.test(tab.url || "")) {
+      const status = el("status");
+      if (status) {
+        status.textContent = "open the IG export page first";
+        setTimeout(() => { status.textContent = ""; }, 3000);
+      }
+      return;
+    }
+    chrome.tabs.sendMessage(tab.id, { type: "toggle-followers-only" }, (resp) => {
+      const err = chrome.runtime.lastError;
+      const status = el("status");
+      if (status) {
+        if (err || !resp?.ok) status.textContent = "couldn't reach the page — refresh it?";
+        else                  status.textContent = "done — only F+F checked";
+        setTimeout(() => { status.textContent = ""; }, 3000);
+      }
+    });
+  });
+
   el("save-settings").addEventListener("click", async () => {
     const patch = {
       trackerUrl: el("tracker-url").value.trim() || DEFAULT_TRACKER,

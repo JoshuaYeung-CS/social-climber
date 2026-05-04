@@ -222,6 +222,28 @@ async function typeRealistic(el, text) {
   el.dispatchEvent(new Event("blur", { bubbles: true }));
 }
 
+// Listen for a "just toggle the checkboxes" command from the popup.
+// Useful when the user is already partway through the wizard manually
+// and just wants the uncheck-everything-except-Followers-and-following
+// step done quickly, without the full automation taking over.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || msg.type !== "toggle-followers-only") return false;
+  (async () => {
+    try {
+      await uncheckAll();
+      await sleep(SETTLE_MS);
+      await checkLabel("Followers and following");
+      showToast("IG Tracker: only 'Followers and following' is now checked.");
+      sendResponse({ ok: true });
+    } catch (e) {
+      console.warn("[IG Tracker] toggle-followers-only failed:", e.message);
+      showToast(`IG Tracker: ${e.message}`);
+      sendResponse({ ok: false, error: e.message });
+    }
+  })();
+  return true;
+});
+
 (async function main() {
   if (!(await shouldRun())) {
     // Even when we don't actively drive the wizard, we should still be ready
