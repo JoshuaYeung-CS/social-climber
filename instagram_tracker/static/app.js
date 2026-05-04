@@ -765,6 +765,12 @@ window.addEventListener("popstate", (e) => {
   const state = e.state || {};
   const goingToView = state.view || "home";
   const goingToListKind = state.listKind || null;
+  console.debug("[IGT] popstate", {
+    state, goingToView, goingToListKind,
+    modalHidden: modal.hidden,
+    rendered: { view: _renderedView, listKind: _renderedListKind },
+    dirty: modalTaggedDirty,
+  });
 
   // Case 1: popping out of a modal back to the same view+list.
   // Just hide the modal — DO NOT re-render the underlying view, since
@@ -781,8 +787,10 @@ window.addEventListener("popstate", (e) => {
       if (goingToView === "lists") loadLists();
       else if (goingToView === "home") loadHome();
     }
+    console.debug("[IGT] popstate → modal-only close, no reload");
     return;
   }
+  console.debug("[IGT] popstate → falling through to view re-render");
 
   // Case 2: popping forward into a modal that was closed earlier.
   if (modal.hidden && state.modal) {
