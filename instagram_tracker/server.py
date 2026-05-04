@@ -1239,11 +1239,19 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
             in_back = u in sd.followers
             in_pend = u in sd.pending
             if kind == "watchlist":
-                if not in_fol:
-                    return ("you've unfollowed", "stopped")
+                # Three distinct waiting states:
+                #  - in_pend         → request you sent hasn't been accepted yet
+                #  - in_fol, not in_back → they accepted (or it's public); they
+                #                          haven't followed you back yet
+                #  - in_back          → mutual, success
+                #  - none of above    → you no longer follow them (withdrew or unfollowed)
+                if in_pend:
+                    return ("request pending", "pending")
                 if in_back:
                     return ("now follows back ✓", "good")
-                return ("still waiting", "pending")
+                if in_fol:
+                    return ("no follow back yet", "pending")
+                return ("you've unfollowed", "stopped")
             if kind == "want_remove":
                 if not in_fol:
                     return ("already unfollowed ✓", "good")
@@ -1546,7 +1554,15 @@ def _build_bucket_row(ctx: dict, flagged: dict, u: str, kind: str) -> dict:
 
     # Bucket status.
     if kind == "watchlist":
-        bs = ("you've unfollowed", "stopped") if not in_fol else (("now follows back ✓", "good") if in_back else ("still waiting", "pending"))
+        # Three distinct waiting states (mirrors the bucket_status helper above).
+        if in_pend:
+            bs = ("request pending", "pending")
+        elif in_back:
+            bs = ("now follows back ✓", "good")
+        elif in_fol:
+            bs = ("no follow back yet", "pending")
+        else:
+            bs = ("you've unfollowed", "stopped")
     elif kind == "want_remove":
         bs = ("already unfollowed ✓", "good") if not in_fol else ("still following", "action")
     elif kind == "favorite":

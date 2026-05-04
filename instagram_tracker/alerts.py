@@ -35,6 +35,22 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
     previous = previous_id(conn, latest)
     favorites = {row["username"] for row in list_with_flag(conn, "favorite")}
 
+    # Reference timestamp for diff alerts: the latest snapshot's taken_at.
+    # Diff events fired between prev and latest, so this approximates "when
+    # did this happen" precisely enough to sort newest-first.
+    latest_taken_at_iso = conn.execute(
+        "SELECT taken_at FROM snapshots WHERE id = ?", (latest,)
+    ).fetchone()
+    latest_ts = 0
+    if latest_taken_at_iso and latest_taken_at_iso["taken_at"]:
+        try:
+            dt = datetime.fromisoformat(latest_taken_at_iso["taken_at"])
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            latest_ts = int(dt.timestamp())
+        except ValueError:
+            pass
+
     diff_alerts: list[dict] = []
     suppressed = (
         {r["username"] for r in list_with_flag(conn, "disabled")}
@@ -68,6 +84,7 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "username": u,
                 "severity": "high",
                 "message": f"★ Favorite {u} unfollowed you.",
+                "ts": latest_ts,
             })
 
         for u in sorted(lost_followers - favorites):
@@ -76,6 +93,7 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "username": u,
                 "severity": "normal",
                 "message": f"{u} unfollowed you.",
+                "ts": latest_ts,
             })
 
         for u in sorted(they_removed_you & favorites):
@@ -84,6 +102,7 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "username": u,
                 "severity": "high",
                 "message": f"★ Favorite {u} removed you as a follower.",
+                "ts": latest_ts,
             })
 
         for u in sorted(they_removed_you - favorites):
@@ -92,6 +111,7 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "username": u,
                 "severity": "normal",
                 "message": f"{u} removed you as a follower.",
+                "ts": latest_ts,
             })
 
         # Favorites that previously didn't follow you back, but now do (became mutual).
@@ -99,8 +119,9 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
             diff_alerts.append({
                 "kind": "favorite_now_follows_back",
                 "username": u,
-                "severity": "good",
+                "severity": "high",
                 "message": f"★ Favorite {u} now follows you back.",
+                "ts": latest_ts,
             })
 
     # Stateful: wait-back alerts.
@@ -127,17 +148,21 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
             continue  # haven't waited the full week yet
         days = (datetime.now(timezone.utc) - added).days
         status = privacy.get(u, "unknown")
+        is_fav = u in favorites
+        prefix = "★↺" if is_fav else "↺"
+        fav_label = "★ Favorite " if is_fav else ""
         if status == "likely_private":
-            msg = f"↺ {u} (private) accepted but hasn't followed you back in {days} days."
+            msg = f"{prefix} {fav_label}{u} (private) accepted but hasn't followed you back in {days} days."
         else:
-            msg = f"↺ {u} hasn't followed you back in {days} days."
+            msg = f"{prefix} {fav_label}{u} hasn't followed you back in {days} days."
         stateful.append({
             "kind": "waitback_overdue",
             "username": u,
-            "severity": "normal",
+            "severity": "high" if is_fav else "normal",
             "message": msg,
             "days": days,
             "privacy": status,
+            "ts": int(added.timestamp()),
         })
 
     # Stateful: want-remove follow-up alerts.
@@ -175,13 +200,17 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 continue  # haven't waited the threshold yet
             days = (datetime.now(timezone.utc) - followed_at).days
             status = wr_privacy.get(u, "unknown")
+            is_fav = u in favorites
+            prefix = "★✦" if is_fav else "✦"
+            fav_label = "★ Favorite " if is_fav else ""
             stateful.append({
                 "kind": "want_remove_overdue",
                 "username": u,
-                "severity": "normal",
-                "message": f"✦ {u} — tagged 'want to remove'; still doesn't follow you back after {days} days.",
+                "severity": "high" if is_fav else "normal",
+                "message": f"{prefix} {fav_label}{u} — tagged 'want to remove'; still doesn't follow you back after {days} days.",
                 "days": days,
                 "privacy": status,
+                "ts": int(followed_at.timestamp()),
             })
 
     # Stateful: tagged-as-disabled or tagged-as-unavailable accounts that show
@@ -203,10 +232,20 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                     "username": u,
                     "severity": "high",
                     "message": f"{icon} {u} (tagged {label}) is back online — flag cleared.",
+                    "ts": latest_ts,
                 })
                 to_unflag.append(u)
         for u in to_unflag:
             set_flag(conn, u, flag, False)
+
+    # Sort newest-first within each list. Diff alerts mostly share the
+    # latest snapshot's ts, so the favorites/non-favorites grouping
+    # we want comes from a stable secondary sort by severity (high
+    # first) then by username. Stateful alerts have meaningful ts
+    # spread across days, so chronological sorting matters most there.
+    SEV_ORDER = {"high": 0, "normal": 1, "good": 2, "muted": 3}
+    diff_alerts.sort(key=lambda a: (SEV_ORDER.get(a.get("severity"), 9), -a.get("ts", 0), a.get("username", "")))
+    stateful.sort(key=lambda a: (SEV_ORDER.get(a.get("severity"), 9), -a.get("ts", 0), a.get("username", "")))
 
     return {
         "diff": diff_alerts,

@@ -865,7 +865,7 @@ const LIST_DESCRIPTIONS = {
   request_dropped:              "Outbound requests that never made it into your following list. 'Requests they didn't accept' — likely rejected or expired.",
   favorite:                     "Accounts you've manually starred. Manual labels — the tag persists across snapshots.",
   want_remove:                  "Accounts you've manually flagged for unfollowing later. Manual labels.",
-  watchlist:                    "Accounts you're waiting to follow back. Manual labels.",
+  watchlist:                    "Accounts you're waiting on for a follow-back. Each row shows one of: 'request pending' (you sent a follow request, they haven't accepted), 'no follow back yet' (they accepted or it's public, but haven't followed you back), 'now follows back ✓' (mutual), or 'you've unfollowed' (you withdrew). Alerts fire after 7 days of waiting; favorites get higher priority.",
   disabled:                     "Accounts you've manually marked as gone (deactivated, deleted, blocked you). Auto-clears if they reappear in your followers (proof of life). Excluded from non-bucket lists.",
   unavailable:                  "Accounts where the extension landed on Instagram's 'Sorry, this page isn't available' state. Auto-clears if they reappear in your followers. Excluded from non-bucket lists.",
   random_request:               "Manual flag for incoming requests that look like spam / bots / random users. Excluded from 'real_requests' and other non-bucket lists.",
