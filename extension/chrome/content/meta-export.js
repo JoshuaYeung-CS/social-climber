@@ -127,26 +127,65 @@ function findRowByLabel(text, within = document) {
   const target = String(text).trim().toLowerCase();
   if (!target) return null;
   const all = within.querySelectorAll("*");
+
+  // Pass 0: aria-label exact match. Meta puts the row's label on the
+  // outer interactive div for accessibility — strongest signal.
+  for (const el of all) {
+    if (!el.getAttribute) continue;
+    const al = (el.getAttribute("aria-label") || "").trim().toLowerCase();
+    if (al === target) return _climbToClickable(el);
+  }
+
   // Pass 1: leaf node with direct text equal to target.
   for (const el of all) {
     const dt = _directText(el).toLowerCase();
     if (dt === target) return _climbToClickable(el);
   }
+
   // Pass 2: any element whose total textContent first line is the
-  // target, not too long (so we don't return the whole dialog).
+  // target. Bound length to avoid returning the whole page wrapper.
+  // 500-char bound generous enough for "Format\nHTML\nThis format
+  // allows you to import your data into another site or app." (~80
+  // chars) plus padding for surrounding rows that get included in
+  // textContent walks.
+  const collected = [];
   for (const el of all) {
-    const t = (el.textContent || "").trim().toLowerCase();
+    const t = (el.innerText || el.textContent || "").trim().toLowerCase();
     if (!t) continue;
     const firstLine = t.split(/\n|·|·/)[0].trim();
-    if (firstLine === target && t.length < 200) return _climbToClickable(el);
+    if (firstLine === target && t.length < 500) {
+      collected.push({ el, length: t.length });
+    }
   }
-  // Pass 3: starts-with match for cases where the label is followed by
-  // a single space + value (e.g. "Format HTML").
+  if (collected.length) {
+    // Smallest match = most specific (the row itself, not its container).
+    collected.sort((a, b) => a.length - b.length);
+    return _climbToClickable(collected[0].el);
+  }
+
+  // Pass 3: starts-with match for "Format HTML"-style single-line rows.
   for (const el of all) {
-    const t = (el.textContent || "").trim().toLowerCase();
+    const t = (el.innerText || el.textContent || "").trim().toLowerCase();
     if (!t) continue;
     const firstLine = t.split(/\n|·|·/)[0].trim();
-    if (firstLine.startsWith(target + " ") && t.length < 200) return _climbToClickable(el);
+    if (firstLine.startsWith(target + " ") && t.length < 500) {
+      return _climbToClickable(el);
+    }
+  }
+
+  // Diagnostic: log up to 3 elements that contain the target as a
+  // substring so the user / dev can see what Meta is actually
+  // rendering. Helps when the matcher fails on a new Meta layout.
+  const debug = [];
+  for (const el of all) {
+    const t = (el.innerText || el.textContent || "").trim().toLowerCase();
+    if (t.includes(target) && t.length < 1000 && debug.length < 3) {
+      debug.push({ tag: el.tagName, role: el.getAttribute && el.getAttribute("role"),
+                   firstLine: t.split("\n")[0].slice(0, 80), len: t.length });
+    }
+  }
+  if (debug.length) {
+    console.warn(`[IG Tracker] findRowByLabel('${text}') failed. Closest candidates:`, debug);
   }
   return null;
 }
