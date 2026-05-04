@@ -8,7 +8,7 @@ Two flavors:
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from .config import WAITBACK_ALERT_DAYS
+from .config import WAITBACK_ALERT_DAYS, WANT_REMOVE_ALERT_DAYS
 from .queries import (
     latest_id,
     previous_id,
@@ -104,8 +104,10 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
             })
 
     # Stateful: wait-back alerts.
-    # Private accounts -> alert as soon as they're not following back.
-    # Public/unknown   -> wait WAITBACK_ALERT_DAYS days first.
+    # Alert when a watchlist-tagged account hasn't followed you back
+    # within WAITBACK_ALERT_DAYS (default 7) of when you tagged them.
+    # Applies uniformly across privacy types — private and public both
+    # get the same week-long grace period.
     stateful: list[dict] = []
     curr = snapshot_data(conn, latest)
     cutoff = datetime.now(timezone.utc) - timedelta(days=WAITBACK_ALERT_DAYS)
@@ -121,12 +123,12 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
             continue
         if u not in curr.following:
             continue
-        status = privacy.get(u, "unknown")
-        if status != "likely_private" and added > cutoff:
-            continue
+        if added > cutoff:
+            continue  # haven't waited the full week yet
         days = (datetime.now(timezone.utc) - added).days
+        status = privacy.get(u, "unknown")
         if status == "likely_private":
-            msg = f"↺ {u} (private) accepted but isn't following you back."
+            msg = f"↺ {u} (private) accepted but hasn't followed you back in {days} days."
         else:
             msg = f"↺ {u} hasn't followed you back in {days} days."
         stateful.append({
@@ -137,6 +139,50 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
             "days": days,
             "privacy": status,
         })
+
+    # Stateful: want-remove follow-up alerts.
+    # Accounts you tagged "want to remove" (✦) that you currently follow
+    # AND who don't follow you back AND it's been WANT_REMOVE_ALERT_DAYS
+    # (default 3) since you started following them. Acts as a reminder
+    # to actually unfollow once the waiting period is up.
+    want_remove_entries = list_with_flag(conn, "want_remove")
+    if want_remove_entries:
+        wr_usernames = [e["username"] for e in want_remove_entries]
+        placeholders = ",".join("?" * len(wr_usernames))
+        follow_ts_map: dict[str, int] = {}
+        for r in conn.execute(
+            f"SELECT username, MAX(export_timestamp) AS ts FROM following "
+            f"WHERE username IN ({placeholders}) AND export_timestamp IS NOT NULL "
+            f"GROUP BY username",
+            wr_usernames,
+        ).fetchall():
+            if r["ts"] is not None:
+                follow_ts_map[r["username"]] = int(r["ts"])
+
+        wr_cutoff = datetime.now(timezone.utc) - timedelta(days=WANT_REMOVE_ALERT_DAYS)
+        wr_privacy = privacy_status_bulk(conn, wr_usernames)
+        for entry in want_remove_entries:
+            u = entry["username"]
+            if u not in curr.following:
+                continue  # not currently following — nothing to remove
+            if u in curr.followers:
+                continue  # they follow back — handled by user, not overdue
+            ts = follow_ts_map.get(u)
+            if ts is None:
+                continue
+            followed_at = datetime.fromtimestamp(ts, tz=timezone.utc)
+            if followed_at > wr_cutoff:
+                continue  # haven't waited the threshold yet
+            days = (datetime.now(timezone.utc) - followed_at).days
+            status = wr_privacy.get(u, "unknown")
+            stateful.append({
+                "kind": "want_remove_overdue",
+                "username": u,
+                "severity": "normal",
+                "message": f"✦ {u} — tagged 'want to remove'; still doesn't follow you back after {days} days.",
+                "days": days,
+                "privacy": status,
+            })
 
     # Stateful: tagged-as-disabled or tagged-as-unavailable accounts that show
     # real proof-of-life. The only reliable signal is them appearing in YOUR
