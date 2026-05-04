@@ -16,6 +16,7 @@ const DEFAULTS = {
   trackerUrl: DEFAULT_TRACKER,
   vaultUrl: "",            // empty = vault save button hidden
   igPassword: "",
+  notificationEmail: "",   // used by the "Fill notification email" quick-button
   autosubmitGoogle: false,
   showOverlay: true,
 };
@@ -52,6 +53,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   el("tracker-url").value = settings.trackerUrl;
   el("vault-url").value = settings.vaultUrl;
   el("ig-password").value = settings.igPassword;
+  el("notification-email").value = settings.notificationEmail || "";
   el("autosubmit-google").checked = settings.autosubmitGoogle;
   el("show-overlay").checked = settings.showOverlay;
 
@@ -80,30 +82,44 @@ document.addEventListener("DOMContentLoaded", async () => {
     await chrome.storage.local.set({ wizardRunRequested: Date.now() });
   });
 
-  el("toggle-followers-only").addEventListener("click", async () => {
-    // Send a one-shot message to whatever Meta page is in the active
-    // tab — the meta-export content script handles 'toggle-followers-only'
-    // by unchecking every box and ticking only "Followers and following".
-    // Doesn't trigger the rest of the wizard flow.
+  // One-shot quick-fill helpers. Each sends a message to the active
+  // Meta tab; the content script there runs the matching step.
+  async function sendOneShot(messagePayload, doneText) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab) return;
     if (!/accountscenter\.instagram\.com|instagram\.com\/accounts\/center/.test(tab.url || "")) {
-      const status = el("status");
-      if (status) {
-        status.textContent = "open the IG export page first";
-        setTimeout(() => { status.textContent = ""; }, 3000);
-      }
+      flashStatus("open the IG export page first");
       return;
     }
-    chrome.tabs.sendMessage(tab.id, { type: "toggle-followers-only" }, (resp) => {
+    chrome.tabs.sendMessage(tab.id, messagePayload, (resp) => {
       const err = chrome.runtime.lastError;
-      const status = el("status");
-      if (status) {
-        if (err || !resp?.ok) status.textContent = "couldn't reach the page — refresh it?";
-        else                  status.textContent = "done — only F+F checked";
-        setTimeout(() => { status.textContent = ""; }, 3000);
+      if (err || !resp?.ok) {
+        flashStatus(resp?.error || "couldn't reach the page — refresh it?");
+      } else {
+        flashStatus(doneText);
       }
     });
+  }
+  function flashStatus(text) {
+    const status = el("status");
+    if (!status) return;
+    status.textContent = text;
+    setTimeout(() => { status.textContent = ""; }, 3000);
+  }
+  el("toggle-followers-only").addEventListener("click", () =>
+    sendOneShot({ type: "toggle-followers-only" }, "done — only F+F checked"));
+  el("set-format-json").addEventListener("click", () =>
+    sendOneShot({ type: "set-format-json" }, "format → JSON"));
+  el("set-date-all-time").addEventListener("click", () =>
+    sendOneShot({ type: "set-date-all-time" }, "date → All time"));
+  el("fill-email").addEventListener("click", async () => {
+    const settings = await loadSettings();
+    if (!settings.notificationEmail) {
+      flashStatus("set a notification email in Settings first");
+      return;
+    }
+    sendOneShot({ type: "fill-email", email: settings.notificationEmail },
+                `email → ${settings.notificationEmail}`);
   });
 
   el("save-settings").addEventListener("click", async () => {
@@ -111,6 +127,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       trackerUrl: el("tracker-url").value.trim() || DEFAULT_TRACKER,
       vaultUrl: el("vault-url").value.trim(),          // empty = save-to-vault button hidden
       igPassword: el("ig-password").value,             // empty = don't autofill
+      notificationEmail: el("notification-email").value.trim(),
       autosubmitGoogle: el("autosubmit-google").checked,
       showOverlay: el("show-overlay").checked,
     };

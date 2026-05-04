@@ -235,27 +235,57 @@ async function typeRealistic(el, text) {
   el.dispatchEvent(new Event("blur", { bubbles: true }));
 }
 
-// Listen for a "just toggle the checkboxes" command from the popup.
-// Useful when the user is already partway through the wizard manually
-// and just wants the uncheck-everything-except-Followers-and-following
-// step done quickly, without the full automation taking over.
+// One-shot commands from the popup. Each runs a single discrete step
+// of the wizard so the user can drive most of it manually and just
+// click the IG Tracker button when they're on the right screen.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (!msg || msg.type !== "toggle-followers-only") return false;
+  if (!msg || !msg.type) return false;
+  const handler = ONE_SHOT_HANDLERS[msg.type];
+  if (!handler) return false;
   (async () => {
     try {
-      await uncheckAll();
-      await sleep(SETTLE_MS);
-      await checkLabel("Followers and following");
-      showToast("IG Tracker: only 'Followers and following' is now checked.");
-      sendResponse({ ok: true });
+      const r = await handler(msg);
+      sendResponse({ ok: true, ...(r || {}) });
     } catch (e) {
-      console.warn("[IG Tracker] toggle-followers-only failed:", e.message);
+      console.warn(`[IG Tracker] ${msg.type} failed:`, e.message);
       showToast(`IG Tracker: ${e.message}`);
       sendResponse({ ok: false, error: e.message });
     }
   })();
   return true;
 });
+
+const ONE_SHOT_HANDLERS = {
+  "toggle-followers-only": async () => {
+    await uncheckAll();
+    await sleep(SETTLE_MS);
+    await checkLabel("Followers and following");
+    showToast("Only 'Followers and following' is now checked.");
+  },
+  "set-format-json": async () => {
+    // Click the JSON radio. Page must be on the Format selection screen.
+    await stepClick("JSON");
+    showToast("Format set to JSON. Click Save.");
+  },
+  "set-date-all-time": async () => {
+    await stepClick("All time");
+    showToast("Date range set to All time. Click Save.");
+  },
+  "fill-email": async (msg) => {
+    const email = String(msg.email || "").trim();
+    if (!email) throw new Error("No email saved — set one in the popup first.");
+    // Find the notification email input. Meta uses type="email" for
+    // this field; fall back to text inputs near a 'notify' / 'email'
+    // label if that doesn't match.
+    const input = document.querySelector("input[type='email']:not([disabled]), input[name*='email' i]:not([disabled])");
+    if (!input) throw new Error("Couldn't find an email field on this page.");
+    input.scrollIntoView({ block: "center", behavior: "instant" });
+    input.focus();
+    await sleep(80);
+    await typeRealistic(input, email);
+    showToast(`Filled notification email: ${email}`);
+  },
+};
 
 (async function main() {
   if (!(await shouldRun())) {

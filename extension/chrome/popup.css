@@ -74,7 +74,7 @@ html, body {
   display: block;
   margin-bottom: 4px;
 }
-.row input[type="text"], .row input[type="password"] {
+.row input[type="text"], .row input[type="password"], .row input[type="email"] {
   width: 100%;
   padding: 6px 8px;
   background: var(--bg-elev-2);
@@ -83,10 +83,17 @@ html, body {
   color: var(--text);
   font-size: 12px;
 }
-.row input[type="text"]:focus, .row input[type="password"]:focus {
+.row input[type="text"]:focus, .row input[type="password"]:focus, .row input[type="email"]:focus {
   outline: none;
   border-color: var(--accent);
 }
+.quick-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 6px;
+}
+.quick-row .secondary { font-size: 12px; height: 32px; padding: 0 6px; }
 .row.check {
   display: flex;
   align-items: center;
