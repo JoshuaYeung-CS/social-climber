@@ -876,6 +876,7 @@ function renderPanel(panel, username, data) {
       <button class="igt-icon" data-action="close" title="Close">✕</button>
     </div>
     <div class="igt-body">
+      ${profile.profile_pic ? `<a class="igt-pic-link" href="${escapeHtml(profile.profile_pic)}" target="_blank" rel="noopener" title="Click to open at full size"><img class="igt-pic" src="${escapeHtml(profile.profile_pic)}" alt="${escapeHtml(username)} profile picture" /></a>` : ""}
       <div class="igt-username">${escapeHtml(username)}${profile.verified ? ' <span class="igt-check" title="Verified">✓</span>' : ""}</div>
       ${profile.display_name ? `<div class="igt-display-name">${escapeHtml(profile.display_name)}</div>` : ""}
       <div class="igt-rel igt-rel-${relKind}">${escapeHtml(rel)}</div>

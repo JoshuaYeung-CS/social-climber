@@ -76,7 +76,7 @@ class ImportResult:
 @dataclass
 class SkippedImport:
     label: str
-    reason: str           # "duplicate" | "out_of_order"
+    reason: str           # "duplicate" | "out_of_order" | "placeholder_partial"
     message: str
     existing_snapshot_id: int | None = None
     existing_label: str | None = None
@@ -227,6 +227,41 @@ def _ingest_one(
 
     if not any([follower_rows, following_rows, pending_rows, recent_rows, unfollowed_rows, incoming_rows]):
         raise ValueError(f"No usable Instagram export data found in: {ff_dir}")
+
+    # Drive-placeholder guard: when the auto-watcher imports a folder that
+    # Drive hasn't fully streamed yet, the JSON files exist but parse to
+    # empty arrays. The snapshot then looks like "everyone unfollowed"
+    # vs. the previous snapshot, corrupting all the diff math. Reject any
+    # snapshot whose followers OR following parses to dramatically lower
+    # than the most recent valid snapshot (>90% drop). Users with real
+    # account changes never lose 90%+ of their followers/following in
+    # one snapshot interval; that magnitude only happens when the file
+    # was a placeholder at parse time.
+    last_real = conn.execute("""
+        SELECT
+          (SELECT COUNT(*) FROM followers  f WHERE f.snapshot_id = s.id) AS f_count,
+          (SELECT COUNT(*) FROM following  g WHERE g.snapshot_id = s.id) AS g_count
+        FROM snapshots s
+        ORDER BY taken_at DESC, id DESC
+        LIMIT 1
+    """).fetchone()
+    if last_real is not None:
+        prev_f = int(last_real["f_count"] or 0)
+        prev_g = int(last_real["g_count"] or 0)
+        new_f = len(follower_rows)
+        new_g = len(following_rows)
+        f_collapsed = prev_f >= 50 and new_f < prev_f * 0.1
+        g_collapsed = prev_g >= 50 and new_g < prev_g * 0.1
+        if f_collapsed or g_collapsed:
+            return SkippedImport(
+                label=label,
+                reason="placeholder_partial",
+                message=(
+                    f"Counts collapsed vs prior snapshot (followers {prev_f}→{new_f}, "
+                    f"following {prev_g}→{new_g}). Likely a Drive placeholder import; "
+                    f"file content hadn't synced yet. Re-run scan after Drive finishes streaming."
+                ),
+            )
 
     merged, sources = _merge_pending(pending_rows, recent_rows)
 
