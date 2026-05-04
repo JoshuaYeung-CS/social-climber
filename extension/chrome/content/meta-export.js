@@ -39,19 +39,78 @@ async function waitFor(predicate, { timeout = STEP_TIMEOUT_MS, label = "" } = {}
   throw new Error(`Timed out waiting for: ${label}`);
 }
 
-// Find a clickable element whose visible text matches `text` (case-insensitive,
-// trimmed). Searches buttons, role=button, links, and divs (Meta uses divs as
-// buttons heavily). Optional `within` scopes to a subtree.
+// Find a clickable element whose visible text matches `text`.
+//
+// Strategy: walk every element in the document, find the LEAF whose
+// direct text content (ignoring descendants) equals the target. Then
+// walk up its ancestors to the nearest clickable element (button,
+// role=button|radio|checkbox|menuitem, tabindex >=0, or cursor:pointer).
+// This handles Meta's deeply-nested div-based UI without needing to
+// guess which level has the role attribute.
+function _isClickable(el) {
+  if (!el || el === document.body) return false;
+  if (el.tagName === "BUTTON" || el.tagName === "A") return true;
+  const role = el.getAttribute && el.getAttribute("role");
+  if (role && /^(button|radio|checkbox|menuitem|menuitemradio|menuitemcheckbox|tab|option|link)$/.test(role)) {
+    return true;
+  }
+  if (el.tabIndex !== undefined && el.tabIndex >= 0) return true;
+  try {
+    if (getComputedStyle(el).cursor === "pointer") return true;
+  } catch (_) {}
+  return false;
+}
+
+function _climbToClickable(el) {
+  let cur = el;
+  for (let i = 0; cur && cur !== document.body && i < 10; i++) {
+    if (_isClickable(cur)) return cur;
+    cur = cur.parentElement;
+  }
+  return el; // fall back to the original element if no clickable ancestor
+}
+
+function _directText(el) {
+  // Concatenated text of direct child text nodes only (ignore deeply
+  // nested descendants). Catches the case where Meta wraps a label in
+  // its own <span> next to a description in a sibling <span>.
+  let out = "";
+  for (const n of el.childNodes) {
+    if (n.nodeType === Node.TEXT_NODE) out += n.textContent;
+  }
+  return out.trim();
+}
+
 function findByText(text, within = document) {
   const target = String(text).trim().toLowerCase();
-  const candidates = within.querySelectorAll(
-    "button, a, [role='button'], [role='radio'], [role='checkbox'], div[role], span[role]"
-  );
-  for (const el of candidates) {
+  if (!target) return null;
+  const all = within.querySelectorAll("*");
+  // Pass 1: a leaf node whose direct text equals the target — this is
+  // typically the <span> inside a row that holds just "Google Drive"
+  // or "JSON".
+  for (const el of all) {
+    const dt = _directText(el).toLowerCase();
+    if (dt === target) return _climbToClickable(el);
+  }
+  // Pass 2: any element whose total textContent equals the target.
+  for (const el of all) {
     const t = (el.textContent || "").trim().toLowerCase();
-    if (t === target) return el;
-    // Sometimes the label is in a nested span — check direct child text.
-    if (t.includes(target) && t.length < target.length + 8) return el;
+    if (t === target) return _climbToClickable(el);
+  }
+  // Pass 3: an element whose first line equals the target (rich rows
+  // like "Google Drive\nAll available information").
+  for (const el of all) {
+    const t = (el.textContent || "").trim().toLowerCase();
+    if (!t) continue;
+    const firstLine = t.split(/\n|·|·/)[0].trim();
+    if (firstLine === target && t.length < 300) return _climbToClickable(el);
+  }
+  // Pass 4: substring match in a reasonably-bounded element.
+  for (const el of all) {
+    const t = (el.textContent || "").trim().toLowerCase();
+    if (t.includes(target) && t.length < Math.max(target.length + 80, 120)) {
+      return _climbToClickable(el);
+    }
   }
   return null;
 }
@@ -126,8 +185,30 @@ async function runWizard() {
   await checkLabel("Followers and following");
   await stepClick("Save");
 
-  // Step 9: Notify — should already be set; if not, fall through to Save.
-  // Skip if the field is already populated.
+  // Step 9: Notify → fill in saved email if available, otherwise click
+  // any pre-suggested method. Tolerant of being already-set (Save will
+  // just close the row); tolerant of being missing (the row may not
+  // appear on every wizard variant).
+  try {
+    await stepClickRow("Notify");
+    const stored = await chrome.storage.local.get(["notificationEmail"]);
+    const email = (stored.notificationEmail || "").trim();
+    if (email) {
+      const input = document.querySelector(
+        "input[type='email']:not([disabled]), input[name*='email' i]:not([disabled])"
+      );
+      if (input) {
+        input.scrollIntoView({ block: "center", behavior: "instant" });
+        input.focus();
+        await sleep(80);
+        await typeRealistic(input, email);
+        await sleep(SETTLE_MS);
+      }
+    }
+    await stepClick("Save");
+  } catch (e) {
+    console.log("[IG Tracker] Notify step skipped:", e.message);
+  }
 
   // Step 10: Start export
   await stepClick("Start export");
@@ -274,10 +355,31 @@ const ONE_SHOT_HANDLERS = {
   "fill-email": async (msg) => {
     const email = String(msg.email || "").trim();
     if (!email) throw new Error("No email saved — set one in the popup first.");
-    // Find the notification email input. Meta uses type="email" for
-    // this field; fall back to text inputs near a 'notify' / 'email'
-    // label if that doesn't match.
-    const input = document.querySelector("input[type='email']:not([disabled]), input[name*='email' i]:not([disabled])");
+    // Meta's Notify dialog uses different input types per region/version.
+    // Cast a wider net: type=email, type=text with email-y placeholder,
+    // any text input that's currently visible inside an open dialog.
+    const candidates = Array.from(document.querySelectorAll(
+      "input:not([disabled]):not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='button']):not([type='submit'])"
+    ));
+    let input = null;
+    // Prefer ones that look explicitly like an email field.
+    for (const c of candidates) {
+      const type = (c.getAttribute("type") || "").toLowerCase();
+      const name = (c.getAttribute("name") || "").toLowerCase();
+      const ph   = (c.getAttribute("placeholder") || "").toLowerCase();
+      const al   = (c.getAttribute("aria-label") || "").toLowerCase();
+      if (type === "email" || /email/.test(name) || /email/.test(ph) || /email/.test(al)) {
+        input = c; break;
+      }
+    }
+    // Fall back to the first visible text input on the page (the Notify
+    // dialog's "Add new email" field renders as a generic text input).
+    if (!input) {
+      for (const c of candidates) {
+        const r = c.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) { input = c; break; }
+      }
+    }
     if (!input) throw new Error("Couldn't find an email field on this page.");
     input.scrollIntoView({ block: "center", behavior: "instant" });
     input.focus();
