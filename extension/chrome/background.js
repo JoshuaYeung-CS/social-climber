@@ -429,6 +429,76 @@ async function refreshArchiveRunnerAlarm() {
   console.log(`[IG Tracker] Archive runner: armed every ${interval} min`);
 }
 
+// Failure-handling threshold. After this many cumulative failed
+// attempts on a single account, mark it as PERMANENT FAILURE and
+// stop retrying — the user gets a persistent banner in the popup
+// plus a Reminders/iMessage push.
+const ARCHIVE_RUNNER_MAX_ATTEMPTS = 10;
+
+async function _loadArchiveState() {
+  const { archiveRunnerState = {} } = await chrome.storage.local.get(["archiveRunnerState"]);
+  return {
+    triedThisPass: archiveRunnerState.triedThisPass || [],
+    attemptCounts: archiveRunnerState.attemptCounts || {},
+    permanentFailures: archiveRunnerState.permanentFailures || {},
+    passNumber: archiveRunnerState.passNumber || 1,
+    inFlight: archiveRunnerState.inFlight || null,
+  };
+}
+
+async function _saveArchiveState(state) {
+  await chrome.storage.local.set({ archiveRunnerState: state });
+}
+
+async function _verifyPreviousAttempt(state, liveQueue) {
+  // Called at the start of each fire. If a previous run was in flight
+  // (tab opened, may have closed), check whether the user dropped from
+  // the queue (success) or is still there (failure). Update counts.
+  if (!state.inFlight) return;
+  const u = state.inFlight;
+  const stillQueued = liveQueue.includes(u);
+  if (stillQueued) {
+    // Failed this attempt.
+    state.attemptCounts[u] = (state.attemptCounts[u] || 0) + 1;
+    if (state.attemptCounts[u] >= ARCHIVE_RUNNER_MAX_ATTEMPTS) {
+      state.permanentFailures[u] = {
+        firstFailedAt: state.permanentFailures[u]?.firstFailedAt || Date.now(),
+        attempts: state.attemptCounts[u],
+      };
+      delete state.attemptCounts[u];
+      state.triedThisPass = state.triedThisPass.filter(x => x !== u);
+      console.warn(`[IG Tracker] Archive runner: PERMANENT FAILURE @${u} after ${ARCHIVE_RUNNER_MAX_ATTEMPTS} attempts`);
+      await _appendArchiveRunnerHistory({ ts: Date.now(), username: u, status: "permanent-fail" });
+      // Push exactly once when it crosses the threshold.
+      try {
+        await _phonePush(
+          `IG Archive: @${u} permanently failed`,
+          `Couldn't archive after ${ARCHIVE_RUNNER_MAX_ATTEMPTS} tries. Tag the account as unavailable, or delete the (empty) data/media/${u} folder if you want to keep retrying.`,
+          "high",
+        );
+      } catch (_) { /* push best-effort */ }
+    } else {
+      if (!state.triedThisPass.includes(u)) {
+        state.triedThisPass.push(u);
+      }
+      console.log(`[IG Tracker] Archive runner: @${u} still queued — attempt ${state.attemptCounts[u]}/${ARCHIVE_RUNNER_MAX_ATTEMPTS}, skipping`);
+      await _appendArchiveRunnerHistory({
+        ts: Date.now(),
+        username: u,
+        status: "skipped",
+        attempts: state.attemptCounts[u],
+      });
+    }
+  } else {
+    // Success — drop from tracking.
+    delete state.attemptCounts[u];
+    state.triedThisPass = state.triedThisPass.filter(x => x !== u);
+    console.log(`[IG Tracker] Archive runner: ✓ @${u} archived successfully`);
+    await _appendArchiveRunnerHistory({ ts: Date.now(), username: u, status: "archived" });
+  }
+  state.inFlight = null;
+}
+
 async function _onArchiveRunnerFire() {
   const base = await _archiveTrackerUrl();
   let queue = [];
@@ -443,54 +513,82 @@ async function _onArchiveRunnerFire() {
     console.warn("[IG Tracker] Archive runner: fetch failed:", e?.message || e);
     return;
   }
+
+  const state = await _loadArchiveState();
+  await _verifyPreviousAttempt(state, queue);
+
+  // Permanent failures filtered out — they stop being attempted.
+  const liveQueue = queue.filter(u => !state.permanentFailures[u]);
   await chrome.storage.local.set({
-    archiveRunnerLastStats: { ...stats, fetchedAt: Date.now() },
+    archiveRunnerLastStats: {
+      ...stats,
+      fetchedAt: Date.now(),
+      live_queue_size: liveQueue.length,
+      tried_this_pass: state.triedThisPass.length,
+      pass_number: state.passNumber,
+      permanent_failures: Object.keys(state.permanentFailures),
+    },
   });
-  if (queue.length === 0) {
-    console.log("[IG Tracker] Archive runner: queue empty.");
+
+  if (liveQueue.length === 0) {
+    console.log("[IG Tracker] Archive runner: live queue empty.");
+    await _saveArchiveState(state);
     return;
   }
-  const username = queue[0];
-  console.log(`[IG Tracker] Archive runner: opening ${username} (${queue.length} remaining)`);
 
-  // Open in a separate non-focused minimized window — same trick as
-  // the export bot uses, so we don't background-throttle the content
-  // script's scroll loop.
-  let tabId = null;
+  // Pick the first user not already attempted in this pass.
+  let pick = liveQueue.find(u => !state.triedThisPass.includes(u));
+  if (!pick) {
+    // All live-queue users have been attempted this pass without
+    // success → start a new pass. Failed users get re-tried, with
+    // their accumulated attempt counts intact (so the 10-attempt cap
+    // still applies across passes).
+    state.triedThisPass = [];
+    state.passNumber += 1;
+    pick = liveQueue[0];
+    console.log(`[IG Tracker] Archive runner: starting pass #${state.passNumber}, retrying ${liveQueue.length} failed account(s)`);
+  }
+
+  state.inFlight = pick;
+  await _saveArchiveState(state);
+
+  console.log(`[IG Tracker] Archive runner: opening @${pick} (${liveQueue.length} live, ${state.triedThisPass.length} tried this pass, ${Object.keys(state.permanentFailures).length} permanent fails)`);
+
   let windowId = null;
   try {
     const win = await chrome.windows.create({
-      // Hash flag tells the content script "you were opened by the
-      // runner — override visibility and auto-fire archive-all".
-      url: `https://www.instagram.com/${encodeURIComponent(username)}/#igtracker-runner=archive`,
+      url: `https://www.instagram.com/${encodeURIComponent(pick)}/#igtracker-runner=archive`,
       focused: false,
       type: "normal",
       state: "minimized",
     });
-    tabId = win?.tabs?.[0]?.id ?? null;
     windowId = win?.id ?? null;
   } catch (e) {
     console.warn("[IG Tracker] Archive runner: window.create failed:", e?.message || e);
+    state.inFlight = null;
+    await _saveArchiveState(state);
     return;
   }
 
   await _appendArchiveRunnerHistory({
     ts: Date.now(),
-    username,
+    username: pick,
     status: "opened",
+    attempt: (state.attemptCounts[pick] || 0) + 1,
   });
 
-  // Close the tab after the budget. If the tab was already closed by
-  // the user we just swallow the error.
   setTimeout(async () => {
     try {
       if (windowId != null) await chrome.windows.remove(windowId);
-    } catch (_) { /* tab already gone */ }
+    } catch (_) { /* already gone */ }
     await _appendArchiveRunnerHistory({
       ts: Date.now(),
-      username,
+      username: pick,
       status: "closed",
     });
+    // Verification happens at the START of the NEXT fire (so the
+    // server has had time to register newly-saved files). No need
+    // to verify here.
   }, ARCHIVE_RUNNER_TAB_BUDGET_MS);
 }
 
@@ -774,17 +872,62 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         chrome.storage.local.get([
           "archiveRunnerOn", "archiveRunnerIntervalMin",
           "archiveRunnerHistory", "archiveRunnerLastStats",
+          "archiveRunnerState",
         ]),
         chrome.alarms.get(ARCHIVE_RUNNER_ALARM).catch(() => null),
       ]);
+      const st = data.archiveRunnerState || {};
       sendResponse({
         ok: true,
         on: !!data.archiveRunnerOn,
         intervalMin: Number(data.archiveRunnerIntervalMin) || ARCHIVE_RUNNER_DEFAULT_INTERVAL_MIN,
-        history: (data.archiveRunnerHistory || []).slice(-10).reverse(),
+        history: (data.archiveRunnerHistory || []).slice(-15).reverse(),
         lastStats: data.archiveRunnerLastStats || null,
         nextFireAt: alarm ? alarm.scheduledTime : null,
+        passNumber: st.passNumber || 1,
+        triedThisPass: st.triedThisPass || [],
+        permanentFailures: st.permanentFailures || {},
+        attemptCounts: st.attemptCounts || {},
       });
+    })();
+    return true;
+  }
+  // Manual queue add/remove via existing /api/tags need_archive flag.
+  // Popup posts here; SW relays to local server (no CORS).
+  if (msg.type === "archive-queue-add") {
+    (async () => {
+      const { trackerUrl } = await chrome.storage.local.get(["trackerUrl"]);
+      const base = (trackerUrl || "http://127.0.0.1:8000").replace(/\/$/, "");
+      const username = (msg.username || "").trim().replace(/^@/, "");
+      if (!username) { sendResponse({ ok: false, error: "missing username" }); return; }
+      try {
+        const r = await fetch(`${base}/api/tags`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, flag: "need_archive", value: true }),
+        });
+        const j = await r.json().catch(() => ({}));
+        sendResponse({ ok: r.ok, body: j });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e?.message || e) });
+      }
+    })();
+    return true;
+  }
+  // Clear permanent-fail flag for a username so it gets re-queued.
+  if (msg.type === "archive-runner-retry-permanent") {
+    (async () => {
+      const username = (msg.username || "").trim();
+      const state = await _loadArchiveState();
+      if (state.permanentFailures[username]) {
+        delete state.permanentFailures[username];
+        // Reset attempt count so they get the full 10-try budget again.
+        delete state.attemptCounts[username];
+        await _saveArchiveState(state);
+        sendResponse({ ok: true });
+      } else {
+        sendResponse({ ok: false, error: "not in permanent failures" });
+      }
     })();
     return true;
   }

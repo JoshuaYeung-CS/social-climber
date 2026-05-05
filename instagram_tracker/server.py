@@ -3000,33 +3000,51 @@ _MEDIA_DIR = DB_PATH.parent / "media"
 def archive_queue():
     """Usernames the auto-archive runner should process. Defined as:
 
-      favorites - {accounts with a non-empty media folder}
-                - {accounts tagged unavailable / disabled}
+      (need_archive ∪ favorites) - {accounts with a non-empty media folder}
+                                 - {accounts tagged unavailable / disabled}
+
+    `need_archive` is the manual-queue signal — user toggled this flag
+    via the overlay or the popup's "Add to queue" field, which overrides
+    the favorite-only default. Within the queue, manually-added accounts
+    come FIRST (higher priority), then favorites by added_at.
 
     The "non-empty media folder" rule lets the user skip an account by
     deleting its media/<u>/ directory but keeping the (empty) folder
     around — that's our "I intentionally cleared this, don't refetch"
     signal. A truly missing folder means we never archived → process.
-
-    Returns oldest-favorited-first so the user's highest-priority
-    backlog gets caught up first.
     """
     with db_conn() as conn:
+        manual = tags_mod.list_with_flag(conn, "need_archive")
         favs = tags_mod.list_with_flag(conn, "favorite")
-    favorites = [(r["username"], r.get("favorite_added_at")) for r in favs]
-    favorites.sort(key=lambda x: x[1] or "")
-
-    with db_conn() as conn:
         skip_tagged = (
             {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
             | {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
         )
 
-    queue = []
+    seen = set()
+    combined: list[tuple[str, str | None, bool]] = []  # (username, added_at, is_manual)
+    for r in manual:
+        if r["username"] in seen:
+            continue
+        seen.add(r["username"])
+        combined.append((r["username"], r.get("need_archive_added_at"), True))
+    # Manual entries first (oldest add first), then favorites (oldest first).
+    combined.sort(key=lambda x: x[1] or "")
+    fav_entries = []
+    for r in favs:
+        if r["username"] in seen:
+            continue
+        seen.add(r["username"])
+        fav_entries.append((r["username"], r.get("favorite_added_at"), False))
+    fav_entries.sort(key=lambda x: x[1] or "")
+    combined.extend(fav_entries)
+
+    queue: list[str] = []
+    queue_manual: list[str] = []
     skipped_already_archived = 0
     skipped_user_cleared = 0
     skipped_tagged = 0
-    for username, _added_at in favorites:
+    for username, _added_at, is_manual in combined:
         if username in skip_tagged:
             skipped_tagged += 1
             continue
@@ -3037,25 +3055,26 @@ def archive_queue():
             except OSError:
                 file_count = 0
             if file_count > 0:
-                # Already has media — main extension's autoArchiveMedia
-                # picks up any new posts on subsequent visits. No need
-                # for the runner to revisit.
                 skipped_already_archived += 1
                 continue
             else:
-                # Folder exists but empty → user wiped on purpose.
                 skipped_user_cleared += 1
                 continue
         queue.append(username)
+        if is_manual:
+            queue_manual.append(username)
 
     return {
         "queue": queue,
+        "manual_in_queue": queue_manual,
         "stats": {
             "queue_size": len(queue),
+            "manual_in_queue": len(queue_manual),
             "skipped_already_archived": skipped_already_archived,
             "skipped_user_cleared": skipped_user_cleared,
             "skipped_tagged": skipped_tagged,
-            "favorite_total": len(favorites),
+            "favorite_total": len(fav_entries),
+            "manual_total": len(manual),
         },
     }
 

@@ -420,7 +420,33 @@ function initArchiveRunnerControls() {
   const onEl = el("archive-runner-on");
   const intervalEl = el("archive-runner-interval");
   const statusEl = el("archive-runner-status");
+  const addInput = el("archive-add-input");
+  const addBtn = el("archive-add-btn");
   if (!onEl || !intervalEl) return;
+
+  if (addBtn && addInput) {
+    const doAdd = async () => {
+      const u = addInput.value.trim().replace(/^@/, "");
+      if (!u) return;
+      addBtn.disabled = true;
+      addBtn.textContent = "Adding…";
+      const resp = await new Promise((r) => {
+        try { chrome.runtime.sendMessage({ type: "archive-queue-add", username: u }, (x) => r(x || null)); }
+        catch { r(null); }
+      });
+      addBtn.disabled = false;
+      if (resp && resp.ok) {
+        addBtn.textContent = "Added ✓";
+        addInput.value = "";
+        setTimeout(() => { addBtn.textContent = "Add"; renderArchiveRunner(); }, 900);
+      } else {
+        addBtn.textContent = "Failed";
+        setTimeout(() => { addBtn.textContent = "Add"; }, 1500);
+      }
+    };
+    addBtn.addEventListener("click", doAdd);
+    addInput.addEventListener("keydown", (e) => { if (e.key === "Enter") doAdd(); });
+  }
 
   chrome.storage.local.get(["archiveRunnerOn", "archiveRunnerIntervalMin"], (s) => {
     onEl.checked = !!s.archiveRunnerOn;
@@ -456,6 +482,9 @@ async function renderArchiveRunner() {
   const parts = [];
   if (stats) {
     parts.push(`queue: ${stats.queue_size} remaining`);
+    if (stats.manual_in_queue) {
+      parts.push(`${stats.manual_in_queue} manual`);
+    }
     if (stats.skipped_already_archived != null) {
       parts.push(`${stats.skipped_already_archived} already archived`);
     }
@@ -468,6 +497,9 @@ async function renderArchiveRunner() {
   } else {
     parts.push("no queue fetched yet");
   }
+  if (resp.passNumber > 1) {
+    parts.push(`pass #${resp.passNumber}`);
+  }
   if (resp.on && resp.nextFireAt) {
     const minsUntil = Math.max(0, Math.round((resp.nextFireAt - Date.now()) / 60000));
     const clock = new Date(resp.nextFireAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -475,10 +507,52 @@ async function renderArchiveRunner() {
   }
   summary.textContent = parts.join(" · ");
 
+  // Permanent-failure banner — persistent until user retries or
+  // permanently dismisses by tagging the account as unavailable.
+  const banner = el("archive-runner-permfail-banner");
+  if (banner) {
+    const failed = resp.permanentFailures || {};
+    const failedNames = Object.keys(failed);
+    if (failedNames.length === 0) {
+      banner.hidden = true;
+      banner.innerHTML = "";
+    } else {
+      banner.hidden = false;
+      const rows = failedNames.map((u) => {
+        const f = failed[u];
+        const since = f.firstFailedAt ? _fmtAgo(f.firstFailedAt) : "?";
+        const safeU = u.replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
+        return `<div style="margin-top:4px"><b>@${safeU}</b> — failed ${f.attempts || 10}× since ${since}<button data-retry="${safeU}">Retry</button></div>`;
+      }).join("");
+      banner.innerHTML = `<div>⚠ ${failedNames.length} account${failedNames.length === 1 ? "" : "s"} permanently failed (won't retry until you tell them to):</div>${rows}`;
+      banner.querySelectorAll("button[data-retry]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const u = btn.dataset.retry;
+          btn.disabled = true;
+          btn.textContent = "…";
+          await new Promise((r) => {
+            try { chrome.runtime.sendMessage({ type: "archive-runner-retry-permanent", username: u }, (x) => r(x)); }
+            catch { r(null); }
+          });
+          renderArchiveRunner();
+        });
+      });
+    }
+  }
+
   const list = el("archive-runner-history");
   list.innerHTML = (resp.history || []).map((h) => {
     const when = _fmtAgo(h.ts);
-    const badge = h.status === "opened" ? "▶" : h.status === "closed" ? "✓" : "·";
-    return `<li><span class="badge">${badge}</span> ${when} — @${h.username}</li>`;
+    const badge = h.status === "opened"        ? "▶"
+                : h.status === "closed"        ? "·"
+                : h.status === "archived"      ? "✓"
+                : h.status === "skipped"       ? "↷"
+                : h.status === "permanent-fail"? "⛔"
+                : "·";
+    const detail = h.status === "skipped" ? ` (skip, attempt ${h.attempts || "?"}/10)`
+                : h.status === "permanent-fail" ? " — permanent fail"
+                : h.status === "archived" ? " — archived ✓"
+                : "";
+    return `<li><span class="badge">${badge}</span> ${when} — @${h.username}${detail}</li>`;
   }).join("");
 }
