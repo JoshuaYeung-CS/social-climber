@@ -273,6 +273,25 @@ async function _trackerScan(sinceMs) {
 }
 
 async function _onScheduledExportFire() {
+  // Min-gap guard against chrome.alarms wake-from-sleep replay. If
+  // the previous fire was less than (minScheduleMin - 1) ago, treat
+  // this as a replay artifact and skip. Critical for the export bot
+  // because back-to-back Meta-export creates would be the most
+  // suspicious thing IG could see.
+  const { lastScheduledFireAt, exportScheduleMinHours, exportScheduleHours } = await chrome.storage.local.get([
+    "lastScheduledFireAt", "exportScheduleMinHours", "exportScheduleHours",
+  ]);
+  const minH = Number(exportScheduleMinHours) || Number(exportScheduleHours) || 0;
+  if (minH > 0 && lastScheduledFireAt) {
+    const minGapMs = Math.max(60_000, (minH * 60_000) - 60_000);  // interval minus 1 min, minimum 1 min
+    const sinceMs = Date.now() - lastScheduledFireAt;
+    if (sinceMs < minGapMs) {
+      console.log(`[IG Tracker] Scheduled export: alarm-replay protection — last fire ${Math.round(sinceMs/1000)}s ago (need ${Math.round(minGapMs/1000)}s+). Skipping.`);
+      return;
+    }
+  }
+  await chrome.storage.local.set({ lastScheduledFireAt: Date.now() });
+
   console.log("[IG Tracker] Scheduled export alarm fired — opening wizard.");
   const startedAt = Date.now();
   // Open in a SEPARATE non-focused window rather than a background
@@ -500,6 +519,26 @@ async function _verifyPreviousAttempt(state, liveQueue) {
 }
 
 async function _onArchiveRunnerFire() {
+  // Min-gap guard. chrome.alarms replays missed periodic fires after
+  // the system wakes from sleep — if the laptop slept 5h with the
+  // runner armed for 8min, on wake Chrome can fire several catch-up
+  // schedules in tight succession (observed: two fires <1min apart).
+  // That would be exactly the kind of burst that trips IG's anti-
+  // bot. We treat any fire that lands within (interval - 30s) of
+  // the previous fire as a replay artifact and skip — the next
+  // properly-spaced fire will resume normal cadence.
+  const { archiveRunnerLastFireAt, archiveRunnerIntervalMin } = await chrome.storage.local.get([
+    "archiveRunnerLastFireAt", "archiveRunnerIntervalMin",
+  ]);
+  const intervalMin = Math.max(1, Number(archiveRunnerIntervalMin) || ARCHIVE_RUNNER_DEFAULT_INTERVAL_MIN);
+  const minGapMs = (intervalMin * 60_000) - 30_000;
+  if (archiveRunnerLastFireAt && (Date.now() - archiveRunnerLastFireAt) < minGapMs) {
+    const sinceS = Math.round((Date.now() - archiveRunnerLastFireAt) / 1000);
+    console.log(`[IG Tracker] Archive runner: alarm-replay protection — last fire ${sinceS}s ago (need ${Math.round(minGapMs/1000)}s+). Skipping this fire.`);
+    return;
+  }
+  await chrome.storage.local.set({ archiveRunnerLastFireAt: Date.now() });
+
   const base = await _archiveTrackerUrl();
   let queue = [];
   let stats = null;
