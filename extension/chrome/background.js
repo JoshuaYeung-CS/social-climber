@@ -29,10 +29,50 @@ const SCHEDULE_ALARM = "scheduled-export";
 const ARRIVAL_POLL_ALARM = "drive-arrival-poll";
 const HISTORY_MAX = 50;
 const TIMINGS_MAX = 50;
-// User-measured arrival range is ~8-18 min (avg ~13). Start polling
-// at 7min so we don't miss a fast arrival, then re-check every minute.
-const ARRIVAL_FIRST_CHECK_MIN = 7;
-const ARRIVAL_GIVE_UP_MIN = 90;
+// Drive-arrival polling: when we have historical timings, we start
+// polling a few minutes before the EARLIEST typical arrival (so we
+// catch the fast cases) and keep going to a few minutes after the
+// LATEST typical arrival. With no history we default to 12-min
+// first-check / 90-min give-up — close to the user-measured ~13 min
+// average. Cadence is always 1 minute between checks (user-preferred,
+// "every next minute"). The local /api/scan call only reads the
+// already-Drive-synced folder, so per-minute polls don't hit Google's
+// API at all.
+const ARRIVAL_DEFAULT_FIRST_MIN = 12;
+const ARRIVAL_DEFAULT_GIVE_UP_MIN = 90;
+const ARRIVAL_MIN_FIRST_MIN = 2;
+const ARRIVAL_PRE_MARGIN_MIN = 2;     // start this many min before earliest historical arrival
+const ARRIVAL_POST_MARGIN_MIN = 10;   // give up this many min after latest historical arrival
+const ARRIVAL_HISTORY_FOR_ESTIMATE = 3;
+
+function _percentile(sortedAsc, p) {
+  if (!sortedAsc.length) return null;
+  const idx = Math.min(sortedAsc.length - 1, Math.max(0, Math.floor((p / 100) * sortedAsc.length)));
+  return sortedAsc[idx];
+}
+
+async function _arrivalWindowMin() {
+  const { exportTimings = [] } = await chrome.storage.local.get(["exportTimings"]);
+  if (exportTimings.length < ARRIVAL_HISTORY_FOR_ESTIMATE) {
+    return {
+      firstMin: ARRIVAL_DEFAULT_FIRST_MIN,
+      giveUpMin: ARRIVAL_DEFAULT_GIVE_UP_MIN,
+      basis: `default (${exportTimings.length} run${exportTimings.length === 1 ? "" : "s"} — need ${ARRIVAL_HISTORY_FOR_ESTIMATE})`,
+    };
+  }
+  const sortedSec = [...exportTimings].sort((a, b) => a - b);
+  const p10Sec = _percentile(sortedSec, 10);
+  const p90Sec = _percentile(sortedSec, 90);
+  const p10Min = p10Sec / 60;
+  const p90Min = p90Sec / 60;
+  const firstMin = Math.max(ARRIVAL_MIN_FIRST_MIN, Math.round(p10Min - ARRIVAL_PRE_MARGIN_MIN));
+  const giveUpMin = Math.max(ARRIVAL_DEFAULT_GIVE_UP_MIN, Math.round(p90Min + ARRIVAL_POST_MARGIN_MIN));
+  return {
+    firstMin,
+    giveUpMin,
+    basis: `from ${exportTimings.length} runs (p10 ${p10Min.toFixed(1)}m, p90 ${p90Min.toFixed(1)}m)`,
+  };
+}
 
 async function refreshExportAlarm() {
   const { exportScheduleHours } = await chrome.storage.local.get(["exportScheduleHours"]);
@@ -112,15 +152,22 @@ async function _onScheduledExportFire() {
     });
     tabId = tab?.id ?? null;
   }
+  const arrivalWindow = await _arrivalWindowMin();
+  console.log(`[IG Tracker] Arrival poll window: first check at +${arrivalWindow.firstMin}m, give up at +${arrivalWindow.giveUpMin}m (${arrivalWindow.basis}).`);
+  // pendingArrival captures the window at alarm-creation time so a
+  // mid-run history change doesn't move the goalpost.
   await chrome.storage.local.set({
     wizardRunRequested: { ts: startedAt, tabId },
-    pendingArrival: { startedAt },
+    pendingArrival: {
+      startedAt,
+      firstMin: arrivalWindow.firstMin,
+      giveUpMin: arrivalWindow.giveUpMin,
+    },
   });
   await _appendHistory({ ts: startedAt, status: "triggered" });
-  // First check after ARRIVAL_FIRST_CHECK_MIN minutes, then every minute.
   await chrome.alarms.clear(ARRIVAL_POLL_ALARM);
   chrome.alarms.create(ARRIVAL_POLL_ALARM, {
-    delayInMinutes: ARRIVAL_FIRST_CHECK_MIN,
+    delayInMinutes: arrivalWindow.firstMin,
     periodInMinutes: 1,
   });
 }
@@ -133,7 +180,8 @@ async function _onArrivalPollFire() {
   }
   const elapsedMs = Date.now() - pendingArrival.startedAt;
   const elapsedMin = elapsedMs / 60000;
-  if (elapsedMin > ARRIVAL_GIVE_UP_MIN) {
+  const giveUpMin = Number.isFinite(pendingArrival.giveUpMin) ? pendingArrival.giveUpMin : ARRIVAL_DEFAULT_GIVE_UP_MIN;
+  if (elapsedMin > giveUpMin) {
     console.warn(`[IG Tracker] Drive arrival poll: gave up after ${elapsedMin.toFixed(0)}min.`);
     await chrome.alarms.clear(ARRIVAL_POLL_ALARM);
     await chrome.storage.local.set({ pendingArrival: null });
@@ -336,15 +384,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const startedAt = Date.now();
       const url = "https://accountscenter.instagram.com/info_and_permissions/dyi/";
       const tab = await chrome.tabs.create({ url });
+      const arrivalWindow = await _arrivalWindowMin();
       await chrome.storage.local.set({
         wizardRunRequested: { ts: startedAt, tabId: tab?.id ?? null },
-        pendingArrival: { startedAt },
+        pendingArrival: {
+          startedAt,
+          firstMin: arrivalWindow.firstMin,
+          giveUpMin: arrivalWindow.giveUpMin,
+        },
       });
       await _appendHistory({ ts: startedAt, status: "triggered-manual" });
-      // Kick off the arrival-time poll just like a scheduled run.
+      console.log(`[IG Tracker] Arrival poll window: first +${arrivalWindow.firstMin}m, give up +${arrivalWindow.giveUpMin}m (${arrivalWindow.basis}).`);
       await chrome.alarms.clear(ARRIVAL_POLL_ALARM);
       chrome.alarms.create(ARRIVAL_POLL_ALARM, {
-        delayInMinutes: ARRIVAL_FIRST_CHECK_MIN,
+        delayInMinutes: arrivalWindow.firstMin,
         periodInMinutes: 1,
       });
       sendResponse({ ok: true, tabId: tab?.id ?? null });
@@ -376,13 +429,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "track-manual-export") {
     (async () => {
       const startedAt = Date.now();
+      const arrivalWindow = await _arrivalWindowMin();
       await _appendHistory({ ts: startedAt, status: "triggered-manual" });
       await chrome.storage.local.set({
-        pendingArrival: { startedAt },
+        pendingArrival: {
+          startedAt,
+          firstMin: arrivalWindow.firstMin,
+          giveUpMin: arrivalWindow.giveUpMin,
+        },
       });
+      console.log(`[IG Tracker] Arrival poll window: first +${arrivalWindow.firstMin}m, give up +${arrivalWindow.giveUpMin}m (${arrivalWindow.basis}).`);
       await chrome.alarms.clear(ARRIVAL_POLL_ALARM);
       chrome.alarms.create(ARRIVAL_POLL_ALARM, {
-        delayInMinutes: ARRIVAL_FIRST_CHECK_MIN,
+        delayInMinutes: arrivalWindow.firstMin,
         periodInMinutes: 1,
       });
       sendResponse({ ok: true });

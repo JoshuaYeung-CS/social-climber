@@ -104,7 +104,14 @@ async function renderExportStats() {
   }
   if (resp.pending && resp.pending.startedAt) {
     const elapsedMin = Math.round((Date.now() - resp.pending.startedAt) / 60000);
-    summaryParts.push(`current run waiting in Drive (${elapsedMin}m elapsed)`);
+    const firstMin = resp.pending.firstMin;
+    const giveUpMin = resp.pending.giveUpMin;
+    let pendingText = `current run waiting in Drive (${elapsedMin}m elapsed`;
+    if (Number.isFinite(firstMin) && Number.isFinite(giveUpMin)) {
+      pendingText += `, polling +${firstMin}–${giveUpMin}m`;
+    }
+    pendingText += ")";
+    summaryParts.push(pendingText);
   }
   el("export-stats-summary").textContent = summaryParts.join(" · ");
 
