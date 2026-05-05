@@ -27,8 +27,23 @@
 // 50 entries each so the JSON stays small.
 const SCHEDULE_ALARM = "scheduled-export";
 const ARRIVAL_POLL_ALARM = "drive-arrival-poll";
+const ARCHIVE_RUNNER_ALARM = "archive-runner";
 const HISTORY_MAX = 50;
 const TIMINGS_MAX = 50;
+// Auto-archive runner: opens favorited-not-yet-archived accounts in a
+// minimized window one at a time, paced by the alarm. The main
+// extension's ig-profile.js content script (with autoArchiveMedia=true)
+// does the actual scraping when each tab loads. We just orchestrate
+// the queue and pacing — no scraping code lives here.
+//
+// IG aggressively rate-limits scraping; 5+ profiles a minute will
+// trigger CAPTCHA / temp-block. Default cadence is 3 minutes per
+// account, which lets the content script finish one before the next
+// starts and stays under typical anti-bot thresholds. Per-tab budget
+// of 90s gives the scroll loop time to load enough media before we
+// close the tab.
+const ARCHIVE_RUNNER_DEFAULT_INTERVAL_MIN = 3;
+const ARCHIVE_RUNNER_TAB_BUDGET_MS = 90_000;
 // Drive-arrival polling: when we have historical timings, we start
 // polling a few minutes before the EARLIEST typical arrival (so we
 // catch the fast cases) and keep going to a few minutes after the
@@ -247,8 +262,109 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     await refreshExportAlarm();
   } else if (alarm.name === ARRIVAL_POLL_ALARM) {
     await _onArrivalPollFire();
+  } else if (alarm.name === ARCHIVE_RUNNER_ALARM) {
+    await _onArchiveRunnerFire();
   }
 });
+
+// ---------- auto-archive runner ----------
+
+async function _archiveTrackerUrl() {
+  const { trackerUrl } = await chrome.storage.local.get(["trackerUrl"]);
+  return (trackerUrl || "http://127.0.0.1:8000").replace(/\/$/, "");
+}
+
+async function refreshArchiveRunnerAlarm() {
+  const { archiveRunnerOn, archiveRunnerIntervalMin } = await chrome.storage.local.get([
+    "archiveRunnerOn", "archiveRunnerIntervalMin",
+  ]);
+  await chrome.alarms.clear(ARCHIVE_RUNNER_ALARM);
+  if (!archiveRunnerOn) {
+    console.log("[IG Tracker] Archive runner: off");
+    return;
+  }
+  const interval = Math.max(1, Number(archiveRunnerIntervalMin) || ARCHIVE_RUNNER_DEFAULT_INTERVAL_MIN);
+  // First fire after a short kick (15s) so toggling on doesn't make
+  // the user wait `interval` minutes for nothing to happen, then
+  // every `interval` minutes after that.
+  chrome.alarms.create(ARCHIVE_RUNNER_ALARM, {
+    delayInMinutes: 0.25,
+    periodInMinutes: interval,
+  });
+  console.log(`[IG Tracker] Archive runner: armed every ${interval} min`);
+}
+
+async function _onArchiveRunnerFire() {
+  const base = await _archiveTrackerUrl();
+  let queue = [];
+  let stats = null;
+  try {
+    const r = await fetch(`${base}/api/archive-queue`);
+    if (!r.ok) throw new Error(String(r.status));
+    const j = await r.json();
+    queue = j.queue || [];
+    stats = j.stats || null;
+  } catch (e) {
+    console.warn("[IG Tracker] Archive runner: fetch failed:", e?.message || e);
+    return;
+  }
+  await chrome.storage.local.set({
+    archiveRunnerLastStats: { ...stats, fetchedAt: Date.now() },
+  });
+  if (queue.length === 0) {
+    console.log("[IG Tracker] Archive runner: queue empty.");
+    return;
+  }
+  const username = queue[0];
+  console.log(`[IG Tracker] Archive runner: opening ${username} (${queue.length} remaining)`);
+
+  // Open in a separate non-focused minimized window — same trick as
+  // the export bot uses, so we don't background-throttle the content
+  // script's scroll loop.
+  let tabId = null;
+  let windowId = null;
+  try {
+    const win = await chrome.windows.create({
+      url: `https://www.instagram.com/${encodeURIComponent(username)}/`,
+      focused: false,
+      type: "normal",
+      state: "minimized",
+    });
+    tabId = win?.tabs?.[0]?.id ?? null;
+    windowId = win?.id ?? null;
+  } catch (e) {
+    console.warn("[IG Tracker] Archive runner: window.create failed:", e?.message || e);
+    return;
+  }
+
+  await _appendArchiveRunnerHistory({
+    ts: Date.now(),
+    username,
+    status: "opened",
+  });
+
+  // Close the tab after the budget. If the tab was already closed by
+  // the user we just swallow the error.
+  setTimeout(async () => {
+    try {
+      if (windowId != null) await chrome.windows.remove(windowId);
+    } catch (_) { /* tab already gone */ }
+    await _appendArchiveRunnerHistory({
+      ts: Date.now(),
+      username,
+      status: "closed",
+    });
+  }, ARCHIVE_RUNNER_TAB_BUDGET_MS);
+}
+
+async function _appendArchiveRunnerHistory(entry) {
+  const { archiveRunnerHistory = [] } = await chrome.storage.local.get(["archiveRunnerHistory"]);
+  archiveRunnerHistory.push(entry);
+  if (archiveRunnerHistory.length > 100) {
+    archiveRunnerHistory.splice(0, archiveRunnerHistory.length - 100);
+  }
+  await chrome.storage.local.set({ archiveRunnerHistory });
+}
 
 // Re-evaluate the alarm whenever any schedule field changes.
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -262,9 +378,18 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 // Set up the alarm on SW (re)start. MV3 service workers can be torn
 // down and restarted, so this also runs after an idle wake-up.
-chrome.runtime.onInstalled.addListener(refreshExportAlarm);
-chrome.runtime.onStartup.addListener(refreshExportAlarm);
+chrome.runtime.onInstalled.addListener(() => { refreshExportAlarm(); refreshArchiveRunnerAlarm(); });
+chrome.runtime.onStartup.addListener(() => { refreshExportAlarm(); refreshArchiveRunnerAlarm(); });
 refreshExportAlarm().catch(() => {});
+refreshArchiveRunnerAlarm().catch(() => {});
+
+// Re-arm runner whenever its config changes.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (changes.archiveRunnerOn || changes.archiveRunnerIntervalMin) {
+    refreshArchiveRunnerAlarm();
+  }
+});
 
 // ---------- chrome.debugger: trusted click dispatch ----------
 //
@@ -499,6 +624,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         pending: data.pendingArrival || null,
         scheduleMinHours: data.exportScheduleMinHours || data.exportScheduleHours || 0,
         scheduleMaxHours: data.exportScheduleMaxHours || data.exportScheduleHours || 0,
+        nextFireAt: alarm ? alarm.scheduledTime : null,
+      });
+    })();
+    return true;
+  }
+  // Popup asks for archive-runner state.
+  if (msg.type === "get-archive-runner-stats") {
+    (async () => {
+      const [data, alarm] = await Promise.all([
+        chrome.storage.local.get([
+          "archiveRunnerOn", "archiveRunnerIntervalMin",
+          "archiveRunnerHistory", "archiveRunnerLastStats",
+        ]),
+        chrome.alarms.get(ARCHIVE_RUNNER_ALARM).catch(() => null),
+      ]);
+      sendResponse({
+        ok: true,
+        on: !!data.archiveRunnerOn,
+        intervalMin: Number(data.archiveRunnerIntervalMin) || ARCHIVE_RUNNER_DEFAULT_INTERVAL_MIN,
+        history: (data.archiveRunnerHistory || []).slice(-10).reverse(),
+        lastStats: data.archiveRunnerLastStats || null,
         nextFireAt: alarm ? alarm.scheduledTime : null,
       });
     })();

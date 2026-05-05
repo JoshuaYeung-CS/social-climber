@@ -2734,6 +2734,70 @@ def get_profile_pic(username: str):
 _MEDIA_DIR = DB_PATH.parent / "media"
 
 
+@app.get("/api/archive-queue")
+def archive_queue():
+    """Usernames the auto-archive runner should process. Defined as:
+
+      favorites - {accounts with a non-empty media folder}
+                - {accounts tagged unavailable / disabled}
+
+    The "non-empty media folder" rule lets the user skip an account by
+    deleting its media/<u>/ directory but keeping the (empty) folder
+    around — that's our "I intentionally cleared this, don't refetch"
+    signal. A truly missing folder means we never archived → process.
+
+    Returns oldest-favorited-first so the user's highest-priority
+    backlog gets caught up first.
+    """
+    with db_conn() as conn:
+        favs = tags_mod.list_with_flag(conn, "favorite")
+    favorites = [(r["username"], r.get("favorite_added_at")) for r in favs]
+    favorites.sort(key=lambda x: x[1] or "")
+
+    with db_conn() as conn:
+        skip_tagged = (
+            {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
+            | {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
+        )
+
+    queue = []
+    skipped_already_archived = 0
+    skipped_user_cleared = 0
+    skipped_tagged = 0
+    for username, _added_at in favorites:
+        if username in skip_tagged:
+            skipped_tagged += 1
+            continue
+        user_dir = _MEDIA_DIR / username
+        if user_dir.exists():
+            try:
+                file_count = sum(1 for _ in user_dir.rglob("*") if _.is_file())
+            except OSError:
+                file_count = 0
+            if file_count > 0:
+                # Already has media — main extension's autoArchiveMedia
+                # picks up any new posts on subsequent visits. No need
+                # for the runner to revisit.
+                skipped_already_archived += 1
+                continue
+            else:
+                # Folder exists but empty → user wiped on purpose.
+                skipped_user_cleared += 1
+                continue
+        queue.append(username)
+
+    return {
+        "queue": queue,
+        "stats": {
+            "queue_size": len(queue),
+            "skipped_already_archived": skipped_already_archived,
+            "skipped_user_cleared": skipped_user_cleared,
+            "skipped_tagged": skipped_tagged,
+            "favorite_total": len(favorites),
+        },
+    }
+
+
 def _media_path(username: str, media_id: str, ext: str) -> Path:
     """Sanitized path for an archived media file under
     data/media/<username>/<media_id>.<ext>. The media id may now

@@ -239,6 +239,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   await checkTrackerReachable(settings.trackerUrl);
   renderExportStats();
+  renderArchiveRunner();
+  initArchiveRunnerControls();
 
   el("run-export").addEventListener("click", () => {
     // Delegate to the background SW: it opens the wizard tab, captures
@@ -411,3 +413,72 @@ document.addEventListener("DOMContentLoaded", async () => {
     await checkTrackerReachable(patch.trackerUrl);
   });
 });
+
+// ---------- archive-runner card ----------
+
+function initArchiveRunnerControls() {
+  const onEl = el("archive-runner-on");
+  const intervalEl = el("archive-runner-interval");
+  const statusEl = el("archive-runner-status");
+  if (!onEl || !intervalEl) return;
+
+  chrome.storage.local.get(["archiveRunnerOn", "archiveRunnerIntervalMin"], (s) => {
+    onEl.checked = !!s.archiveRunnerOn;
+    intervalEl.value = String(Number(s.archiveRunnerIntervalMin) || 3);
+    intervalEl.disabled = !onEl.checked;
+    statusEl.textContent = onEl.checked ? `every ${intervalEl.value} min` : "off";
+  });
+
+  const persist = async () => {
+    intervalEl.disabled = !onEl.checked;
+    const interval = Math.max(1, Number(intervalEl.value) || 3);
+    await chrome.storage.local.set({
+      archiveRunnerOn: onEl.checked,
+      archiveRunnerIntervalMin: interval,
+    });
+    statusEl.textContent = onEl.checked ? `every ${interval} min` : "off";
+    setTimeout(renderArchiveRunner, 400);
+  };
+  onEl.addEventListener("change", persist);
+  intervalEl.addEventListener("input", persist);
+}
+
+async function renderArchiveRunner() {
+  const card = el("archive-runner-card");
+  if (!card) return;
+  const resp = await new Promise((resolve) => {
+    try { chrome.runtime.sendMessage({ type: "get-archive-runner-stats" }, (r) => resolve(r || null)); }
+    catch { resolve(null); }
+  });
+  if (!resp || !resp.ok) return;
+  const summary = el("archive-runner-summary");
+  const stats = resp.lastStats;
+  const parts = [];
+  if (stats) {
+    parts.push(`queue: ${stats.queue_size} remaining`);
+    if (stats.skipped_already_archived != null) {
+      parts.push(`${stats.skipped_already_archived} already archived`);
+    }
+    if (stats.skipped_user_cleared) {
+      parts.push(`${stats.skipped_user_cleared} you cleared`);
+    }
+    if (stats.skipped_tagged) {
+      parts.push(`${stats.skipped_tagged} tagged unavailable/disabled`);
+    }
+  } else {
+    parts.push("no queue fetched yet");
+  }
+  if (resp.on && resp.nextFireAt) {
+    const minsUntil = Math.max(0, Math.round((resp.nextFireAt - Date.now()) / 60000));
+    const clock = new Date(resp.nextFireAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    parts.push(`next at ${clock} (~${minsUntil} min)`);
+  }
+  summary.textContent = parts.join(" · ");
+
+  const list = el("archive-runner-history");
+  list.innerHTML = (resp.history || []).map((h) => {
+    const when = _fmtAgo(h.ts);
+    const badge = h.status === "opened" ? "▶" : h.status === "closed" ? "✓" : "·";
+    return `<li><span class="badge">${badge}</span> ${when} — @${h.username}</li>`;
+  }).join("");
+}

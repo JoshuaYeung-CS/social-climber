@@ -36,6 +36,22 @@
     <p class="muted small schedule-hint">Set min = max for a fixed cadence. A different range (e.g. 15–30 min) makes each run land at a random time inside that window so the pattern looks less robotic to Instagram.</p>
   </section>
 
+  <section class="card" id="archive-runner-card">
+    <h2>📦 Auto-archive favorites</h2>
+    <p class="muted">Opens favorited accounts that haven't been archived yet, one at a time, paced so IG doesn't rate-limit. Skips accounts whose media folder you emptied — that's your "I cleared this on purpose" signal. Requires "Auto-archive viewed posts &amp; reels" enabled below.</p>
+    <div class="schedule-row">
+      <label class="schedule-toggle">
+        <input type="checkbox" id="archive-runner-on" />
+        <span>Process queue every</span>
+      </label>
+      <input type="number" id="archive-runner-interval" min="1" step="1" value="3" inputmode="numeric" />
+      <span class="schedule-dash">min</span>
+      <span class="schedule-status muted small" id="archive-runner-status"></span>
+    </div>
+    <div id="archive-runner-summary" class="muted small" style="margin-top:8px"></div>
+    <ul id="archive-runner-history" class="export-history" style="margin-top:6px"></ul>
+  </section>
+
   <section class="card">
     <h2>Tools</h2>
     <button class="secondary" id="save-all-tabs">Save all open IG tabs to follow queue</button>
