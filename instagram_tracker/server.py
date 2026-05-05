@@ -662,8 +662,18 @@ def _home_compute():
             #     also unfollow — pure inbound action.
             #   mutual_breaks: both ends broke — they dropped AND you also
             #     unfollowed (or removed them as a follower).
-            ever_unfollowed_you_inbound = ever_unfollowed_you - curr.followers - ever_self
-            mutual_breaks = (ever_unfollowed_you - curr.followers) & ever_self
+            #
+            # NOTE: previously these subtracted `curr.followers` to filter
+            # out accounts that "came back" (returned to followers in a
+            # later snapshot). That hid real historical events from view —
+            # if 9 people unfollowed you in snapshot #904 and 8 of them
+            # later sent a new request that you accepted, the cumulative
+            # count showed only 1. The unfollow event still happened. The
+            # row's per-account 'current relation' field already shows
+            # whether they're back, so the user has the came-back signal
+            # without having events erased from history.
+            ever_unfollowed_you_inbound = ever_unfollowed_you - ever_self
+            mutual_breaks = ever_unfollowed_you & ever_self
 
             # Strip rename chains so renames don't inflate "they unfollowed/removed you" counts.
             alias_map = q.username_alias_map(conn)
@@ -1694,8 +1704,11 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         #     reciprocate — pure inbound action.
         #   mutual_breaks: both ends broke — they dropped from your
         #     followers AND you also unfollowed.
-        ever_unfollowed_you_inbound = ever_unfollowed_you - sd.followers - ever_self
-        mutual_breaks = (ever_unfollowed_you - sd.followers) & ever_self
+        # See the matching note in _home_compute. Came-back filter
+        # (- sd.followers) deliberately removed: hiding events because
+        # the account later returned was erasing real history.
+        ever_unfollowed_you_inbound = ever_unfollowed_you - ever_self
+        mutual_breaks = ever_unfollowed_you & ever_self
 
         # Also exclude usernames that are part of a detected rename chain whose CURRENT
         # alias is still in your following/followers — they didn't really leave.
