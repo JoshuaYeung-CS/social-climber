@@ -266,6 +266,85 @@ def audit_log(limit: int = 200):
         return {"entries": audit_mod.list_recent(conn, limit=max(1, min(limit, 1000)))}
 
 
+@app.post("/api/bot-event")
+def bot_event(payload: dict = Body(...)):
+    """Extension reports the outcome of each scheduled export run.
+    Stored in audit_log with op='bot_event' so the watchdog and the
+    /api/bot-health endpoint can compute consecutive-failure counts
+    without needing chrome.storage access."""
+    status = (payload.get("status") or "").strip().lower()
+    if status not in ("arrived", "no-arrival", "error", "stopped", "triggered"):
+        raise HTTPException(status_code=400, detail="Invalid status.")
+    with db_conn() as conn:
+        audit_mod.log(
+            conn,
+            "bot_event",
+            target=payload.get("kind") or "scheduled",
+            ok=(status == "arrived"),
+            status=status,
+            elapsed_sec=payload.get("elapsedSec"),
+            error=payload.get("error"),
+            duplicate=bool(payload.get("duplicate")),
+            extension_version=payload.get("extensionVersion"),
+        )
+    return {"ok": True}
+
+
+@app.get("/api/bot-health")
+def bot_health():
+    """Aggregate the last bot run outcomes into a watchdog-friendly
+    summary. The shell watchdog reads this every 30 min — if
+    consecutive_failures >= 2 it triggers a Claude diagnosis."""
+    with db_conn() as conn:
+        rows = conn.execute(
+            "SELECT ts, ok, details_json FROM audit_log "
+            "WHERE op = 'bot_event' "
+            "ORDER BY ts DESC LIMIT 50"
+        ).fetchall()
+    import json as _json
+    events = []
+    for r in rows:
+        det = {}
+        try:
+            det = _json.loads(r["details_json"] or "{}")
+        except Exception:
+            pass
+        events.append({
+            "ts": r["ts"],
+            "ok": bool(r["ok"]),
+            "status": det.get("status"),
+            "elapsed_sec": det.get("elapsed_sec"),
+            "error": det.get("error"),
+            "duplicate": det.get("duplicate"),
+        })
+    # Consecutive failures from the most-recent end. We count any
+    # event whose status is in {error, no-arrival, stopped} — those
+    # are the ones the user wants to be paged about. 'triggered' is
+    # an in-flight marker (the run hasn't resolved yet) so it doesn't
+    # break a streak in either direction.
+    FAIL = {"error", "no-arrival", "stopped"}
+    GOOD = {"arrived"}
+    consecutive_failures = 0
+    last_failure = None
+    last_success = None
+    for e in events:
+        if e["status"] in GOOD:
+            last_success = e
+            break
+        if e["status"] in FAIL:
+            consecutive_failures += 1
+            if last_failure is None:
+                last_failure = e
+        # 'triggered' (still in flight) — skip without breaking
+    return {
+        "consecutive_failures": consecutive_failures,
+        "last_failure": last_failure,
+        "last_success": last_success,
+        "events": events[:20],
+        "now": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+    }
+
+
 @contextmanager
 def db_conn():
     conn = connect(DB_PATH)

@@ -28,8 +28,16 @@
 const SCHEDULE_ALARM = "scheduled-export";
 const ARRIVAL_POLL_ALARM = "drive-arrival-poll";
 const ARCHIVE_RUNNER_ALARM = "archive-runner";
+const RETRY_ALARM = "scheduled-export-retry";
 const HISTORY_MAX = 50;
 const TIMINGS_MAX = 50;
+// Auto-retry: when a run fails (no-arrival/error/stopped), schedule
+// ONE quick retry 10 min later before falling through to the regular
+// 45–90 min jittered slot. Catches transient hiccups (Meta hiccup,
+// Drive sync delay) without spamming exports if the failure is a
+// real outage. RETRY_ALARM is one-shot, not periodic.
+const AUTO_RETRY_DELAY_MIN = 10;
+const AUTO_RETRY_MAX_PER_DAY = 4;
 // Auto-archive runner: opens favorited-not-yet-archived accounts in a
 // minimized window one at a time, paced by the alarm. The main
 // extension's ig-profile.js content script (with autoArchiveMedia=true)
@@ -150,6 +158,97 @@ async function _appendTiming(seconds) {
   await chrome.storage.local.set({ exportTimings });
 }
 
+// Mirror each run outcome to the tracker server so the watchdog can
+// see consecutive failures without parsing chrome.storage. Best-effort:
+// if the server is down we just lose that one event — schedule keeps
+// running. The history in chrome.storage is still the canonical
+// extension-side log.
+async function _reportBotEvent(payload) {
+  try {
+    const { trackerUrl } = await chrome.storage.local.get(["trackerUrl"]);
+    const base = (trackerUrl || "http://127.0.0.1:8000").replace(/\/$/, "");
+    const ext = chrome.runtime.getManifest();
+    await fetch(`${base}/api/bot-event`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, extensionVersion: ext.version }),
+    });
+  } catch (e) {
+    console.warn("[IG Tracker] bot-event report failed:", e?.message || e);
+  }
+}
+
+// Phone push via ntfy.sh. Anonymous, no account — just pick a topic
+// string. User opts in via popup settings field. Fired only on
+// CONSECUTIVE failures so transient hiccups don't wake them.
+async function _ntfyPush(title, body, priority = "default") {
+  try {
+    const { ntfyTopic } = await chrome.storage.local.get(["ntfyTopic"]);
+    const topic = (ntfyTopic || "").trim();
+    if (!topic) return;
+    await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
+      method: "POST",
+      headers: { "Title": title, "Priority": priority, "Tags": "warning" },
+      body,
+    });
+    console.log(`[IG Tracker] ntfy push: ${title}`);
+  } catch (e) {
+    console.warn("[IG Tracker] ntfy push failed:", e?.message || e);
+  }
+}
+
+// Auto-retry: arm a one-shot retry alarm AUTO_RETRY_DELAY_MIN minutes
+// out. Used when a scheduled run fails. We cap retries per day so a
+// chronically-failing setup (e.g. OAuth expired) doesn't burn through
+// dozens of tries during your sleep — after the cap, we wait for the
+// next regular jittered slot.
+async function _scheduleAutoRetry(reason) {
+  const { autoRetryCount = { day: "", count: 0 } } =
+    await chrome.storage.local.get(["autoRetryCount"]);
+  const today = new Date().toISOString().slice(0, 10);
+  const dayMatches = autoRetryCount.day === today;
+  const count = dayMatches ? Number(autoRetryCount.count) || 0 : 0;
+  if (count >= AUTO_RETRY_MAX_PER_DAY) {
+    console.log(`[IG Tracker] Auto-retry: cap reached for ${today} (${count}/${AUTO_RETRY_MAX_PER_DAY}); waiting for next regular slot.`);
+    return;
+  }
+  await chrome.storage.local.set({
+    autoRetryCount: { day: today, count: count + 1 },
+  });
+  await chrome.alarms.clear(RETRY_ALARM);
+  chrome.alarms.create(RETRY_ALARM, { delayInMinutes: AUTO_RETRY_DELAY_MIN });
+  console.log(`[IG Tracker] Auto-retry armed in ${AUTO_RETRY_DELAY_MIN} min (reason: ${reason}, today's count: ${count + 1}/${AUTO_RETRY_MAX_PER_DAY}).`);
+}
+
+// Check consecutive-failure count via /api/bot-health and push to ntfy
+// if we've crossed the threshold. Idempotent — server is the source
+// of truth, so this can be called every failure without dedup logic
+// here (the server will return the current count and we compare).
+async function _checkAndPushOnConsecutive() {
+  const { trackerUrl, lastNtfyAt } = await chrome.storage.local.get(["trackerUrl", "lastNtfyAt"]);
+  const base = (trackerUrl || "http://127.0.0.1:8000").replace(/\/$/, "");
+  let health;
+  try {
+    const r = await fetch(`${base}/api/bot-health`);
+    if (!r.ok) return;
+    health = await r.json();
+  } catch (e) {
+    return;
+  }
+  if ((health.consecutive_failures || 0) < 2) return;
+  // Throttle to one push per hour even if many failures land — phone
+  // doesn't need a barrage.
+  const now = Date.now();
+  if (lastNtfyAt && (now - lastNtfyAt) < 60 * 60 * 1000) return;
+  const errLine = health.last_failure?.error || health.last_failure?.status || "(no detail)";
+  await _ntfyPush(
+    `IG Bot: ${health.consecutive_failures} failures in a row`,
+    `Last error: ${errLine}\nLast success: ${health.last_success?.ts || "(never recently)"}`,
+    "high",
+  );
+  await chrome.storage.local.set({ lastNtfyAt: now });
+}
+
 async function _trackerScan(sinceMs) {
   const { trackerUrl } = await chrome.storage.local.get(["trackerUrl"]);
   const base = (trackerUrl || "http://127.0.0.1:8000").replace(/\/$/, "");
@@ -228,11 +327,15 @@ async function _onArrivalPollFire() {
     console.warn(`[IG Tracker] Drive arrival poll: gave up after ${elapsedMin.toFixed(0)}min.`);
     await chrome.alarms.clear(ARRIVAL_POLL_ALARM);
     await chrome.storage.local.set({ pendingArrival: null });
+    const elapsedSec = Math.round(elapsedMs / 1000);
     await _appendHistory({
       ts: pendingArrival.startedAt,
       status: "no-arrival",
-      elapsedSec: Math.round(elapsedMs / 1000),
+      elapsedSec,
     });
+    await _reportBotEvent({ status: "no-arrival", elapsedSec, error: "give-up window exceeded" });
+    await _scheduleAutoRetry("no-arrival");
+    await _checkAndPushOnConsecutive();
     return;
   }
   console.log(`[IG Tracker] Drive arrival poll: scanning (elapsed ${elapsedMin.toFixed(0)}min).`);
@@ -259,6 +362,14 @@ async function _onArrivalPollFire() {
       imports: newImports,
       duplicate: newImports === 0 && newSince > 0,
     });
+    await _reportBotEvent({
+      status: "arrived",
+      elapsedSec,
+      duplicate: newImports === 0 && newSince > 0,
+    });
+    // A successful run resets the daily auto-retry budget so the
+    // next failure (if any) can retry.
+    await chrome.storage.local.set({ autoRetryCount: { day: "", count: 0 } });
   }
 }
 
@@ -269,6 +380,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     // when switching to jittered scheduling, so the alarm only fires
     // again if we ask for it.
     await refreshExportAlarm();
+  } else if (alarm.name === RETRY_ALARM) {
+    console.log("[IG Tracker] Auto-retry firing.");
+    await _onScheduledExportFire();
+    // Don't re-arm the regular schedule from the retry path — the
+    // regular schedule's next fire is already armed independently.
   } else if (alarm.name === ARRIVAL_POLL_ALARM) {
     await _onArrivalPollFire();
   } else if (alarm.name === ARCHIVE_RUNNER_ALARM) {
@@ -581,6 +697,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (async () => {
       await chrome.alarms.clear(ARRIVAL_POLL_ALARM);
       await _appendHistory({ ts: Date.now(), status: "stopped" });
+      await _reportBotEvent({ status: "stopped" });
       // Detach any wizard tabs we attached the debugger to — clears
       // the yellow "is debugging" infobar so the user isn't left
       // wondering after a stop.

@@ -17,6 +17,7 @@ const DEFAULTS = {
   vaultUrl: "",            // empty = vault save button hidden
   igPassword: "",
   notificationEmail: "",   // used by the "Fill notification email" quick-button
+  ntfyTopic: "",           // ntfy.sh topic for failure-alert push (opt-in)
   googleAccountEmail: "",  // empty = OAuth account picker is left manual
   autosubmitGoogle: false,
   showOverlay: true,
@@ -228,6 +229,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   el("ig-password").value = settings.igPassword;
   el("notification-email").value = settings.notificationEmail || "";
   el("google-account-email").value = settings.googleAccountEmail || "";
+  el("ntfy-topic").value = settings.ntfyTopic || "";
   el("autosubmit-google").checked = settings.autosubmitGoogle;
   el("show-overlay").checked = settings.showOverlay;
   el("auto-archive-media").checked = settings.autoArchiveMedia;
@@ -399,6 +401,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       igPassword: el("ig-password").value,             // empty = don't autofill
       notificationEmail: el("notification-email").value.trim(),
       googleAccountEmail: el("google-account-email").value.trim(),
+      ntfyTopic: el("ntfy-topic").value.trim(),
       autosubmitGoogle: el("autosubmit-google").checked,
       showOverlay: el("show-overlay").checked,
       autoArchiveMedia: el("auto-archive-media").checked,
