@@ -2305,20 +2305,31 @@ async function loadLists() {
     out.innerHTML = `<div class="loading-card"><span class="spinner"></span>Loading list…</div>`;
   }
   try {
-    const data = await api.get("/api/lists");
+    // Pass ?kind=X so the server only returns the section we need.
+    // Cuts the response from ~18MB to <2MB. Pill counts come back as
+    // a separate lightweight `pill_counts` map so the picker still
+    // shows the live counts without the full payload. When the user
+    // has the intersection pills active we need the full sections_full
+    // map, so fall back to the unfiltered fetch in that case.
+    const kindHint = select.value || "everyone";
+    const url = _intersectKinds.size
+      ? "/api/lists"
+      : `/api/lists?kind=${encodeURIComponent(kindHint)}`;
+    const data = await api.get(url);
     const sections = data.sections || {};
+    const pillCounts = data.pill_counts || {};
     // Counts on the (hidden) select for fallback consumers.
     [...select.options].forEach((opt) => {
       const base = LIST_KINDS.find(([k]) => k === opt.value);
       if (base) {
-        const count = (sections[opt.value] || []).length;
+        const count = pillCounts[opt.value] != null ? pillCounts[opt.value] : (sections[opt.value] || []).length;
         opt.textContent = `${base[1]} (${count})`;
       }
     });
     // Counts on the visible pills.
     $$("[data-pill-count]").forEach((el) => {
       const k = el.dataset.pillCount;
-      const count = (sections[k] || []).length;
+      const count = pillCounts[k] != null ? pillCounts[k] : (sections[k] || []).length;
       el.textContent = count.toString();
     });
     refreshActivePill();

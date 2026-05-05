@@ -10,6 +10,7 @@ from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -40,6 +41,10 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
+# gzip the large JSON payloads (/api/lists is the biggest at ~18MB
+# uncompressed, compresses to ~1-2MB). minimum_size=1000 means small
+# responses pass through uncompressed (CPU not worth it).
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 # In-process cache for the heavy read endpoints. Two version counters
@@ -1500,17 +1505,49 @@ def get_diff(old: int | None = None, new: int | None = None):
 
 
 @app.get("/api/lists")
-def get_lists(snapshot_id: int | None = None):
+def get_lists(snapshot_id: int | None = None, kind: str | None = None):
     """Default snapshot_id uses a two-phase cache: the heavy snapshot-derived
     data (helpers, chronological maps, non-bucket rows) is cached on
     snapshot_version; the cheap tag overlay (bucket sections, tag flags,
-    suppression filter, sort) runs every request. A tag toggle invalidates
-    only the overlay, so the next request stays in the few-tens-of-ms range
-    instead of recomputing all 169 snapshots' worth of cumulative diffs."""
+    suppression filter, sort) runs every request.
+
+    `kind` filter: when set, the response strips all sections except the
+    requested one (and 'pill counts' kept for the UI's pill bar). Trims
+    the response from ~18MB to typically <2MB and lets gzip cut it
+    further. The compute itself isn't trimmed (the cumulative diff
+    machinery is shared across all kinds), but skipping per-row
+    enrichment + JSON encoding for unused sections is the main win."""
     if snapshot_id is None:
         pure = _cached("lists_pure", _lists_pure_compute_default, deps=_DEPS_SNAPSHOT_ONLY)
-        return _lists_apply_overlay(pure)
-    return _lists_compute(snapshot_id)
+        full = _lists_apply_overlay(pure)
+    else:
+        full = _lists_compute(snapshot_id)
+
+    if kind:
+        return _filter_lists_response(full, kind)
+    return full
+
+
+def _filter_lists_response(resp: dict, kind: str) -> dict:
+    """Strip everything except the requested kind from a /api/lists
+    response. Keeps `sections` reduced to just `{kind: rows}`, and
+    `sections_full` (used by the UI's intersection pill bar) reduced
+    similarly. Pill-counts (per-kind length) are preserved as a
+    lightweight `pill_counts` map so the UI can still render the
+    visible-list-picker counts without the full payload."""
+    sections = resp.get("sections") or {}
+    sections_full = resp.get("sections_full") or {}
+    pill_counts = {k: len(v) for k, v in sections.items()}
+    pill_counts_full = {k: len(v) for k, v in sections_full.items()}
+    return {
+        "snapshot_id": resp.get("snapshot_id"),
+        "previous_snapshot_id": resp.get("previous_snapshot_id"),
+        "sections": {kind: sections.get(kind, [])},
+        "sections_full": {kind: sections_full.get(kind, [])} if sections_full else {},
+        "pill_counts": pill_counts,
+        "pill_counts_full": pill_counts_full,
+        "kind": kind,
+    }
 
 
 def _lists_compute_default():
