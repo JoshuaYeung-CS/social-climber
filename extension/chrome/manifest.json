@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "IG Tracker companion",
-  "version": "1.0.127",
+  "version": "1.0.128",
   "description": "Auto-fills the Instagram data export wizard and overlays your local IG Tracker history on profile pages.",
   "permissions": [
     "storage",

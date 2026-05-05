@@ -2681,10 +2681,35 @@ def _lists_apply_overlay(pure: dict) -> dict:
 
 # ---------- per-account lookup ----------
 
+# Hot TTL cache for the per-account lookup endpoint. The general
+# _cached() machinery invalidates on snapshot version bump, which
+# happens every 15–30 min when a new export lands. With multiple
+# tabs / runner profiles all calling /api/lookup post-bump, that
+# cliff is exactly when concurrency was hurting. A 30-second hot
+# overlay smooths that out: stale-by-30s is fine for the overlay's
+# "ever followed you" history, and it caps the post-bump stampede.
+import time as _time
+_LOOKUP_HOT: dict[str, tuple[float, dict]] = {}
+_LOOKUP_HOT_TTL_S = 30.0
+_LOOKUP_HOT_MAX = 500
+
+
 @app.get("/api/lookup")
 def lookup(account: str):
     username, profile_url = normalize_account_input(account)
-    return _cached(f"lookup:{username}", lambda: _lookup_compute(username, profile_url))
+    now = _time.monotonic()
+    hot = _LOOKUP_HOT.get(username)
+    if hot is not None and (now - hot[0]) < _LOOKUP_HOT_TTL_S:
+        return hot[1]
+    result = _cached(f"lookup:{username}", lambda: _lookup_compute(username, profile_url))
+    if len(_LOOKUP_HOT) >= _LOOKUP_HOT_MAX:
+        # Evict the oldest entry (insertion order preserved by dict).
+        try:
+            _LOOKUP_HOT.pop(next(iter(_LOOKUP_HOT)))
+        except StopIteration:
+            pass
+    _LOOKUP_HOT[username] = (now, result)
+    return result
 
 
 def _lookup_compute(username: str, profile_url: str):

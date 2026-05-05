@@ -156,11 +156,31 @@ async function bgFetch(url, init) {
   });
 }
 
+// In-script LRU + TTL cache for /api/lookup. Same profile visited in
+// multiple tabs (or the same tab refreshed) hits this cache instead
+// of round-tripping the SW + tracker server. TTL kept short (60s)
+// so a freshly-imported snapshot's data still becomes visible after
+// the user lingers on the profile.
+const _LOOKUP_CACHE = new Map();
+const _LOOKUP_CACHE_TTL_MS = 60_000;
+const _LOOKUP_CACHE_MAX = 200;
+
 async function fetchLookup(username) {
+  const now = Date.now();
+  const cached = _LOOKUP_CACHE.get(username);
+  if (cached && (now - cached.at) < _LOOKUP_CACHE_TTL_MS) {
+    return cached.body;
+  }
   const r = await bgFetch(
     `${_settings.trackerUrl}/api/lookup?account=${encodeURIComponent(username)}`
   );
   if (!r.ok) return null;
+  // LRU eviction by size: keep the most-recent N entries.
+  if (_LOOKUP_CACHE.size >= _LOOKUP_CACHE_MAX) {
+    const firstKey = _LOOKUP_CACHE.keys().next().value;
+    if (firstKey) _LOOKUP_CACHE.delete(firstKey);
+  }
+  _LOOKUP_CACHE.set(username, { body: r.body, at: now });
   return r.body;
 }
 
@@ -3083,6 +3103,19 @@ if (_IS_RUNNER_TAB) {
 (async function main() {
   _settings = await loadSettings();
   if (!_settings.showOverlay) return;
+  // Runner tabs are a strict-archive context — don't run any of the
+  // overlay UI / per-profile fetches. The runnerBoot IIFE earlier in
+  // this file does the only work needed (auto-fire archive-all).
+  // Skipping main() for runner tabs cuts ~6 fetches and a full DOM
+  // mount per opened tab, which compounds when the runner has 10
+  // accounts queued in quick succession.
+  if (_IS_RUNNER_TAB) return;
+  // Defer initial setup by 400ms so IG.com's own page paint completes
+  // first. Without this, the content script's dispatcher races IG's
+  // hydration and the page feels janky for the first second. Real-
+  // world impact: the overlay fade-in delay is unnoticeable, but IG's
+  // initial paint becomes immediate.
+  await new Promise((r) => setTimeout(r, 400));
 
   // IG is a SPA — its history.pushState calls don't fire popstate. Patch
   // those + watch popstate so we re-render on every navigation.
