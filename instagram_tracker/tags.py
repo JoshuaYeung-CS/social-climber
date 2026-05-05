@@ -8,7 +8,7 @@ import sqlite3
 
 from .db import utc_now_iso
 
-VALID_FLAGS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public"}
+VALID_FLAGS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive"}
 
 
 def _added_at_col(flag: str) -> str:
@@ -29,6 +29,7 @@ def get_tags(conn: sqlite3.Connection, username: str) -> dict:
             "unavailable": False,
             "random_request": False,
             "now_public": False,
+            "need_archive": False,
             "favorite_added_at": None,
             "want_remove_added_at": None,
             "watchlist_added_at": None,
@@ -36,6 +37,7 @@ def get_tags(conn: sqlite3.Connection, username: str) -> dict:
             "unavailable_added_at": None,
             "random_request_added_at": None,
             "now_public_added_at": None,
+            "need_archive_added_at": None,
             "profile_url": None,
             "notes": None,
         }
@@ -49,6 +51,7 @@ def get_tags(conn: sqlite3.Connection, username: str) -> dict:
         "unavailable": bool(row["unavailable"]) if "unavailable" in keys else False,
         "random_request": bool(row["random_request"]) if "random_request" in keys else False,
         "now_public": bool(row["now_public"]) if "now_public" in keys else False,
+        "need_archive": bool(row["need_archive"]) if "need_archive" in keys else False,
         "favorite_added_at": row["favorite_added_at"],
         "want_remove_added_at": row["want_remove_added_at"],
         "watchlist_added_at": row["watchlist_added_at"],
@@ -56,6 +59,7 @@ def get_tags(conn: sqlite3.Connection, username: str) -> dict:
         "unavailable_added_at": row["unavailable_added_at"] if "unavailable_added_at" in keys else None,
         "random_request_added_at": row["random_request_added_at"] if "random_request_added_at" in keys else None,
         "now_public_added_at": row["now_public_added_at"] if "now_public_added_at" in keys else None,
+        "need_archive_added_at": row["need_archive_added_at"] if "need_archive_added_at" in keys else None,
         "profile_url": row["profile_url"],
         "notes": row["notes"],
     }
@@ -92,8 +96,9 @@ def set_flag(
                 unavailable, unavailable_added_at,
                 random_request, random_request_added_at,
                 now_public, now_public_added_at,
+                need_archive, need_archive_added_at,
                 profile_url, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 username,
@@ -104,6 +109,7 @@ def set_flag(
                 cols["unavailable"], added["unavailable_added_at"],
                 cols["random_request"], added["random_request_added_at"],
                 cols["now_public"], added["now_public_added_at"],
+                cols["need_archive"], added["need_archive_added_at"],
                 profile_url, now,
             ),
         )

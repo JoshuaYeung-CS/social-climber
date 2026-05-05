@@ -107,11 +107,12 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
         # (left_following & curr.recently_unfollowed) = you unfollowed them; not surfaced as an alert.
 
         # Single privacy lookup covering every account that could end up
-        # in a diff alert.
+        # in a diff alert. Includes all new mutuals so we can fire the
+        # public_now_follows_back alert for non-favorite public accounts.
         diff_users = sorted(
             lost_followers
             | they_removed_you
-            | ((curr.followers - prev.followers) & curr.following & favorites)
+            | ((curr.followers - prev.followers) & curr.following)
         )
         diff_priv, diff_np = _privacy_for(diff_users)
 
@@ -154,8 +155,12 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "ts": latest_ts,
             })
 
-        # Favorites that previously didn't follow you back, but now do (became mutual).
-        for u in sorted((curr.followers - prev.followers) & curr.following & favorites):
+        # New mutuals this snapshot — accounts that joined your followers
+        # AND that you're already following.
+        new_mutuals = (curr.followers - prev.followers) & curr.following
+
+        # Favorites get the high-severity flavor.
+        for u in sorted(new_mutuals & favorites):
             diff_alerts.append({
                 "kind": "favorite_now_follows_back",
                 "username": u,
@@ -163,6 +168,23 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "message": f"★ Favorite {u} ({_badge(u)}) now follows you back.",
                 "ts": latest_ts,
             })
+
+        # Public non-favorites also get a notification — these are the
+        # follow-backs you didn't have to send a request for, so it's
+        # worth knowing they came through. Skipped for private accounts
+        # (those already get covered by the watchlist/waitback flow when
+        # the user explicitly asked to be reminded).
+        for u in sorted(new_mutuals - favorites):
+            status = diff_priv.get(u, "unknown")
+            is_now_public = u in diff_np
+            if status == "likely_public" or is_now_public:
+                diff_alerts.append({
+                    "kind": "public_now_follows_back",
+                    "username": u,
+                    "severity": "normal",
+                    "message": f"🌐 {u} ({_badge(u)}) now follows you back.",
+                    "ts": latest_ts,
+                })
 
     # Stateful: wait-back alerts.
     # Alert when a watchlist-tagged account hasn't followed you back

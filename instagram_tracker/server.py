@@ -387,13 +387,33 @@ def _home_compute():
             "unavailable": len(tags_mod.list_with_flag(conn, "unavailable")),
             "random_request": len(tags_mod.list_with_flag(conn, "random_request")),
             "now_public": len(tags_mod.list_with_flag(conn, "now_public")),
+            "need_archive": len(tags_mod.list_with_flag(conn, "need_archive")),
+            "with_notes": conn.execute(
+                "SELECT COUNT(*) AS c FROM profile_tags "
+                "WHERE notes IS NOT NULL AND TRIM(notes) != ''"
+            ).fetchone()["c"],
         }
+
+        # Inline preview of noted accounts so the home-page card can
+        # show the actual usernames (and a note snippet) instead of
+        # just a count. Cap at 50 entries to keep the JSON small;
+        # the list view is the canonical full browser.
+        noted_rows = conn.execute(
+            "SELECT username, notes FROM profile_tags "
+            "WHERE notes IS NOT NULL AND TRIM(notes) != '' "
+            "ORDER BY updated_at DESC LIMIT 50"
+        ).fetchall()
+        noted_users = [
+            {"username": r["username"], "note": r["notes"]}
+            for r in noted_rows
+        ]
 
         return {
             "summary": summary,
             "alerts": alerts_mod.compute_alerts(conn),
             "bucket_counts": bucket_counts,
             "snapshot_count": len(snaps),
+            "noted_users": noted_users,
         }
 
 
@@ -960,7 +980,7 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # Bucket lists. Skipped in pure mode — overlay rebuilds them from
         # current tags so a tag toggle doesn't invalidate the snapshot cache.
         if not _pure_only:
-            for flag in ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public"):
+            for flag in ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive"):
                 sections[flag] = sorted(r["username"] for r in tags_mod.list_with_flag(conn, flag))
 
         # ---- Cumulative / historical lists across ALL snapshots ----
@@ -1223,12 +1243,13 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
             "not_following_you_back",
             "unfollowers_you_still_follow",
             "mutuals",
+            "public_mutuals",
             "all_following",
             "pending",
             "all_followers",
             "feeder_accounts",
         }
-        BUCKET_KINDS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public"}
+        BUCKET_KINDS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive"}
 
         # Tag state — empty in pure mode so pre-built rows have tag fields = False;
         # overlay attaches the real values per request.
@@ -1243,6 +1264,19 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         for usernames in sections.values():
             all_usernames.update(usernames)
         privacy_map = q.privacy_status_bulk(conn, list(all_usernames))
+
+        # Public mutuals — accounts that follow you, that you follow, AND
+        # that are public (or you've manually flipped them to now_public).
+        # Useful as a separate browse view from the all-mutuals list since
+        # public follow-backs are the ones you can act on without going
+        # through a request gate.
+        now_public_set = {
+            u for u, flags in flagged.items() if flags.get("now_public")
+        }
+        sections["public_mutuals"] = sorted(
+            u for u in mutual_set
+            if privacy_map.get(u) == "likely_public" or u in now_public_set
+        )
 
         # Per-row chronological dates for history lists. Without these, lists like
         # "you_unfollowed_ever" had no date fields populated (the user isn't
@@ -1399,6 +1433,7 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
                 "disabled": flagged.get(u, {}).get("disabled", False),
                 "unavailable": flagged.get(u, {}).get("unavailable", False),
                 "random_request": flagged.get(u, {}).get("random_request", False),
+                "need_archive": flagged.get(u, {}).get("need_archive", False),
                 "currently_following": u in sd.following,
                 "currently_follower": u in sd.followers,
                 "currently_pending": u in sd.pending,
@@ -1620,8 +1655,8 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         return {"snapshot_id": sid, "previous_snapshot_id": prev_id, "sections": annotated}
 
 
-_TAG_FLAGS = ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public")
-_BUCKET_KINDS_SET = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public"}
+_TAG_FLAGS = ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive")
+_BUCKET_KINDS_SET = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive"}
 _BUCKET_PRIORITY = {"action": 0, "warn": 1, "pending": 2, "stopped": 3, "good": 4, "": 5}
 
 
@@ -1729,6 +1764,16 @@ def _lists_apply_overlay(pure: dict) -> dict:
         return pure
     with db_conn() as conn:
         flagged = tags_mod.all_flagged_usernames(conn)
+        # Free-form per-account notes. Lives outside the lists_pure
+        # cache so editing a note shows up immediately. Empty/whitespace
+        # notes are stored as NULL and excluded.
+        notes_map: dict[str, str] = {
+            r["username"]: r["notes"]
+            for r in conn.execute(
+                "SELECT username, notes FROM profile_tags "
+                "WHERE notes IS NOT NULL AND TRIM(notes) != ''"
+            ).fetchall()
+        }
         # Set of usernames the extension confirmed are private (saw the
         # banner on the IG page). Cheap query; ~one row per profile the
         # user has visited. Used to upgrade rows from "likely private" →
@@ -1794,6 +1839,8 @@ def _lists_apply_overlay(pure: dict) -> dict:
                 row[f] = user_flags.get(f, False)
             if u in confirmed_private:
                 row["privacy_confirmed_private"] = True
+            if u in notes_map:
+                row["note"] = notes_map[u]
             out_full.append(row)
             if u not in suppressed:
                 out.append(row)
@@ -1807,8 +1854,22 @@ def _lists_apply_overlay(pure: dict) -> dict:
         for r in bucket_rows:
             if r["username"] in confirmed_private:
                 r["privacy_confirmed_private"] = True
+            if r["username"] in notes_map:
+                r["note"] = notes_map[r["username"]]
         annotated[flag] = bucket_rows
         sections_full[flag] = bucket_rows
+    # Has-notes list — every account with a saved note. Sourced from
+    # notes_map directly so unfollowed / disabled / unavailable accounts
+    # all stay visible. Reuses _build_bucket_row (an unknown kind gets
+    # an empty bucket_status, which is what we want).
+    noted_usernames = sorted(notes_map.keys())
+    noted_rows = [_build_bucket_row(ctx, flagged, u, "with_notes") for u in noted_usernames]
+    for r in noted_rows:
+        if r["username"] in confirmed_private:
+            r["privacy_confirmed_private"] = True
+        r["note"] = notes_map[r["username"]]
+    annotated["with_notes"] = noted_rows
+    sections_full["with_notes"] = noted_rows
     # NFB sort.
     if "not_following_you_back" in annotated:
         def nfb_key(r):
@@ -1985,6 +2046,26 @@ def _lookup_compute(username: str, profile_url: str):
                 currently_following = True
                 following_via_extension = True
 
+        # Archived-media presence — fast scan of data/media/<user>/.
+        # Cheap (one stat + one rglob); the result lets the extension
+        # overlay show a "📦 N items archived" line so the user knows
+        # they've already saved this account before. Counts files
+        # recursively so post_<id>/slide<N>.jpg etc. all roll up.
+        archived_count = 0
+        archived_bytes = 0
+        try:
+            mdir = _MEDIA_DIR / username
+            if mdir.is_dir():
+                for p in mdir.rglob("*"):
+                    if p.is_file():
+                        archived_count += 1
+                        try:
+                            archived_bytes += p.stat().st_size
+                        except OSError:
+                            pass
+        except OSError:
+            pass
+
         current_state = {
             "currently_following": currently_following,
             "currently_follower": currently_follower,
@@ -1993,6 +2074,8 @@ def _lookup_compute(username: str, profile_url: str):
             "pending_via_extension": pending_via_extension,
             "following_via_extension": following_via_extension,
             "observation": observation,
+            "archived_media_count": archived_count,
+            "archived_media_bytes": archived_bytes,
         }
 
         if summary is None:
@@ -2251,19 +2334,31 @@ _MEDIA_DIR = DB_PATH.parent / "media"
 
 def _media_path(username: str, media_id: str, ext: str) -> Path:
     """Sanitized path for an archived media file under
-    data/media/<username>/<media_id>.<ext>. The username + media id
-    + ext components are restricted to safe chars to keep the resolved
-    path inside the media dir."""
+    data/media/<username>/<media_id>.<ext>. The media id may now
+    include forward-slashes so callers can group slides into a
+    sub-folder per post (e.g. `post_<id>/slide1`, which lands at
+    data/media/<user>/post_<id>/slide1.jpg). We still reject any
+    `..` segment and characters outside [A-Za-z0-9_-/] so the
+    resolved path can't escape the media dir."""
     import re
     if not re.fullmatch(r"[A-Za-z0-9._]{1,30}", username or ""):
         raise HTTPException(status_code=400, detail="Invalid username.")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", media_id or ""):
+    if not re.fullmatch(r"[A-Za-z0-9_\-/]{1,120}", media_id or ""):
         raise HTTPException(status_code=400, detail="Invalid media id.")
+    # Reject path-traversal patterns explicitly even though the regex
+    # already excludes `.` — belt-and-braces.
+    parts = media_id.split("/")
+    if any(p in ("", "..", ".") for p in parts):
+        raise HTTPException(status_code=400, detail="Invalid media id (segment).")
     if ext not in ("jpg", "png", "mp4", "webp"):
         raise HTTPException(status_code=400, detail="Unsupported ext.")
     user_dir = _MEDIA_DIR / username
-    user_dir.mkdir(parents=True, exist_ok=True)
-    return user_dir / f"{media_id}.{ext}"
+    target = user_dir / f"{media_id}.{ext}"
+    # Ensure the parent of the target is inside user_dir (resolve
+    # symlinks etc.) before returning. mkdir creates intermediate
+    # folders so nested groups Just Work.
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
 
 
 @app.post("/api/media-bytes")
@@ -2294,7 +2389,7 @@ def store_media(payload: dict = Body(...)):
     return {"ok": True, "size": len(data), "path": str(path.relative_to(DB_PATH.parent))}
 
 
-@app.get("/api/media/{username}/{media_id}.{ext}")
+@app.get("/api/media/{username}/{media_id:path}.{ext}")
 def get_media(username: str, media_id: str, ext: str):
     """Serve a previously-archived media file. Browser-cacheable for an
     hour since the file path encodes both the user and the media id."""
@@ -2323,7 +2418,12 @@ def media_summary():
     for d in sorted(_MEDIA_DIR.iterdir()):
         if not d.is_dir():
             continue
-        files = [p for p in d.iterdir() if p.is_file()]
+        # Walk recursively — new layout nests slides under
+        # `post_<id>/`, `highlight_<albumid>/`, etc. The previous
+        # non-recursive scan missed all post-folder slides and
+        # caused the home-page card to show "0 items" for users
+        # who only have the new-format archives.
+        files = [p for p in d.rglob("*") if p.is_file()]
         if not files:
             continue
         size = sum(p.stat().st_size for p in files)
@@ -2332,6 +2432,102 @@ def media_summary():
         total_bytes += size
     users.sort(key=lambda u: -u["count"])
     return {"users": users, "total_items": total_items, "total_bytes": total_bytes}
+
+
+@app.get("/api/media-overview")
+def media_overview():
+    """Enriched per-user archive listing for the master /archive page.
+    For each user returns count, bytes, group breakdown (posts vs
+    highlights vs reels), and a small preview list (4 most-recent
+    items with their served URLs) so the overview page can render
+    each account as a thumbnail card without a second round-trip."""
+    if not _MEDIA_DIR.is_dir():
+        return {"users": [], "total_items": 0, "total_bytes": 0, "total_groups": 0}
+    users = []
+    total_items = 0
+    total_bytes = 0
+    total_groups = 0
+    for d in sorted(_MEDIA_DIR.iterdir()):
+        if not d.is_dir():
+            continue
+        files = [p for p in d.rglob("*") if p.is_file()]
+        if not files:
+            continue
+        # Sort newest-first by mtime so the preview shows the most
+        # recently archived items.
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        size = sum(p.stat().st_size for p in files)
+        kinds = {}  # "post" | "reel" | "highlight" | "story" | "other" → count
+        groups = set()
+        preview = []
+        for p in files:
+            rel = p.relative_to(d)
+            stem_parts = rel.with_suffix("").parts
+            top = stem_parts[0] if stem_parts else ""
+            kind = "other"
+            if top.startswith("post_"):       kind = "post"
+            elif top.startswith("reel_"):     kind = "reel"
+            elif top.startswith("highlight_"):kind = "highlight"
+            elif top.startswith("story_"):    kind = "story"
+            kinds[kind] = kinds.get(kind, 0) + 1
+            if len(stem_parts) > 1:
+                groups.add(top)
+            if len(preview) < 4:
+                stem = "/".join(stem_parts)
+                ext = p.suffix.lstrip(".")
+                preview.append({
+                    "media_id": stem,
+                    "ext": ext,
+                    "url": f"/api/media/{d.name}/{stem}.{ext}",
+                })
+        users.append({
+            "username": d.name,
+            "count": len(files),
+            "bytes": size,
+            "kinds": kinds,
+            "groups": len(groups),
+            "preview": preview,
+            # files is already sorted newest-first; index 0's mtime is
+            # the most recent archive activity for this account. Lets
+            # the overview page offer a "Recently archived" sort.
+            "latest_mtime": files[0].stat().st_mtime,
+            "earliest_mtime": files[-1].stat().st_mtime,
+        })
+        total_items += len(files)
+        total_bytes += size
+        total_groups += len(groups)
+    users.sort(key=lambda u: -u["count"])
+    return {
+        "users": users,
+        "total_items": total_items,
+        "total_bytes": total_bytes,
+        "total_groups": total_groups,
+    }
+
+
+@app.delete("/api/media/{username}/{media_id:path}.{ext}")
+def delete_media(username: str, media_id: str, ext: str):
+    """Delete a previously-archived media file. Reuses _media_path for
+    the same path-traversal protection as the GET endpoint — the
+    username + media_id + ext are validated by the regex inside that
+    helper, so we can't be tricked into deleting outside data/media/."""
+    path = _media_path(username, media_id, ext)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Media not archived.")
+    try:
+        path.unlink()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Couldn't delete: {e}")
+    # If this was the last file in the user's folder, remove the empty
+    # dir so the home-page archive card doesn't keep showing a stale
+    # zero-count entry.
+    parent = path.parent
+    try:
+        if parent != _MEDIA_DIR and parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+    except OSError:
+        pass
+    return {"ok": True, "deleted": f"{username}/{media_id}.{ext}"}
 
 
 @app.get("/api/media-list/{username}")
@@ -2346,14 +2542,28 @@ def list_media(username: str):
     if not d.is_dir():
         return {"username": username, "items": []}
     items = []
-    for p in sorted(d.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+    # Walk recursively so the new folder structure
+    # (data/media/<user>/post_<id>/slide1.jpg, etc.) shows up too.
+    # Each item carries:
+    #   media_id — the relative path stem (e.g. "post_<id>/slide1")
+    #   group    — the parent folder name (or "" for legacy flat files),
+    #              used by the modal UI to bucket thumbnails by source
+    for p in sorted(d.rglob("*"), key=lambda x: x.stat().st_mtime if x.is_file() else 0, reverse=True):
         if not p.is_file():
             continue
-        stem, _, ext = p.name.rpartition(".")
+        rel = p.relative_to(d)
+        stem_parts = rel.with_suffix("").parts
+        stem = "/".join(stem_parts)
+        ext = p.suffix.lstrip(".")
+        # Group = first folder segment, or "" for top-level files.
+        group = stem_parts[0] if len(stem_parts) > 1 else ""
         items.append({
             "media_id": stem,
+            "group": group,
             "ext": ext,
-            "url": f"/api/media/{username}/{p.name}",
+            # Use a forward-slash URL even on Windows; FastAPI's path
+            # converter for {media_id} accepts slashes via :path.
+            "url": f"/api/media/{username}/{stem}.{ext}",
             "size": p.stat().st_size,
         })
     return {"username": username, "items": items}
@@ -2380,6 +2590,48 @@ def update_tag(payload: dict = Body(...)):
     return result
 
 
+@app.get("/api/note/{username}")
+def get_note(username: str):
+    """Return the free-form note saved for an account, or empty string if
+    there isn't one. The note lives in profile_tags.notes — a per-user
+    free-text scratchpad for things like 'has a vsco at …', 'met at X',
+    'do not unfollow until Y'."""
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT notes FROM profile_tags WHERE username = ?", (username,)
+        ).fetchone()
+    return {"username": username, "note": (row["notes"] if row and row["notes"] else "")}
+
+
+@app.post("/api/note")
+def set_note(payload: dict = Body(...)):
+    """Save (or clear) the free-form note for an account. Whitespace-only
+    notes are stored as NULL so empty submissions don't keep an empty
+    profile_tags row alive forever."""
+    account = payload.get("account") or payload.get("username")
+    if not account:
+        raise HTTPException(status_code=400, detail="Need account.")
+    note_raw = payload.get("note", "")
+    note = (note_raw or "").strip()
+    username, profile_url = normalize_account_input(account)
+    with db_conn() as conn:
+        conn.execute(
+            """INSERT INTO profile_tags (username, notes, profile_url, updated_at)
+               VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(username) DO UPDATE SET
+                   notes = excluded.notes,
+                   profile_url = COALESCE(excluded.profile_url, profile_tags.profile_url),
+                   updated_at = CURRENT_TIMESTAMP""",
+            (username, note or None, profile_url),
+        )
+        conn.commit()
+    # Notes are part of the lists overlay, not snapshot-derived cache —
+    # bumping the tag version invalidates the overlay so the new note
+    # shows up on the next /api/lists request.
+    _bump_tag_version()
+    return {"username": username, "note": note}
+
+
 # ---------- static frontend ----------
 
 class NoCacheStaticFiles(StaticFiles):
@@ -2403,6 +2655,28 @@ app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")
 @app.get("/")
 def root():
     return FileResponse(STATIC_DIR / "index.html", headers=_NO_CACHE)
+
+
+@app.get("/media/{username}")
+def media_page(username: str):
+    """Standalone full-page archived-media view for a single account.
+    The modal version is cramped — this gives more space to scroll
+    through posts/highlights and is the target of the 'Full page ↗'
+    link in the modal heading. Username lookup happens client-side
+    from the URL; this just serves the static HTML shell."""
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9._]{1,30}", username or ""):
+        raise HTTPException(status_code=400, detail="Invalid username.")
+    return FileResponse(STATIC_DIR / "media.html", headers=_NO_CACHE)
+
+
+@app.get("/archive")
+def archive_overview_page():
+    """Master archive page — every account at a glance. Each account
+    is a card with thumbnail preview + counts; clicking opens the
+    per-account /media/<user> page. Linked from the home view's
+    Archived media card."""
+    return FileResponse(STATIC_DIR / "archive.html", headers=_NO_CACHE)
 
 
 @app.get("/manifest.webmanifest")

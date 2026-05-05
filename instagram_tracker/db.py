@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS profile_tags (
     unavailable_added_at TEXT,
     random_request INTEGER NOT NULL DEFAULT 0,
     random_request_added_at TEXT,
+    need_archive INTEGER NOT NULL DEFAULT 0,
+    need_archive_added_at TEXT,
     notes TEXT,
     profile_url TEXT,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -179,6 +181,20 @@ def connect(db_path: Path) -> sqlite3.Connection:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN now_public INTEGER NOT NULL DEFAULT 0")
     if "now_public_added_at" not in cols:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN now_public_added_at TEXT")
+    # need_archive: user-set "I want to archive this account" reminder.
+    # Independent of whether archived files exist on disk — flips on
+    # when the user marks intent, off when they clear it manually
+    # (the extension also auto-clears it once archived items appear,
+    # so the tag acts as a TODO list of accounts waiting to be saved).
+    if "need_archive" not in cols:
+        conn.execute("ALTER TABLE profile_tags ADD COLUMN need_archive INTEGER NOT NULL DEFAULT 0")
+    if "need_archive_added_at" not in cols:
+        conn.execute("ALTER TABLE profile_tags ADD COLUMN need_archive_added_at TEXT")
+    # Free-form per-account notes — the user can jot down a VSCO link,
+    # who introduced them, why they're tagged, etc. One row per username
+    # max; an empty/whitespace string is treated as no note.
+    if "notes" not in cols:
+        conn.execute("ALTER TABLE profile_tags ADD COLUMN notes TEXT")
 
     # profile_observations new columns for live button-state observation
     obs_cols = {row[1] for row in conn.execute("PRAGMA table_info(profile_observations)").fetchall()}
