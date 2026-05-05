@@ -424,14 +424,14 @@ function initArchiveRunnerControls() {
 
   chrome.storage.local.get(["archiveRunnerOn", "archiveRunnerIntervalMin"], (s) => {
     onEl.checked = !!s.archiveRunnerOn;
-    intervalEl.value = String(Number(s.archiveRunnerIntervalMin) || 3);
+    intervalEl.value = String(Number(s.archiveRunnerIntervalMin) || 10);
     intervalEl.disabled = !onEl.checked;
     statusEl.textContent = onEl.checked ? `every ${intervalEl.value} min` : "off";
   });
 
   const persist = async () => {
     intervalEl.disabled = !onEl.checked;
-    const interval = Math.max(1, Number(intervalEl.value) || 3);
+    const interval = Math.max(1, Number(intervalEl.value) || 10);
     await chrome.storage.local.set({
       archiveRunnerOn: onEl.checked,
       archiveRunnerIntervalMin: interval,

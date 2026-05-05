@@ -50,7 +50,7 @@ const AUTO_RETRY_MAX_PER_DAY = 4;
 // starts and stays under typical anti-bot thresholds. Per-tab budget
 // of 90s gives the scroll loop time to load enough media before we
 // close the tab.
-const ARCHIVE_RUNNER_DEFAULT_INTERVAL_MIN = 3;
+const ARCHIVE_RUNNER_DEFAULT_INTERVAL_MIN = 10;
 const ARCHIVE_RUNNER_TAB_BUDGET_MS = 90_000;
 // Drive-arrival polling: when we have historical timings, we start
 // polling a few minutes before the EARLIEST typical arrival (so we
