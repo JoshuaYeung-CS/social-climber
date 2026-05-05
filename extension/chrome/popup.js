@@ -131,7 +131,8 @@ async function renderExportStats() {
   }
   if (resp.nextFireAt && !resp.pending) {
     const minsUntil = Math.max(0, Math.round((resp.nextFireAt - Date.now()) / 60000));
-    summaryParts.push(`next auto-run in ${minsUntil} min`);
+    const clock = new Date(resp.nextFireAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    summaryParts.push(`next auto-run at ${clock} (in ${minsUntil} min)`);
   }
   el("export-stats-summary").textContent = summaryParts.join(" · ");
 

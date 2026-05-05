@@ -81,10 +81,16 @@ $$(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.v
 
 async function loadHome() {
   // Initial home load — surface a spinner in the snapshot pill so the
-  // header doesn't sit blank during the fetch.
+  // header doesn't sit blank during the fetch. Trigger the swap on
+  // ANY initial state (the default HTML text is "no data", but we
+  // also overwrite if the pill is empty / loading from a previous
+  // call — e.g. fresh new-tab opens of /#lists/X where the pill
+  // never got updated yet).
   const pillEl = $("#snapshot-pill");
-  if (pillEl && pillEl.textContent === "no data") {
-    pillEl.innerHTML = `<span class="spinner" style="margin-right:4px"></span>loading…`;
+  if (pillEl && (pillEl.textContent === "no data" || !pillEl.querySelector(".spinner"))) {
+    if (!pillEl.textContent.startsWith("snapshot ")) {
+      pillEl.innerHTML = `<span class="spinner" style="margin-right:4px"></span>loading…`;
+    }
   }
   try {
     const data = await api.get("/api/home");
