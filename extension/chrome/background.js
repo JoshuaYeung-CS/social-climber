@@ -178,22 +178,28 @@ async function _reportBotEvent(payload) {
   }
 }
 
-// Phone push via ntfy.sh. Anonymous, no account — just pick a topic
-// string. User opts in via popup settings field. Fired only on
-// CONSECUTIVE failures so transient hiccups don't wake them.
-async function _ntfyPush(title, body, priority = "default") {
+// Phone push: routes through the local server's /api/push endpoint,
+// which decides delivery method (iMessage / email / ntfy) based on
+// ~/.config/igtracker/push.json. Centralising in the server keeps
+// the user's phone number / smtp creds OUT of the extension and out
+// of git.
+async function _phonePush(title, body, priority = "default") {
   try {
-    const { ntfyTopic } = await chrome.storage.local.get(["ntfyTopic"]);
-    const topic = (ntfyTopic || "").trim();
-    if (!topic) return;
-    await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
+    const { trackerUrl } = await chrome.storage.local.get(["trackerUrl"]);
+    const base = (trackerUrl || "http://127.0.0.1:8000").replace(/\/$/, "");
+    const r = await fetch(`${base}/api/push`, {
       method: "POST",
-      headers: { "Title": title, "Priority": priority, "Tags": "warning" },
-      body,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, message: body, priority }),
     });
-    console.log(`[IG Tracker] ntfy push: ${title}`);
+    const j = await r.json().catch(() => ({}));
+    if (j.ok) {
+      console.log(`[IG Tracker] push (${j.method}) sent: ${title}`);
+    } else {
+      console.warn(`[IG Tracker] push failed: ${j.method || "?"} — ${j.error || j.info || "unknown"}`);
+    }
   } catch (e) {
-    console.warn("[IG Tracker] ntfy push failed:", e?.message || e);
+    console.warn("[IG Tracker] push failed:", e?.message || e);
   }
 }
 
@@ -241,7 +247,7 @@ async function _checkAndPushOnConsecutive() {
   const now = Date.now();
   if (lastNtfyAt && (now - lastNtfyAt) < 60 * 60 * 1000) return;
   const errLine = health.last_failure?.error || health.last_failure?.status || "(no detail)";
-  await _ntfyPush(
+  await _phonePush(
     `IG Bot: ${health.consecutive_failures} failures in a row`,
     `Last error: ${errLine}\nLast success: ${health.last_success?.ts || "(never recently)"}`,
     "high",

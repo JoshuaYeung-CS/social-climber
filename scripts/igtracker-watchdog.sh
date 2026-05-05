@@ -9,7 +9,9 @@
 #
 # Setup:
 #   1. Ensure `claude` CLI on PATH (npm i -g @anthropic-ai/claude-code).
-#   2. Set NTFY_TOPIC in ~/.config/igtracker/ntfy-topic (one line).
+#   2. Configure delivery in ~/.config/igtracker/push.json — see the
+#      server's /api/push docstring. iMessage is the recommended
+#      no-app-on-phone option.
 #   3. Install the launchd timer (igtracker-watchdog.plist) to run
 #      this every 30 min.
 #
@@ -21,9 +23,6 @@ set -euo pipefail
 TRACKER="${TRACKER_URL:-http://127.0.0.1:8000}"
 DIAG_DIR="$HOME/Library/Logs/igtracker-diag"
 REPO_DIR="$HOME/git-repos/instagram-tracker"
-NTFY_TOPIC_FILE="$HOME/.config/igtracker/ntfy-topic"
-NTFY_TOPIC=""
-[ -f "$NTFY_TOPIC_FILE" ] && NTFY_TOPIC=$(<"$NTFY_TOPIC_FILE")
 
 mkdir -p "$DIAG_DIR"
 TS=$(date +%Y%m%d-%H%M%S)
@@ -84,15 +83,16 @@ fi
 # Short summary for the push: first 200 chars of the report, single line.
 SUMMARY=$(head -c 400 "$DIAG_FILE" | tr '\n' ' ' | sed 's/  */ /g' | cut -c1-220)
 
-if [ -n "$NTFY_TOPIC" ]; then
-  curl -sS -X POST "https://ntfy.sh/$NTFY_TOPIC" \
-    -H "Title: IG Bot diagnosed ($CONSEC failures)" \
-    -H "Priority: high" \
-    -H "Tags: warning,robot" \
-    -d "$SUMMARY
+PAYLOAD=$(python3 -c "
+import json, sys
+print(json.dumps({
+  'title': 'IG Bot diagnosed ($CONSEC failures)',
+  'message': '''$SUMMARY
 
-Full report: $DIAG_FILE" >/dev/null || log "ntfy push failed"
-  log "ntfy push sent."
-else
-  log "No NTFY_TOPIC configured — skipping push."
-fi
+Full report: $DIAG_FILE''',
+  'priority': 'high',
+}))")
+PUSH_RESULT=$(curl -sS -X POST "$TRACKER/api/push" \
+  -H "Content-Type: application/json" \
+  -d "$PAYLOAD" 2>&1 || echo '{"ok":false,"error":"curl failed"}')
+log "push result: $PUSH_RESULT"

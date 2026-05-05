@@ -93,10 +93,7 @@
       <input type="checkbox" id="auto-archive-media" />
       <span>Auto-archive viewed posts &amp; reels (saves locally to data/media/)</span>
     </label>
-    <label class="row">
-      <span>ntfy.sh topic for failure alerts (pick any random string; install ntfy app on phone, subscribe to same topic). Pushes only on 2+ consecutive failures.</span>
-      <input type="text" id="ntfy-topic" autocomplete="off" placeholder="e.g. joshua-igtracker-7f3a2b" />
-    </label>
+    <p class="muted" style="font-size:11px; margin: 6px 0;">Failure alerts (push to phone on 2+ consecutive failures) are configured server-side at <code>~/.config/igtracker/push.json</code>. iMessage to your own number is recommended — no third-party app, E2E by Apple. See the server <code>/api/push</code> docs.</p>
     <button class="secondary" id="save-settings">Save settings</button>
   </section>
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "IG Tracker companion",
-  "version": "1.0.122",
+  "version": "1.0.123",
   "description": "Auto-fills the Instagram data export wizard and overlays your local IG Tracker history on profile pages.",
   "permissions": [
     "storage",
@@ -19,8 +19,7 @@
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*",
     "http://localhost:8765/*",
-    "http://127.0.0.1:8765/*",
-    "https://ntfy.sh/*"
+    "http://127.0.0.1:8765/*"
   ],
   "action": {
     "default_popup": "popup.html",

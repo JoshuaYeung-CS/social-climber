@@ -266,6 +266,133 @@ def audit_log(limit: int = 200):
         return {"entries": audit_mod.list_recent(conn, limit=max(1, min(limit, 1000)))}
 
 
+# ---------- push notifications (iMessage / email / ntfy) ----------
+#
+# The extension and the watchdog don't need to know HOW pushes get
+# delivered — they POST to /api/push and the server decides based on
+# ~/.config/igtracker/push.json. This keeps the user's phone number /
+# email / ntfy topic OUT of the extension and OUT of git.
+#
+# Config file format (JSON):
+#   {
+#     "method": "imessage",            // imessage | email | ntfy | none
+#     "recipient": "+15551234567",     // phone for imessage, addr for email, topic for ntfy
+#     "smtp": { ... }                  // optional, only for method=email
+#   }
+#
+# iMessage path uses osascript → Messages.app. End-to-end encrypted by
+# Apple, no third-party server, no new app install on the phone. The
+# first invocation may prompt for "Allow Python to control Messages"
+# in System Settings → Privacy & Security → Automation; user has to
+# approve once.
+
+_PUSH_CONFIG_PATH = (
+    __import__("pathlib").Path.home() / ".config" / "igtracker" / "push.json"
+)
+
+
+def _read_push_config() -> dict:
+    import json as _json
+    if not _PUSH_CONFIG_PATH.exists():
+        return {"method": "none"}
+    try:
+        with _PUSH_CONFIG_PATH.open() as f:
+            return _json.load(f)
+    except Exception as e:
+        return {"method": "none", "error": str(e)}
+
+
+def _send_imessage(recipient: str, title: str, body: str) -> tuple[bool, str]:
+    import subprocess
+    text = f"{title}\n\n{body}" if title else body
+    # AppleScript escaping: backslashes and quotes. Keep it conservative.
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    safe_recipient = recipient.replace('"', "")
+    script = (
+        f'tell application "Messages"\n'
+        f'  set targetService to 1st service whose service type = iMessage\n'
+        f'  set targetBuddy to buddy "{safe_recipient}" of targetService\n'
+        f'  send "{escaped}" to targetBuddy\n'
+        f'end tell'
+    )
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            return True, "sent"
+        return False, (result.stderr or result.stdout or "osascript failed").strip()
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
+def _send_email(recipient: str, smtp: dict, title: str, body: str) -> tuple[bool, str]:
+    import smtplib
+    from email.message import EmailMessage
+    msg = EmailMessage()
+    msg["Subject"] = title or "(no subject)"
+    msg["From"] = smtp.get("from") or smtp.get("user") or "igtracker@localhost"
+    msg["To"] = recipient
+    msg.set_content(body or "")
+    try:
+        host = smtp.get("host", "localhost")
+        port = int(smtp.get("port", 587))
+        with smtplib.SMTP(host, port, timeout=15) as s:
+            if smtp.get("starttls", True):
+                s.starttls()
+            if smtp.get("user") and smtp.get("password"):
+                s.login(smtp["user"], smtp["password"])
+            s.send_message(msg)
+        return True, "sent"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
+def _send_ntfy(topic: str, title: str, body: str, priority: str) -> tuple[bool, str]:
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            f"https://ntfy.sh/{topic}",
+            data=(body or "").encode("utf-8"),
+            method="POST",
+            headers={
+                "Title": title or "",
+                "Priority": priority or "default",
+                "Tags": "warning",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=10):
+            return True, "sent"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
+@app.post("/api/push")
+def api_push(payload: dict = Body(...)):
+    """Send a push via whatever method is configured in
+    ~/.config/igtracker/push.json. Body: {title, message, priority}."""
+    title = (payload.get("title") or "").strip()
+    body = (payload.get("message") or "").strip()
+    priority = (payload.get("priority") or "default").strip()
+    cfg = _read_push_config()
+    method = (cfg.get("method") or "none").lower()
+    recipient = (cfg.get("recipient") or "").strip()
+    if method == "none":
+        return {"ok": False, "method": "none", "error": "push not configured (~/.config/igtracker/push.json)"}
+    if not recipient:
+        return {"ok": False, "method": method, "error": "no recipient configured"}
+    if method == "imessage":
+        ok, info = _send_imessage(recipient, title, body)
+    elif method == "email":
+        ok, info = _send_email(recipient, cfg.get("smtp") or {}, title, body)
+    elif method == "ntfy":
+        ok, info = _send_ntfy(recipient, title, body, priority)
+    else:
+        return {"ok": False, "method": method, "error": f"unknown method: {method}"}
+    return {"ok": ok, "method": method, "info": info}
+
+
 @app.post("/api/bot-event")
 def bot_event(payload: dict = Body(...)):
     """Extension reports the outcome of each scheduled export run.
