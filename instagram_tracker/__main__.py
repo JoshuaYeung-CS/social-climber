@@ -77,8 +77,15 @@ def main():
         host=DEFAULT_HOST,
         port=port,
         log_level="info",
-        reload=True,
-        reload_dirs=["instagram_tracker"],
+        # Auto-reload opt-in via IG_RELOAD=1. Default OFF because under
+        # launchd / any long-lived daemon context, the reload watcher
+        # was observed pegging multiple cores indefinitely (PID 344
+        # incident: 380% CPU for 54 min). Use launchctl kickstart to
+        # pick up code changes manually.
+        reload=os.environ.get("IG_RELOAD", "").strip() not in ("", "0", "false", "False"),
+        reload_dirs=(["instagram_tracker"]
+                     if os.environ.get("IG_RELOAD", "").strip() not in ("", "0", "false", "False")
+                     else None),
         **ssl_kwargs,
     )
 
