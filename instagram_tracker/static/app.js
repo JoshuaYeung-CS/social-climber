@@ -2951,6 +2951,7 @@ async function showHistoryDetail(idx, snaps) {
       diffHtml = `
         ${block("New followers", sec.new_followers)}
         ${block("They unfollowed you", sec.they_unfollowed_you)}
+        ${block("You removed them as a follower", sec.you_removed_as_follower)}
         ${block("New following (you followed)", sec.new_following)}
         ${block("You unfollowed", sec.you_unfollowed)}
         ${block("They removed you as a follower", sec.they_removed_you_as_follower)}

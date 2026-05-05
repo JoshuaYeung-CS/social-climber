@@ -16,13 +16,26 @@ def diff(
     Used to distinguish "you unfollowed them" from "they removed you as a follower".
     """
     left_following = old.following - new.following
+    left_followers = old.followers - new.followers
     self_initiated = ever_self_unfollowed if ever_self_unfollowed is not None else new.recently_unfollowed
+    # Following-side split: did YOU end the relationship (you appear in
+    # recently_unfollowed for them) or did THEY (you don't)?
     you_unfollowed = left_following & self_initiated
     they_removed_you = left_following - self_initiated
+    # Followers-side split, symmetric: if a follower disappeared AND
+    # you also unfollowed them at any point, the most consistent
+    # reading is "you removed them as a follower / mutual-broke from
+    # your end" — IG's export doesn't directly expose follower-removal,
+    # but recently_unfollowed (for the same username) is the closest
+    # signal we have to "you initiated." If you're NOT in their
+    # ever_self set, the disappearance is a pure inbound unfollow.
+    you_removed_as_follower = left_followers & self_initiated
+    they_unfollowed_you = left_followers - self_initiated
     return {
         "new_followers": sorted(new.followers - old.followers),
-        "they_unfollowed_you": sorted(old.followers - new.followers),
-        "unfollowers_you_still_follow": sorted((old.followers - new.followers) & new.following),
+        "they_unfollowed_you": sorted(they_unfollowed_you),
+        "you_removed_as_follower": sorted(you_removed_as_follower),
+        "unfollowers_you_still_follow": sorted(left_followers & new.following),
         "new_following": sorted(new.following - old.following),
         "you_unfollowed": sorted(you_unfollowed),
         "they_removed_you_as_follower": sorted(they_removed_you),

@@ -332,35 +332,71 @@ def _home_compute():
                 set(followers_by_sid) | set(following_by_sid),
                 key=lambda sid: chrono.get(sid, sid),
             )
+            # Per-transition pending/incoming sets: used INSIDE the bounce
+            # filter so we only strip the IG export quirk (a user
+            # flickering following ↔ pending in the same transition is
+            # the bounce; a user who later got re-requested is a real
+            # past removal that the user themselves followed up on).
+            # Previously this filter was applied post-hoc using the LATEST
+            # snapshot's pending set, which incorrectly stripped real
+            # removals where the user later re-requested the account.
+            # Snapshot #904 trace: 9 lost followers, only 1 survived the
+            # post-hoc filter — the other 6 were currently-pending re-
+            # requests that the post-hoc filter wrongly classified as
+            # bounces. Per-transition fix surfaces them as the real
+            # removals they are.
+            pending_by_sid: dict[int, set[str]] = {}
+            for r in conn.execute(
+                "SELECT snapshot_id, username FROM pending_follow_requests"
+            ).fetchall():
+                pending_by_sid.setdefault(int(r["snapshot_id"]), set()).add(r["username"])
+            incoming_by_sid: dict[int, set[str]] = {}
+            for r in conn.execute(
+                "SELECT snapshot_id, username FROM incoming_follow_requests"
+            ).fetchall():
+                incoming_by_sid.setdefault(int(r["snapshot_id"]), set()).add(r["username"])
+
             ever_unfollowed_you: set[str] = set()
             ever_left_following: set[str] = set()
             for old_id, new_id in zip(ordered_sids[:-1], ordered_sids[1:]):
-                ever_unfollowed_you |= followers_by_sid.get(old_id, set()) - followers_by_sid.get(new_id, set())
-                ever_left_following |= following_by_sid.get(old_id, set()) - following_by_sid.get(new_id, set())
+                old_followers = followers_by_sid.get(old_id, set())
+                new_followers = followers_by_sid.get(new_id, set())
+                old_following = following_by_sid.get(old_id, set())
+                new_following = following_by_sid.get(new_id, set())
+                old_pending  = pending_by_sid.get(old_id, set())
+                new_pending  = pending_by_sid.get(new_id, set())
+                old_incoming = incoming_by_sid.get(old_id, set())
+                new_incoming = incoming_by_sid.get(new_id, set())
+                # IG quirk bounce: a request that was NOT pending in the old
+                # snapshot suddenly appears in pending in the new snapshot
+                # AND the user simultaneously leaves following. That's the
+                # flicker quirk to strip. If pending wasn't newly added
+                # (e.g. IG carries a stale pending entry after a follow
+                # was accepted, then later the follow is dropped), it's a
+                # real removal and must NOT be stripped. Earlier version
+                # used `new_pending` directly and was incorrectly stripping
+                # real removals where the user already had a stale pending
+                # row alongside a real follow.
+                newly_pending  = new_pending  - old_pending
+                newly_incoming = new_incoming - old_incoming
+                followers_lost = old_followers - new_followers
+                ever_unfollowed_you |= followers_lost - newly_incoming
+                following_lost = old_following - new_following
+                ever_left_following |= following_lost - newly_pending
             ever_self = q.ever_self_unfollowed(conn)
-            # IG-bounce filter — directional now. Previously a single
-            # set (`curr.pending | curr.incoming_requests`) was subtracted
-            # from BOTH sides, which over-corrected. Specifically: a user
-            # currently in `incoming_requests` who once removed you as a
-            # follower IS a real removal — them sending you a follow
-            # request later is a separate event, not evidence that the
-            # earlier disappearance was an export quirk. Same logic on
-            # the other side. Apply each protection only to the side it
-            # actually defends.
-            ig_bounced_in  = curr.incoming_requests   # protects ever_unfollowed_you (followers side)
-            ig_bounced_out = curr.pending             # protects ever_left_following (following side)
             # "Came back" filter: an account currently in following (or
             # followers) didn't remove you / didn't unfollow you — they had
-            # a one-snapshot blip in some past export and reappeared. See
-            # the matching comment in the lists path below.
-            ever_removed = ever_left_following - ever_self - ig_bounced_out - curr.following
+            # a one-snapshot blip in some past export and reappeared. The
+            # latest snapshot's pending/incoming sets are NOT subtracted
+            # here — those are now handled per-transition above.
+            ever_removed = ever_left_following - ever_self - curr.following
             # Split the inbound "they ended their following of me" set:
             #   ever_unfollowed_you (strict): they unfollowed, you didn't
             #     also unfollow — pure inbound action.
             #   mutual_breaks: both ends broke — they dropped AND you also
             #     unfollowed (or removed them as a follower).
-            ever_unfollowed_you_inbound = ever_unfollowed_you - ig_bounced_in - curr.followers - ever_self
-            mutual_breaks = (ever_unfollowed_you - ig_bounced_in - curr.followers) & ever_self
+            ever_unfollowed_you_inbound = ever_unfollowed_you - curr.followers - ever_self
+            mutual_breaks = (ever_unfollowed_you - curr.followers) & ever_self
 
             # Strip rename chains so renames don't inflate "they unfollowed/removed you" counts.
             alias_map = q.username_alias_map(conn)
@@ -1177,30 +1213,22 @@ def get_diff(old: int | None = None, new: int | None = None):
             | {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
             | {r["username"] for r in tags_mod.list_with_flag(conn, "random_request")}
         )
-        # Self-unfollow filter on the inbound section: if the user has
-        # ever unfollowed someone, attributing a follower-drop to them
-        # is suspect — the drop is likely a consequence of (or response
-        # to) the user's outbound action, not "they unfollowed you out
-        # of the blue."
-        sections["they_unfollowed_you"] = [
-            u for u in sections.get("they_unfollowed_you", [])
-            if u not in ever_self
-        ]
-        # "Came back" filter: hide accounts currently in your followers
-        # / following. The historical break didn't stick — they returned —
-        # so listing them in the per-snapshot diff is misleading at a
-        # glance.
-        latest = q.latest_id(conn)
-        if latest is not None:
-            curr_sd = q.snapshot_data(conn, latest)
-            sections["they_unfollowed_you"] = [
-                u for u in sections.get("they_unfollowed_you", [])
-                if u not in curr_sd.followers
-            ]
-            sections["they_removed_you_as_follower"] = [
-                u for u in sections.get("they_removed_you_as_follower", [])
-                if u not in curr_sd.following
-            ]
+        # NOTE: previously this endpoint applied two extra filters that
+        # we've now removed:
+        #   1. A post-hoc ever_self subtraction on `they_unfollowed_you`.
+        #      diffs.diff() now does the inbound split natively
+        #      (you_removed_as_follower vs they_unfollowed_you), so the
+        #      post-hoc filter would double-strip.
+        #   2. A "came back" filter that hid any disappearance whose
+        #      account is now in followers/following. That's appropriate
+        #      for cumulative views (Lists, Home) but WRONG for the per-
+        #      snapshot diff — if 6 followers left in a given transition
+        #      and 5 came back later, the History view should still show
+        #      "6 followers left this snapshot" and let the user see what
+        #      actually happened in that moment. Hiding it because of
+        #      future state was producing empty 'they unfollowed' / 'they
+        #      removed' sections in History even though the snapshot
+        #      header showed -6 followers.
         if suppressed:
             sections = {
                 kind: [u for u in users if u not in suppressed]
@@ -1306,60 +1334,69 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
             key=lambda sid: chrono.get(sid, sid),
         )
 
-        # Anyone who was a follower at some snapshot and not in the next.
+        # Per-transition pending / incoming sets — used inside the IG-
+        # bounce filter so we only strip same-snapshot follower↔pending
+        # flickers (the actual export quirk) and KEEP real past removals
+        # where the user later re-requested the account. See the
+        # matching block in _home_compute for the full reasoning.
+        pending_by_sid: dict[int, set[str]] = {}
+        for r in conn.execute(
+            "SELECT snapshot_id, username FROM pending_follow_requests"
+        ).fetchall():
+            pending_by_sid.setdefault(int(r["snapshot_id"]), set()).add(r["username"])
+        incoming_by_sid: dict[int, set[str]] = {}
+        for r in conn.execute(
+            "SELECT snapshot_id, username FROM incoming_follow_requests"
+        ).fetchall():
+            incoming_by_sid.setdefault(int(r["snapshot_id"]), set()).add(r["username"])
+
+        # Anyone who was a follower at some snapshot and not in the next,
+        # excluding same-transition flickers to incoming-requests.
         ever_unfollowed_you: set[str] = set()
-        # Anyone who left your following at any transition.
+        # Anyone who left your following at any transition, excluding
+        # same-transition flickers to pending.
         ever_left_following: set[str] = set()
 
         for old_id, new_id in zip(ordered_sids[:-1], ordered_sids[1:]):
             old_followers = followers_by_sid.get(old_id, set())
             new_followers = followers_by_sid.get(new_id, set())
-            ever_unfollowed_you |= old_followers - new_followers
-
             old_following = following_by_sid.get(old_id, set())
             new_following = following_by_sid.get(new_id, set())
-            ever_left_following |= old_following - new_following
+            old_pending = pending_by_sid.get(old_id, set())
+            new_pending = pending_by_sid.get(new_id, set())
+            old_incoming = incoming_by_sid.get(old_id, set())
+            new_incoming = incoming_by_sid.get(new_id, set())
+            # See the matching block in _home_compute for why the bounce
+            # filter must use "newly pending/incoming" rather than the
+            # raw new-snapshot set: stale pending rows persist alongside
+            # follows (IG quirk), so subtracting `new_pending` directly
+            # strips real removals where pending was already there.
+            newly_pending = new_pending - old_pending
+            newly_incoming = new_incoming - old_incoming
+            ever_unfollowed_you |= (old_followers - new_followers) - newly_incoming
+            ever_left_following |= (old_following - new_following) - newly_pending
 
         # Stricter rule for the cumulative "they removed you" set:
         # exclude anyone who EVER appeared in your recently_unfollowed at any snapshot.
         # This guards against Instagram's per-snapshot reporting lag (where a self-initiated
         # unfollow doesn't show up in recently_unfollowed until 1+ snapshots later).
         ever_self = q.ever_self_unfollowed(conn)
-        # IG-bounce filter — DIRECTIONAL. Apply pending only to the
-        # following side (to defend ever_removed_you), and incoming
-        # requests only to the followers side (to defend ever_unfollowed
-        # _you). Cross-applying both was over-correcting: a user who
-        # later sent you a follow request can still have legitimately
-        # removed you in the past.
-        ig_bounced_in  = sd.incoming_requests   # for followers-side
-        ig_bounced_out = sd.pending             # for following-side
-        # "Came back" filter: if an account is CURRENTLY in your following
-        # (or followers, for the inbound side), they didn't remove you /
-        # didn't unfollow you. They just had a one-snapshot blip in some
-        # past export and reappeared. Without this, the cumulative set
-        # accumulates ~every account ever in following over many snapshots
-        # (each export occasionally drops random rows, IG export quirk),
-        # so "Ever removed you as follower" trends toward the size of
-        # current following rather than the count of real removals.
-        ever_removed_you = ever_left_following - ever_self - ig_bounced_out - sd.following
-        # Symmetric "you initiated" filter for the inbound side: if you
-        # ALSO unfollowed them (in ever_self), the drop from followers is
-        # most likely a consequence of your action, not a real "they
-        # unfollowed you" event. Without this, mutual-break rows show up
-        # in "Ever unfollowed you" labeled as "you unfollowed [date]",
-        # which is confusing in a list that's about THEIR action.
-        # Capture the "raw" inbound set BEFORE the self-unfollow exclusion,
-        # so we can split the population into:
+        # "Came back" filter: an account CURRENTLY in your following (or
+        # followers) didn't remove you / didn't unfollow you — they had
+        # a blip in some past export and reappeared. We do NOT subtract
+        # the latest sd.pending / sd.incoming_requests here — that was
+        # over-correcting and was hiding real removals where the user
+        # later re-requested the account. Same-transition flickers (the
+        # actual IG export quirk) are stripped per-transition above.
+        ever_removed_you = ever_left_following - ever_self - sd.following
+        # Capture the "raw" inbound set BEFORE the self-unfollow
+        # exclusion, so we can split the population into:
         #   ever_unfollowed_you (strict): they unfollowed AND you didn't
         #     reciprocate — pure inbound action.
-        #   mutual_breaks: both ends of the relationship broke — they
-        #     dropped from your followers AND you also unfollowed them
-        #     (or removed them as a follower, which IG records as the
-        #     same drop). Useful to see, separate from pure inbound.
-        # Both sets share the came-back / ig-bounced filtering since
-        # those are about IG export quirks, not the user's intent.
-        ever_unfollowed_you_inbound = ever_unfollowed_you - ig_bounced_in - sd.followers - ever_self
-        mutual_breaks = (ever_unfollowed_you - ig_bounced_in - sd.followers) & ever_self
+        #   mutual_breaks: both ends broke — they dropped from your
+        #     followers AND you also unfollowed.
+        ever_unfollowed_you_inbound = ever_unfollowed_you - sd.followers - ever_self
+        mutual_breaks = (ever_unfollowed_you - sd.followers) & ever_self
 
         # Also exclude usernames that are part of a detected rename chain whose CURRENT
         # alias is still in your following/followers — they didn't really leave.
