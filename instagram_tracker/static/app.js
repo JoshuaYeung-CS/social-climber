@@ -5,19 +5,45 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+// Hard timeout + AbortController on every fetch so a server restart
+// or transient network blip can't leave a request pending forever
+// (was actually happening — kickstarting the server mid-flight left
+// the browser in zombie state, ui stuck on 'loading…' indefinitely).
+// Default 20s is generous for cold-cache /api/lists; everything else
+// returns in <1s.
+const API_TIMEOUT_MS = 20_000;
+
+async function _fetchWithTimeout(path, init = {}, timeoutMs = API_TIMEOUT_MS) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(new Error("client timeout")), timeoutMs);
+  try {
+    return await fetch(path, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 const api = {
   async get(path) {
-    const r = await fetch(path);
-    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    const r = await _fetchWithTimeout(path);
+    if (!r.ok) {
+      let msg = r.statusText;
+      try { msg = (await r.json()).detail || msg; } catch (_) { /* non-JSON */ }
+      throw new Error(msg);
+    }
     return r.json();
   },
   async post(path, body) {
-    const r = await fetch(path, {
+    const r = await _fetchWithTimeout(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    if (!r.ok) {
+      let msg = r.statusText;
+      try { msg = (await r.json()).detail || msg; } catch (_) { /* non-JSON */ }
+      throw new Error(msg);
+    }
     return r.json();
   },
   async del(path) {
@@ -326,7 +352,18 @@ async function loadHome() {
     loadArchiveCard();
     loadArchiveQueueCard();
   } catch (e) {
-    console.error(e);
+    console.error("loadHome failed:", e);
+    // Reset the pill so it doesn't sit stuck on the spinner. Show a
+    // clickable retry — clicking re-runs loadHome.
+    const pill = $("#snapshot-pill");
+    if (pill) {
+      pill.innerHTML = "";
+      const btn = document.createElement("button");
+      btn.style.cssText = "background:transparent;border:1px solid currentColor;color:inherit;padding:2px 8px;border-radius:6px;cursor:pointer;font:inherit;";
+      btn.textContent = `error · retry (${e.message || "unknown"})`;
+      btn.onclick = () => { pill.textContent = "no data"; loadHome(); };
+      pill.appendChild(btn);
+    }
     toast(`Couldn't load home: ${e.message}`);
   }
 }
