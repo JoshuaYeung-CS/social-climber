@@ -98,8 +98,9 @@ html, body {
   cursor: pointer;
   accent-color: var(--accent);
 }
-#schedule-amount {
-  width: 56px;
+#schedule-amount-min,
+#schedule-amount-max {
+  width: 48px;
   padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -108,22 +109,31 @@ html, body {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   text-align: right;
-  /* Hide the up/down spinner arrows — they look noisy in the
-     compact popup and the unit selector next to the field is the
-     primary affordance anyway. */
   -moz-appearance: textfield;
   appearance: textfield;
 }
-#schedule-amount::-webkit-inner-spin-button,
-#schedule-amount::-webkit-outer-spin-button {
+#schedule-amount-min::-webkit-inner-spin-button,
+#schedule-amount-min::-webkit-outer-spin-button,
+#schedule-amount-max::-webkit-inner-spin-button,
+#schedule-amount-max::-webkit-outer-spin-button {
   -webkit-appearance: none;
   appearance: none;
   margin: 0;
 }
-#schedule-amount:disabled,
+#schedule-amount-min:disabled,
+#schedule-amount-max:disabled,
 #schedule-unit:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+.schedule-dash {
+  color: var(--muted);
+  font-size: 12px;
+}
+.schedule-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
 }
 #schedule-unit {
   padding: 4px 6px;

@@ -21,7 +21,9 @@ const DEFAULTS = {
   autosubmitGoogle: false,
   showOverlay: true,
   autoArchiveMedia: false, // opt-in: download bytes of every post/reel viewed
-  exportScheduleHours: 0,  // 0 = off; 24 = daily, 168 = weekly, etc.
+  exportScheduleHours: 0,        // legacy fallback; new fields below take precedence
+  exportScheduleMinHours: 0,     // 0 = off
+  exportScheduleMaxHours: 0,     // ≥ min; equal = no jitter
 };
 
 async function loadSettings() {
@@ -33,23 +35,37 @@ async function saveSettings(patch) {
   await chrome.storage.local.set(patch);
 }
 
-// Schedule UI: a checkbox + number input + unit selector that map to a
-// single `exportScheduleHours` value in storage. We render whatever is
-// stored as the most natural unit (e.g. 0.5h shows as "30 minutes",
-// 168h as "7 days"). Changes save instantly — the background SW
-// listens for the storage change and re-arms the alarm.
+// Schedule UI: a checkbox + min/max number inputs + unit selector that
+// map to `exportScheduleMinHours` / `exportScheduleMaxHours` in storage.
+// Setting min < max gives a random uniform draw inside [min, max] for
+// each scheduled run — makes the cadence look less robotic to IG.
+// Setting min == max keeps a fixed interval. Legacy
+// `exportScheduleHours` is honoured as a fallback when the new fields
+// are unset (so an upgrade doesn't silently disable the schedule).
 const _UNIT_TO_HOURS = { minutes: 1 / 60, hours: 1, days: 24 };
 
-function _hoursToInputs(hours) {
-  if (!hours || hours <= 0) return { on: false, amount: 1, unit: "hours" };
-  // Prefer a unit where the value lands as a clean integer.
-  if (hours >= 24 && Number.isInteger(hours / 24)) {
-    return { on: true, amount: hours / 24, unit: "days" };
-  }
-  if (Number.isInteger(hours)) {
-    return { on: true, amount: hours, unit: "hours" };
-  }
-  return { on: true, amount: Math.round(hours * 60), unit: "minutes" };
+function _pickUnit(hours) {
+  if (hours >= 24 && Number.isInteger(hours / 24)) return "days";
+  if (Number.isInteger(hours)) return "hours";
+  return "minutes";
+}
+
+function _hoursToAmount(hours, unit) {
+  if (unit === "days") return hours / 24;
+  if (unit === "minutes") return Math.round(hours * 60);
+  return Number.isInteger(hours) ? hours : Number(hours.toFixed(2));
+}
+
+function _rangeToInputs(minHours, maxHours) {
+  if (!minHours || minHours <= 0) return { on: false, amountMin: 1, amountMax: 1, unit: "hours" };
+  // Pick the unit that renders min cleanly; max uses the same unit.
+  const unit = _pickUnit(minHours);
+  return {
+    on: true,
+    amountMin: _hoursToAmount(minHours, unit),
+    amountMax: _hoursToAmount(maxHours || minHours, unit),
+    unit,
+  };
 }
 
 function _inputsToHours(amount, unit) {
@@ -113,6 +129,10 @@ async function renderExportStats() {
     pendingText += ")";
     summaryParts.push(pendingText);
   }
+  if (resp.nextFireAt && !resp.pending) {
+    const minsUntil = Math.max(0, Math.round((resp.nextFireAt - Date.now()) / 60000));
+    summaryParts.push(`next auto-run in ${minsUntil} min`);
+  }
   el("export-stats-summary").textContent = summaryParts.join(" · ");
 
   // History list — newest first, last 8 entries.
@@ -132,37 +152,53 @@ async function renderExportStats() {
   }).join("");
 }
 
-function _fmtScheduleStatus(hours) {
-  if (!hours || hours <= 0) return "off";
-  if (hours < 1) return `every ${Math.round(hours * 60)} min`;
-  if (hours < 24) return `every ${hours % 1 === 0 ? hours : hours.toFixed(1)} hr`;
-  const days = hours / 24;
-  return `every ${days % 1 === 0 ? days : days.toFixed(1)} day${days === 1 ? "" : "s"}`;
+function _fmtHours(h) {
+  if (h < 1) return `${Math.round(h * 60)} min`;
+  if (h < 24) return `${h % 1 === 0 ? h : h.toFixed(1)} hr`;
+  const days = h / 24;
+  return `${days % 1 === 0 ? days : days.toFixed(1)} day${days === 1 ? "" : "s"}`;
 }
 
-function initScheduleControls(initialHours) {
+function _fmtScheduleStatus(minHours, maxHours) {
+  if (!minHours || minHours <= 0) return "off";
+  if (!maxHours || maxHours <= minHours) return `every ${_fmtHours(minHours)}`;
+  return `every ${_fmtHours(minHours)}–${_fmtHours(maxHours)} (random)`;
+}
+
+function initScheduleControls(initialMinHours, initialMaxHours) {
   const onEl = el("schedule-on");
-  const amtEl = el("schedule-amount");
+  const minEl = el("schedule-amount-min");
+  const maxEl = el("schedule-amount-max");
   const unitEl = el("schedule-unit");
   const statusEl = el("schedule-status");
-  const init = _hoursToInputs(initialHours);
+  const init = _rangeToInputs(initialMinHours, initialMaxHours);
   onEl.checked = init.on;
-  amtEl.value = String(init.amount);
+  minEl.value = String(init.amountMin);
+  maxEl.value = String(init.amountMax);
   unitEl.value = init.unit;
-  amtEl.disabled = !init.on;
+  minEl.disabled = !init.on;
+  maxEl.disabled = !init.on;
   unitEl.disabled = !init.on;
-  statusEl.textContent = _fmtScheduleStatus(initialHours);
+  statusEl.textContent = _fmtScheduleStatus(initialMinHours, initialMaxHours);
 
   async function persist() {
-    amtEl.disabled = !onEl.checked;
+    minEl.disabled = !onEl.checked;
+    maxEl.disabled = !onEl.checked;
     unitEl.disabled = !onEl.checked;
-    const hours = onEl.checked ? _inputsToHours(amtEl.value, unitEl.value) : 0;
-    await chrome.storage.local.set({ exportScheduleHours: hours });
-    statusEl.textContent = _fmtScheduleStatus(hours);
+    let minH = onEl.checked ? _inputsToHours(minEl.value, unitEl.value) : 0;
+    let maxH = onEl.checked ? _inputsToHours(maxEl.value, unitEl.value) : 0;
+    if (onEl.checked && maxH < minH) maxH = minH;  // keep max >= min
+    await chrome.storage.local.set({
+      exportScheduleMinHours: minH,
+      exportScheduleMaxHours: maxH,
+      exportScheduleHours: minH,  // keep legacy field in sync for any older readers
+    });
+    statusEl.textContent = _fmtScheduleStatus(minH, maxH);
   }
 
   onEl.addEventListener("change", persist);
-  amtEl.addEventListener("input", persist);
+  minEl.addEventListener("input", persist);
+  maxEl.addEventListener("input", persist);
   unitEl.addEventListener("change", persist);
 }
 
@@ -194,7 +230,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   el("autosubmit-google").checked = settings.autosubmitGoogle;
   el("show-overlay").checked = settings.showOverlay;
   el("auto-archive-media").checked = settings.autoArchiveMedia;
-  initScheduleControls(settings.exportScheduleHours || 0);
+  // Honour new min/max fields when present; fall back to the legacy
+  // single-value field so an upgrade doesn't lose the user's setting.
+  const initMin = Number(settings.exportScheduleMinHours) || Number(settings.exportScheduleHours) || 0;
+  const initMax = Number(settings.exportScheduleMaxHours) || initMin;
+  initScheduleControls(initMin, initMax);
 
   await checkTrackerReachable(settings.trackerUrl);
   renderExportStats();
@@ -359,11 +399,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       autosubmitGoogle: el("autosubmit-google").checked,
       showOverlay: el("show-overlay").checked,
       autoArchiveMedia: el("auto-archive-media").checked,
-      // Schedule has its own dedicated UI that saves on every change
-      // (see initScheduleControls), so we re-read the current stored
-      // value here rather than computing from the inputs again.
-      exportScheduleHours: (await chrome.storage.local.get(["exportScheduleHours"])).exportScheduleHours || 0,
     };
+    // Schedule has its own dedicated UI that saves on every change
+    // (see initScheduleControls); we don't include those fields in the
+    // Save-settings patch so we don't clobber a fresh edit made between
+    // the schedule input firing and the Save button being clicked.
     await saveSettings(patch);
     el("save-settings").textContent = "Saved ✓";
     setTimeout(() => { el("save-settings").textContent = "Save settings"; }, 1200);

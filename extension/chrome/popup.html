@@ -23,7 +23,9 @@
         <input type="checkbox" id="schedule-on" />
         <span>Run automatically every</span>
       </label>
-      <input type="number" id="schedule-amount" min="1" step="1" value="1" inputmode="numeric" />
+      <input type="number" id="schedule-amount-min" min="1" step="1" value="1" inputmode="numeric" />
+      <span class="schedule-dash">–</span>
+      <input type="number" id="schedule-amount-max" min="1" step="1" value="1" inputmode="numeric" />
       <select id="schedule-unit">
         <option value="minutes">minutes</option>
         <option value="hours" selected>hours</option>
@@ -31,6 +33,7 @@
       </select>
       <span class="schedule-status muted small" id="schedule-status"></span>
     </div>
+    <p class="muted small schedule-hint">Set min = max for a fixed cadence. A different range (e.g. 15–30 min) makes each run land at a random time inside that window so the pattern looks less robotic to Instagram.</p>
   </section>
 
   <section class="card">

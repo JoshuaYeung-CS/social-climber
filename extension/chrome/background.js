@@ -74,19 +74,46 @@ async function _arrivalWindowMin() {
   };
 }
 
+// Schedule resolution. New fields exportScheduleMinHours /
+// exportScheduleMaxHours take precedence; the legacy single-value
+// exportScheduleHours is honoured as min=max so an upgrade doesn't
+// silently disable an existing schedule.
+async function _resolveScheduleHours() {
+  const s = await chrome.storage.local.get([
+    "exportScheduleMinHours",
+    "exportScheduleMaxHours",
+    "exportScheduleHours",
+  ]);
+  const newMin = Number(s.exportScheduleMinHours);
+  const newMax = Number(s.exportScheduleMaxHours);
+  const legacy = Number(s.exportScheduleHours);
+  const minH = Number.isFinite(newMin) && newMin > 0
+    ? newMin
+    : (Number.isFinite(legacy) && legacy > 0 ? legacy : 0);
+  let maxH = Number.isFinite(newMax) && newMax > 0 ? newMax : minH;
+  if (maxH < minH) maxH = minH;
+  return { minH, maxH };
+}
+
+// One-shot alarm with a fresh random delay each fire. Replaces the
+// previous periodInMinutes (fixed cadence) so each scheduled run
+// lands at an unpredictable time inside [min, max] — pattern looks
+// less robotic to Instagram than a perfectly periodic tick.
 async function refreshExportAlarm() {
-  const { exportScheduleHours } = await chrome.storage.local.get(["exportScheduleHours"]);
-  const hours = Number(exportScheduleHours) || 0;
+  const { minH, maxH } = await _resolveScheduleHours();
   await chrome.alarms.clear(SCHEDULE_ALARM);
-  if (hours > 0) {
-    const minutes = Math.max(1, hours * 60);
-    chrome.alarms.create(SCHEDULE_ALARM, {
-      delayInMinutes: minutes,
-      periodInMinutes: minutes,
-    });
-    console.log(`[IG Tracker] Scheduled export every ${minutes} min (${hours}h).`);
-  } else {
+  if (minH <= 0) {
     console.log("[IG Tracker] Scheduled export disabled.");
+    return;
+  }
+  const minMin = Math.max(1, minH * 60);
+  const maxMin = Math.max(minMin, maxH * 60);
+  const next = minMin + Math.random() * (maxMin - minMin);
+  chrome.alarms.create(SCHEDULE_ALARM, { delayInMinutes: next });
+  if (maxMin > minMin) {
+    console.log(`[IG Tracker] Next scheduled export in ${next.toFixed(1)} min (random ${minMin.toFixed(1)}–${maxMin.toFixed(1)}).`);
+  } else {
+    console.log(`[IG Tracker] Next scheduled export in ${next.toFixed(1)} min (fixed).`);
   }
 }
 
@@ -214,14 +241,21 @@ async function _onArrivalPollFire() {
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === SCHEDULE_ALARM) {
     await _onScheduledExportFire();
+    // Re-arm with a fresh random interval. We dropped periodInMinutes
+    // when switching to jittered scheduling, so the alarm only fires
+    // again if we ask for it.
+    await refreshExportAlarm();
   } else if (alarm.name === ARRIVAL_POLL_ALARM) {
     await _onArrivalPollFire();
   }
 });
 
-// Re-evaluate the alarm whenever the schedule setting changes.
+// Re-evaluate the alarm whenever any schedule field changes.
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes.exportScheduleHours) {
+  if (area !== "local") return;
+  if (changes.exportScheduleMinHours ||
+      changes.exportScheduleMaxHours ||
+      changes.exportScheduleHours) {
     refreshExportAlarm();
   }
 });
@@ -451,15 +485,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Popup asks for current export status / history / timings.
   if (msg.type === "get-export-stats") {
     (async () => {
-      const data = await chrome.storage.local.get([
-        "exportHistory", "exportTimings", "pendingArrival", "exportScheduleHours",
+      const [data, alarm] = await Promise.all([
+        chrome.storage.local.get([
+          "exportHistory", "exportTimings", "pendingArrival",
+          "exportScheduleHours", "exportScheduleMinHours", "exportScheduleMaxHours",
+        ]),
+        chrome.alarms.get(SCHEDULE_ALARM).catch(() => null),
       ]);
       sendResponse({
         ok: true,
         history: data.exportHistory || [],
         timings: data.exportTimings || [],
         pending: data.pendingArrival || null,
-        scheduleHours: data.exportScheduleHours || 0,
+        scheduleMinHours: data.exportScheduleMinHours || data.exportScheduleHours || 0,
+        scheduleMaxHours: data.exportScheduleMaxHours || data.exportScheduleHours || 0,
+        nextFireAt: alarm ? alarm.scheduledTime : null,
       });
     })();
     return true;
