@@ -1993,6 +1993,17 @@ function rowDateKey(r) {
 // chronological options refer to. The dropdown options themselves stay
 // uniform (Newest first / Oldest first / A → Z), which earlier feedback
 // found easier to scan than per-list verbs.
+// Event-log lists: cumulative history where accounts may have come back.
+// We render came-back-as-mutual entries at the bottom in a dimmed section
+// so the "actually gone" rows aren't visually buried underneath them.
+const EVENT_HISTORY_KINDS = new Set([
+  "ever_unfollowed_you",
+  "mutual_break_you_first",
+  "mutual_break_they_first",
+  "ever_removed_you_as_follower",
+  "you_unfollowed_ever",
+]);
+
 const SORT_DATE_HINT = {
   all_following:                "by when you followed them",
   still_follow_after_drop:      "by when you followed them",
@@ -2443,6 +2454,22 @@ async function loadLists() {
       if (mutual.length) {
         html.push(`<div class="list-section">Now mutual again (${mutual.length})</div>`);
         html.push(mutual.map(renderListRow).join(""));
+      }
+      out.innerHTML = html.join("");
+    } else if (EVENT_HISTORY_KINDS.has(kind)) {
+      // For event-log lists (ever_unfollowed_you, ever_removed_you...)
+      // accounts that came back as mutuals are still real history but
+      // shouldn't visually compete with truly-gone accounts. Sort them
+      // to the bottom and dim them via the .is-came-back CSS class.
+      const stillGone = items.filter((i) => i.relationship_kind !== "good");
+      const cameBack = items.filter((i) => i.relationship_kind === "good");
+      const html = [];
+      if (stillGone.length) {
+        html.push(stillGone.map(renderListRow).join(""));
+      }
+      if (cameBack.length) {
+        html.push(`<div class="list-section came-back-section">Came back as mutual (${cameBack.length})</div>`);
+        html.push(cameBack.map((i) => renderListRow(i).replace('class="list-row', 'class="list-row is-came-back')).join(""));
       }
       out.innerHTML = html.join("");
     } else {

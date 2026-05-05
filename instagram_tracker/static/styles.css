@@ -836,6 +836,29 @@ code {
   border-left: 3px solid transparent;
   transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease, background 120ms ease;
 }
+/* Event-log lists: rows for accounts that came back as mutual after
+ * the original event. Still real history, but visually dimmed so the
+ * truly-gone entries above them are emphasized. Soft green tint
+ * conveys "we're good now" without competing with active rows. */
+.list-row.is-came-back {
+  background: rgba(80, 200, 120, 0.06);
+  opacity: 0.6;
+}
+.list-row.is-came-back:hover {
+  opacity: 1;
+  background: rgba(80, 200, 120, 0.12);
+}
+.list-row.is-came-back .username {
+  color: rgba(170, 230, 190, 0.9);
+}
+.list-section.came-back-section {
+  margin-top: 14px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: rgba(170, 230, 190, 0.7);
+  letter-spacing: 0.02em;
+  border-top: 1px solid rgba(80, 200, 120, 0.15);
+}
 .list-row::before {
   /* Subtle color wash from the left edge — picks up the relationship
      color and fades to transparent. Adds 'mppph' without being loud. */
