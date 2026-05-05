@@ -1233,16 +1233,29 @@ def _activity_log_compute():
                             emit(events, "incoming_withdrawn", u, s.id, curr_ts)
 
                 # ---------- follower-side disappearances: snapshot-time ----------
-                # Apply the same IG-bounce filter as alerts: don't emit
-                # 'unfollowed_you' for an account currently in pending or
-                # incoming_requests — those states mean IG just misfiled
-                # them, not that they really unfollowed.
-                ig_bounced_curr = curr_sd.pending | curr_sd.incoming_requests
-                for u in sorted(left_followers - ig_bounced_curr):
+                # No bounce filter on the event log. The activity log is
+                # an EVENT log — every transition where someone left
+                # followers / following gets emitted, even if the next
+                # snapshot has them flickering back to pending. Reasons:
+                #   1. Matches the per-snapshot diff endpoint (which
+                #      shows all unfollowers in 'They unfollowed you').
+                #   2. The user can read the SURROUNDING entries to see
+                #      if they re-requested (you_requested event) or if
+                #      the account re-followed later (started_following
+                #      event), so context is preserved.
+                #   3. Filtering by "newly in pending this transition"
+                #      hid 6 of 9 unfollowed_you events from snapshot
+                #      #904 — exactly the cases the user was asking
+                #      about, because they had re-requested those
+                #      accounts in the same window.
+                # The you_unfollowed / removed_you split still uses
+                # recently_unfollowed (the ground truth for
+                # user-initiated unfollows).
+                for u in sorted(left_followers):
                     emit(events, "unfollowed_you", u, s.id, curr_ts)
                 for u in sorted(left_following & curr_sd.recently_unfollowed):
                     emit(events, "you_unfollowed", u, s.id, curr_ts)
-                for u in sorted(left_following - curr_sd.recently_unfollowed - curr_sd.pending):
+                for u in sorted(left_following - curr_sd.recently_unfollowed):
                     emit(events, "removed_you", u, s.id, curr_ts)
 
             prev_sd = curr_sd
@@ -1278,25 +1291,17 @@ def _activity_log_compute():
             if not (e["kind"] in INBOUND_KINDS and e["username"] in ever_self)
         ]
 
-        # "Came back" filter: hide inbound break events for accounts
-        # that are CURRENTLY in your followers / following. If they
-        # unfollowed and later re-followed (mutual again now), the
-        # historical break event is misleading at a glance — the
-        # activity log should reflect the current state, not stale
-        # transient drops. Same logic that fixed the cumulative
-        # "Ever removed you as follower" → 1 inflation.
-        latest = q.latest_id(conn)
-        if latest is not None:
-            curr_sd = q.snapshot_data(conn, latest)
-            curr_followers = curr_sd.followers
-            curr_following = curr_sd.following
-            events = [
-                e for e in events
-                if not (
-                    (e["kind"] == "unfollowed_you" and e["username"] in curr_followers)
-                    or (e["kind"] == "removed_you" and e["username"] in curr_following)
-                )
-            ]
+        # NOTE: previously this code applied a "came back" filter —
+        # hiding unfollowed_you / removed_you events for accounts
+        # currently back in followers / following. That was wrong for
+        # an EVENT LOG. Per-snapshot diffs (the boxes at the top of
+        # the History tab) showed the events correctly, but the
+        # activity log feed below silently erased them, making it
+        # look like only one person unfollowed when 9 actually did.
+        # Came-back events are still visible IN CONTEXT — the user
+        # can scroll the same timeline and see "started following
+        # you" / "you accepted them" lines for the re-follow, which
+        # tells them visually that the relationship was restored.
 
         # Sort newest first by the precise timestamp; tiebreak by snapshot_id then username.
         events.sort(
