@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0e0e10" />
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/styles.css?v=5" />
+  <title>Archived media — all accounts</title>
+  <style>
+    body { padding: 32px 24px 80px; }
+
+    .archive-page-head {
+      max-width: 1280px;
+      margin: 0 auto 28px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .archive-page-head h1 {
+      margin: 0;
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    .archive-page-head .stats {
+      color: var(--muted);
+      font-size: 14px;
+      font-variant-numeric: tabular-nums;
+    }
+    .archive-page-head .back-link {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 13px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg-elev-2);
+      transition: border-color 120ms ease, color 120ms ease;
+    }
+    .archive-page-head .back-link:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .archive-controls {
+      max-width: 1280px;
+      margin: 0 auto 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .archive-controls input[type="search"] {
+      flex: 1;
+      min-width: 240px;
+      padding: 10px 14px;
+      font-size: 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg-elev);
+      color: var(--text);
+    }
+    .archive-controls input[type="search"]:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .archive-controls select {
+      padding: 10px 14px;
+      font-size: 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg-elev);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .archive-controls .filtered-count {
+      color: var(--muted);
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .archive-grid {
+      max-width: 1280px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 16px;
+    }
+
+    .account-card {
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      text-decoration: none;
+      color: inherit;
+      transition: border-color 120ms ease, transform 100ms ease;
+    }
+    .account-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+    .account-card .preview-mosaic {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      aspect-ratio: 1;
+      gap: 1px;
+      background: var(--border);
+    }
+    .account-card .preview-mosaic .cell {
+      background: var(--bg-elev-2);
+      overflow: hidden;
+      position: relative;
+    }
+    .account-card .preview-mosaic .cell img,
+    .account-card .preview-mosaic .cell video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .account-card .preview-mosaic .cell .badge {
+      position: absolute;
+      bottom: 4px;
+      right: 4px;
+      background: rgba(0, 0, 0, 0.7);
+      color: #fff;
+      font-size: 10px;
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    .account-card .preview-mosaic .cell.empty {
+      background: var(--bg-elev-2);
+    }
+    .account-card .meta {
+      padding: 12px 14px;
+    }
+    .account-card .username {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0 0 4px;
+      color: var(--text);
+      word-break: break-all;
+    }
+    .account-card .meta-line {
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      margin: 0 0 4px;
+    }
+    .account-card .kind-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 6px;
+    }
+    .account-card .kind-pill {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--bg-elev-2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    .empty-state {
+      max-width: 600px;
+      margin: 80px auto;
+      text-align: center;
+      color: var(--muted);
+    }
+    .empty-state h2 { margin: 0 0 8px; color: var(--text); }
+  </style>
+</head>
+<body>
+  <div class="archive-page-head">
+    <a class="back-link" href="/">← Back to tracker</a>
+    <h1>📦 Archived media</h1>
+    <div class="stats" id="stats">Loading…</div>
+  </div>
+
+  <div class="archive-controls">
+    <input type="search" id="search" placeholder="Search accounts…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+    <select id="sort">
+      <option value="count">Most items</option>
+      <option value="recent">Recently archived</option>
+      <option value="oldest">Earliest archived</option>
+      <option value="bytes">Largest size</option>
+      <option value="groups">Most posts/albums</option>
+      <option value="alpha">A → Z</option>
+    </select>
+    <span class="filtered-count" id="filtered-count"></span>
+  </div>
+
+  <div class="archive-grid" id="grid"></div>
+
+  <script>
+    (async function () {
+      const grid = document.getElementById("grid");
+      const stats = document.getElementById("stats");
+      const search = document.getElementById("search");
+      const sort = document.getElementById("sort");
+      const filteredCount = document.getElementById("filtered-count");
+
+      const escapeHtml = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+      const escapeAttr = escapeHtml;
+
+      let users = [];
+
+      try {
+        const r = await fetch("/api/media-overview");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const data = await r.json();
+        users = data.users || [];
+        const totalMb = (data.total_bytes / 1024 / 1024).toFixed(1);
+        stats.textContent = `${data.total_items} items across ${users.length} account${users.length === 1 ? "" : "s"} · ${data.total_groups} posts/albums · ${totalMb} MB`;
+      } catch (e) {
+        stats.textContent = "Couldn't load archive: " + e.message;
+        return;
+      }
+
+      if (users.length === 0) {
+        grid.innerHTML = `
+          <div class="empty-state" style="grid-column: 1 / -1">
+            <h2>No archived media yet</h2>
+            <p>Open an Instagram profile, hit "📦 Archive everything" in the IG Tracker overlay, and your saved posts and highlights will show up here.</p>
+          </div>
+        `;
+        return;
+      }
+
+      const renderCell = (item) => {
+        if (!item) return `<div class="cell empty"></div>`;
+        const isVideo = item.ext === "mp4";
+        const inner = isVideo
+          ? `<video src="${escapeAttr(item.url)}" muted preload="metadata"></video><span class="badge">▶</span>`
+          : `<img src="${escapeAttr(item.url)}" alt="" loading="lazy" />`;
+        return `<div class="cell">${inner}</div>`;
+      };
+
+      // Format a unix timestamp as a relative-time string ("2h ago",
+      // "3d ago", "Apr 4"). Used on each card so the chronological
+      // sort visibly correlates with what the user sees.
+      const fmtAgo = (ts) => {
+        if (!ts) return "";
+        const secs = Math.max(0, Math.round(Date.now() / 1000 - ts));
+        if (secs < 60) return "just now";
+        if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+        if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+        if (secs < 86400 * 30) return `${Math.round(secs / 86400)}d ago`;
+        const d = new Date(ts * 1000);
+        const sameYear = d.getFullYear() === new Date().getFullYear();
+        return d.toLocaleDateString(undefined, sameYear
+          ? { month: "short", day: "numeric" }
+          : { month: "short", day: "numeric", year: "numeric" });
+      };
+
+      const renderCard = (u) => {
+        const kindLabels = {
+          post: "📷 posts",
+          reel: "🎬 reels",
+          highlight: "📚 highlights",
+          story: "📖 stories",
+          other: "📦 other",
+        };
+        const kindPills = Object.entries(u.kinds || {})
+          .filter(([_, n]) => n > 0)
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, n]) => `<span class="kind-pill">${kindLabels[k] || k} ${n}</span>`)
+          .join("");
+        const sizeKb = u.bytes / 1024;
+        const sizeLabel = sizeKb >= 1024
+          ? `${(sizeKb / 1024).toFixed(1)} MB`
+          : `${sizeKb.toFixed(0)} KB`;
+        // Always render 4 cells (pad with empties if preview < 4)
+        const cells = [];
+        for (let i = 0; i < 4; i++) cells.push(renderCell(u.preview[i]));
+        return `
+          <a class="account-card" href="/media/${encodeURIComponent(u.username)}" target="_blank" rel="noopener" data-username="${escapeAttr(u.username.toLowerCase())}">
+            <div class="preview-mosaic">${cells.join("")}</div>
+            <div class="meta">
+              <h3 class="username">@${escapeHtml(u.username)}</h3>
+              <p class="meta-line">${u.count} item${u.count === 1 ? "" : "s"} · ${u.groups} ${u.groups === 1 ? "post/album" : "posts/albums"} · ${sizeLabel}</p>
+              <p class="meta-line muted">${u.latest_mtime ? `last archived ${fmtAgo(u.latest_mtime)}` : ""}</p>
+              <div class="kind-pills">${kindPills}</div>
+            </div>
+          </a>
+        `;
+      };
+
+      const sortFn = {
+        count: (a, b) => b.count - a.count || a.username.localeCompare(b.username),
+        bytes: (a, b) => b.bytes - a.bytes || a.username.localeCompare(b.username),
+        groups: (a, b) => b.groups - a.groups || a.username.localeCompare(b.username),
+        alpha: (a, b) => a.username.localeCompare(b.username),
+        // latest_mtime / earliest_mtime are unix epoch seconds.
+        // Newest first for "recent", oldest first for "oldest".
+        // Tie-break alphabetically so accounts archived in the same
+        // session don't shuffle on every reload.
+        recent: (a, b) => (b.latest_mtime || 0) - (a.latest_mtime || 0)
+                          || a.username.localeCompare(b.username),
+        oldest: (a, b) => (a.earliest_mtime || 0) - (b.earliest_mtime || 0)
+                          || a.username.localeCompare(b.username),
+      };
+
+      function rerender() {
+        const q = search.value.trim().toLowerCase();
+        const filtered = q
+          ? users.filter((u) => u.username.toLowerCase().includes(q))
+          : users.slice();
+        filtered.sort(sortFn[sort.value] || sortFn.count);
+        if (q) {
+          filteredCount.textContent = `${filtered.length} of ${users.length}`;
+        } else {
+          filteredCount.textContent = "";
+        }
+        grid.innerHTML = filtered.map(renderCard).join("");
+      }
+
+      search.addEventListener("input", rerender);
+      sort.addEventListener("change", rerender);
+      rerender();
+    })();
+  </script>
+</body>
+</html>

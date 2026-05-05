@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/static/icon.svg" />
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=4" />
   <title>Instagram Tracker</title>
 </head>
 <body>
@@ -70,8 +70,18 @@
         </div>
       </div>
 
+      <div class="card" id="notes-card" hidden>
+        <a class="notes-card-head" id="notes-card-link" href="#lists/with_notes">
+          <h2>📝 Notes <span class="count" id="count-with_notes">0</span></h2>
+        </a>
+        <p class="muted small">Accounts you've saved a note on. Persists even if you (or they) unfollow.</p>
+        <div id="notes-users" class="notes-users"></div>
+      </div>
+
       <div class="card" id="archive-card" hidden>
-        <h2>📦 Archived media</h2>
+        <a class="notes-card-head" href="/archive" target="_blank" rel="noopener" title="Open all archived media on a full page">
+          <h2>📦 Archived media <span class="archive-open-hint">↗</span></h2>
+        </a>
         <p class="muted small" id="archive-summary"></p>
         <div id="archive-users" class="archive-users"></div>
       </div>
@@ -205,6 +215,7 @@
 
   <div id="toast" class="toast" hidden></div>
 
+  <script src="/static/archive-gallery.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

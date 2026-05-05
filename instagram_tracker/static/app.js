@@ -174,6 +174,26 @@ async function loadHome() {
     $("#count-unavailable").textContent = data.bucket_counts.unavailable ?? 0;
     $("#count-random_request").textContent = data.bucket_counts.random_request ?? 0;
     $("#count-now_public").textContent = data.bucket_counts.now_public ?? 0;
+    const notesCount = data.bucket_counts.with_notes ?? 0;
+    $("#count-with_notes").textContent = notesCount;
+    // Hide the card entirely until at least one note exists, mirroring
+    // the Archived media card's "no clutter when empty" behavior.
+    $("#notes-card").hidden = notesCount === 0;
+    const notesUsersEl = $("#notes-users");
+    if (notesUsersEl) {
+      const noted = data.noted_users || [];
+      notesUsersEl.innerHTML = noted.map((n) => {
+        const snippet = String(n.note || "").trim();
+        const truncated = snippet.length > 80 ? snippet.slice(0, 77) + "…" : snippet;
+        return `<a class="notes-user" data-username="${escapeAttr(n.username)}" href="#" title="${escapeAttr(snippet)}">@${escapeHtml(n.username)} <span class="muted small">${escapeHtml(truncated)}</span></a>`;
+      }).join("");
+      $$(".notes-user", notesUsersEl).forEach((el) =>
+        el.addEventListener("click", (e) => {
+          e.preventDefault();
+          openAccountModal(el.dataset.username);
+        })
+      );
+    }
     loadArchiveCard();
   } catch (e) {
     console.error(e);
@@ -210,6 +230,51 @@ async function loadArchiveCard() {
     card.hidden = true;
   }
 }
+
+// Live-refresh the archive card + notes count every 15 seconds when
+// the home view is active. Updates only those two cards (not the
+// whole loadHome flow), so the user's scroll position and any open
+// modals are preserved. Driven by the visible/active-view check so
+// we don't pointlessly poll while the user is on Lists / Imports.
+let _liveRefreshTimer = null;
+function _startLiveRefresh() {
+  if (_liveRefreshTimer) return;
+  _liveRefreshTimer = setInterval(async () => {
+    if (document.hidden) return;
+    if (_renderedView !== "home") return;
+    try {
+      // Refresh just the archive card — cheap, no scroll impact.
+      await loadArchiveCard();
+      // Also refresh the home summary's bucket counts (notes count
+      // changes when you add/edit notes from the modal). Skip the
+      // top-of-card spinner so the UI doesn't flash.
+      const r = await fetch("/api/home");
+      if (!r.ok) return;
+      const data = await r.json();
+      if (data.bucket_counts) {
+        const bc = data.bucket_counts;
+        const setIfChanged = (id, val) => {
+          const el = $(`#${id}`);
+          if (el && el.textContent !== String(val)) el.textContent = String(val);
+        };
+        setIfChanged("count-favorite", bc.favorites);
+        setIfChanged("count-want_remove", bc.want_remove);
+        setIfChanged("count-watchlist", bc.watchlist);
+        setIfChanged("count-disabled", bc.disabled ?? 0);
+        setIfChanged("count-unavailable", bc.unavailable ?? 0);
+        setIfChanged("count-random_request", bc.random_request ?? 0);
+        setIfChanged("count-now_public", bc.now_public ?? 0);
+        const noteCard = $("#notes-card");
+        const noteCount = bc.with_notes ?? 0;
+        if (noteCard) noteCard.hidden = noteCount === 0;
+        setIfChanged("count-with_notes", noteCount);
+      }
+    } catch {
+      /* network blip — try again next tick */
+    }
+  }, 15000);
+}
+_startLiveRefresh();
 
 // ---------- import ----------
 
@@ -611,6 +676,7 @@ async function openAccount(account, { resultId = "lookup-result", saveToQueue = 
     const result = $(`#${resultId}`);
     result.innerHTML = renderLookup(data);
     loadArchivedMediaForModal(data.username);
+    loadAccountNote(data.username);
     bindTagToggles(result, data.username, data.tags);
 
     if (saveToQueue && data.found === false) {
@@ -636,12 +702,26 @@ async function openAccount(account, { resultId = "lookup-result", saveToQueue = 
 function renderLookup(data) {
   const url = instagramUrl(data.username);
   if (!data.found) {
+    // Even when the account isn't in any snapshot, the user may have
+    // saved a note for them OR archived media — show the full notes
+    // block + the archived-media block so those pieces don't silently
+    // disappear off the modal. The async loaders below this render
+    // populate them.
     return `
       <div class="account-detail">
         <h3>${escapeHtml(data.username)}</h3>
         <div class="url"><a href="${escapeAttr(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a></div>
         <p class="muted">Never seen in any snapshot.</p>
         ${renderTagToggles(data.tags)}
+        <div class="archived-media-block" data-username="${escapeAttr(data.username)}"></div>
+        <div class="account-note-block" data-username="${escapeAttr(data.username)}">
+          <h4 class="account-note-h">📝 Notes</h4>
+          <textarea class="account-note-input" data-username="${escapeAttr(data.username)}" placeholder="VSCO link, where you met, why you tagged them, etc."></textarea>
+          <div class="account-note-actions">
+            <button class="account-note-save" data-action="save-note" data-username="${escapeAttr(data.username)}">Save</button>
+            <span class="account-note-status" data-username="${escapeAttr(data.username)}"></span>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -722,51 +802,90 @@ function renderLookup(data) {
         ${data.last_requested_snapshot ? `<div class="row"><span class="key">Last requested</span><span>#${data.last_requested_snapshot.snapshot_id} ${escapeHtml(cleanLabel(data.last_requested_snapshot.label))}</span></div>` : ""}
       </div>
       <div class="archived-media-block" data-username="${escapeAttr(data.username)}"></div>
+      <div class="account-note-block" data-username="${escapeAttr(data.username)}">
+        <h4 class="account-note-h">📝 Notes</h4>
+        <textarea class="account-note-input" data-username="${escapeAttr(data.username)}" placeholder="VSCO link, where you met, why you tagged them, etc."></textarea>
+        <div class="account-note-actions">
+          <button class="account-note-save" data-action="save-note" data-username="${escapeAttr(data.username)}">Save</button>
+          <span class="account-note-status" data-username="${escapeAttr(data.username)}"></span>
+        </div>
+      </div>
       <button class="primary" data-action="show-history" data-username="${escapeAttr(data.username)}">Show full history</button>
     </div>
   `;
 }
 
 // Async loader for the archived-media gallery in the account modal.
-// Called after renderLookup paints; fetches the archive list for the
-// username and renders thumbnails. Hidden entirely when nothing is
-// archived for this user (which is the common case when the
-// auto-archive setting hasn't been turned on).
+// Delegates to the shared ArchiveGallery module (archive-gallery.js)
+// which handles rendering, hierarchical select-all, and delete. The
+// same module powers the standalone /media/<username> full-page view.
 async function loadArchivedMediaForModal(username) {
   const block = document.querySelector(`.archived-media-block[data-username="${cssEscape(username)}"]`);
   if (!block) return;
-  try {
-    const r = await fetch(`/api/media-list/${encodeURIComponent(username)}`);
-    if (!r.ok) return;
-    const data = await r.json();
-    const items = data.items || [];
-    if (items.length === 0) {
-      block.innerHTML = "";
-      return;
-    }
-    const tiles = items.map((item) => {
-      const isVideo = item.ext === "mp4";
-      const url = item.url;
-      const open = `<a class="archived-tile" href="${escapeAttr(url)}" target="_blank" rel="noopener" title="Open ${escapeAttr(item.media_id)} (${(item.size / 1024).toFixed(0)} KB)">`;
-      if (isVideo) {
-        return `${open}<video src="${escapeAttr(url)}" muted preload="metadata"></video><span class="archived-badge">▶</span></a>`;
-      }
-      return `${open}<img src="${escapeAttr(url)}" alt="${escapeAttr(item.media_id)}" /></a>`;
-    }).join("");
-    const totalKb = (items.reduce((a, b) => a + b.size, 0) / 1024).toFixed(0);
-    block.innerHTML = `
-      <h4 class="archived-heading">📦 Archived media <span class="muted small">${items.length} item${items.length === 1 ? "" : "s"} · ${totalKb} KB total</span></h4>
-      <div class="archived-grid">${tiles}</div>
-    `;
-  } catch {
-    /* ignore — endpoint not reachable, just leave empty */
-  }
+  if (window.ArchiveGallery) window.ArchiveGallery.mount(block, username);
 }
 
 function cssEscape(s) {
   if (typeof CSS !== "undefined" && CSS.escape) return CSS.escape(s);
   return String(s).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 }
+
+// Free-form per-account note. Loaded async after the modal renders so
+// we don't block paint while we hit the DB. Empty notes leave the
+// textarea blank but the block still shows so the user can add one.
+async function loadAccountNote(username) {
+  const ta = document.querySelector(`.account-note-input[data-username="${cssEscape(username)}"]`);
+  if (!ta) return;
+  try {
+    const r = await fetch(`/api/note/${encodeURIComponent(username)}`);
+    if (!r.ok) return;
+    const data = await r.json();
+    ta.value = data.note || "";
+  } catch {
+    /* leave blank — note is non-critical */
+  }
+}
+
+// Delete + bulk-select handlers for the archived-media gallery live
+// in archive-gallery.js so they're shared between the modal and the
+// standalone /media/<username> page.
+
+// One delegated handler at document level so both openAccount and
+// openAccountModal paths get save behavior without manual binding.
+// renderLookup may also be re-run on tag toggles, which would discard
+// any direct addEventListener — delegation is the only pattern that
+// survives that.
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest('button[data-action="save-note"]');
+  if (!btn) return;
+  const username = btn.dataset.username;
+  if (!username) return;
+  const ta = document.querySelector(
+    `.account-note-input[data-username="${cssEscape(username)}"]`
+  );
+  const status = document.querySelector(
+    `.account-note-status[data-username="${cssEscape(username)}"]`
+  );
+  if (!ta) return;
+  btn.disabled = true;
+  if (status) status.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/note", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, note: ta.value }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (status) {
+      status.textContent = "Saved ✓";
+      setTimeout(() => { if (status) status.textContent = ""; }, 1500);
+    }
+  } catch (err) {
+    if (status) status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 function renderTagToggles(tags) {
   return `
@@ -933,6 +1052,7 @@ async function openAccountModal(username, push = true) {
     $("#account-detail").innerHTML = renderLookup(data);
     bindTagToggles($("#account-detail"), data.username, data.tags);
     loadArchivedMediaForModal(data.username);
+    loadAccountNote(data.username);
   } catch (e) {
     $("#account-detail").innerHTML =
       `<div class="warn-banner">Couldn't load ${escapeHtml(username)}: ${escapeHtml(e.message)}</div>`;
@@ -969,6 +1089,7 @@ const LIST_DESCRIPTIONS = {
   all_followers:                "Accounts currently following you, per the latest snapshot. Excludes accounts you've tagged disabled / unavailable / random_request.",
   all_following:                "Accounts you currently follow, per the latest snapshot, plus extension-confirmed follows that haven't been ingested into a snapshot yet.",
   mutuals:                      "Accounts that follow you AND that you follow.",
+  public_mutuals:               "Mutuals whose privacy is public — either inferred 'likely public' from snapshot history or manually flipped via the now_public tag. Use this list to spot the public accounts that have followed you back (no request gate). New entries also fire a 🌐 follow-back alert.",
   not_following_you_back:       "Accounts you follow but who don't follow you back. Excludes accounts who've sent you an incoming request you haven't acted on (those are 'requesting to follow back', not 'doesn't follow back').",
   feeder_accounts:              "Accounts that follow you but you don't follow them. The opposite side of 'Don't follow you back'.",
   pending:                      "Outbound follow requests you've sent that haven't been accepted yet, including extension-confirmed pending requests not yet visible in the IG export.",
@@ -992,6 +1113,7 @@ const LIST_DESCRIPTIONS = {
   unavailable:                  "Accounts where the extension landed on Instagram's 'Sorry, this page isn't available' state. Auto-clears if they reappear in your followers. Excluded from non-bucket lists.",
   random_request:               "Manual flag for incoming requests that look like spam / bots / random users. Excluded from 'real_requests' and other non-bucket lists.",
   now_public:                   "Accounts you've personally verified flipped from private to public. The historical pending evidence in your DB still says 'likely private', but you've checked their profile and confirmed they're now public. This tag overrides the privacy display to '🌐 public (you confirmed)' for those accounts. Use it for the rare flip case the inference can't detect on its own.",
+  with_notes:                   "Every account you've saved a note on (VSCO link, where you met, why you tagged them, etc.). Sourced directly from profile_tags.notes — does NOT require the account to currently follow you or be in your following list, so notes for accounts you've unfollowed (or who unfollowed you) stay discoverable. Disabled / unavailable / random_request tags don't filter this list either.",
 };
 
 const LIST_KINDS = [
@@ -999,6 +1121,7 @@ const LIST_KINDS = [
   ["all_followers", "All followers"],
   ["all_following", "All following"],
   ["mutuals", "Mutuals"],
+  ["public_mutuals", "🌐 Public mutuals (followed back)"],
   ["not_following_you_back", "Don't follow you back"],
   ["feeder_accounts", "Feeder accounts (follow you, you don't)"],
   ["pending", "Pending requests you sent"],
@@ -1022,6 +1145,7 @@ const LIST_KINDS = [
   ["unavailable", "✕ Unavailable (page not found)"],
   ["random_request", "🎲 Random requests"],
   ["now_public", "🌐 Was private, now public"],
+  ["with_notes", "📝 Has notes"],
 ];
 
 const select = $("#list-kind");
@@ -1644,6 +1768,11 @@ function renderListRow(item) {
     parts.push(`<span class="privacy-tag privacy-public">🌐 likely public</span>`);
   }
   if (item.aliases && item.aliases.length > 1) parts.push(`<span class="info-tag">renamed: ${escapeHtml(item.aliases.join(' → '))}</span>`);
+  if (item.note) {
+    const trimmed = String(item.note).trim();
+    const snippet = trimmed.length > 120 ? trimmed.slice(0, 117) + "…" : trimmed;
+    parts.push(`<span class="note-tag" title="${escapeAttr(trimmed)}">📝 ${escapeHtml(snippet)}</span>`);
+  }
   if (item.ever_followed_you === false) parts.push(`<span class="never">never followed back</span>`);
   else if (item.ever_followed_you === true) {
     // started_following_you_ts is IG's exact moment they began following you
@@ -1929,6 +2058,18 @@ $$(".bucket-btn").forEach((btn) =>
     goToList(btn.dataset.flag);
   })
 );
+
+// Notes card heading on the home page: same SPA-routing behavior as
+// bucket pills. Clicks on the per-account links inside the card open
+// the modal directly (handled in loadHome).
+const notesCardLinkEl = $("#notes-card-link");
+if (notesCardLinkEl) {
+  notesCardLinkEl.addEventListener("click", (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+    e.preventDefault();
+    goToList("with_notes");
+  });
+}
 
 // ---------- follow queue ----------
 

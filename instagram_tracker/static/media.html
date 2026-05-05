@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0e0e10" />
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/styles.css?v=4" />
+  <title>Archived media</title>
+  <style>
+    /* Full-page layout — centered, generous breathing room, text
+       sized to match the larger thumbnails. The modal version is
+       space-constrained; here we own the window. */
+    body {
+      padding: 32px 24px 80px;
+    }
+    /* Center the whole page on a sensible max-width so the grid
+       doesn't sprawl edge-to-edge on ultrawide displays. */
+    .media-page-head,
+    .archived-media-block {
+      max-width: 1200px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .media-page-head {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      margin-bottom: 28px;
+      flex-wrap: wrap;
+      text-align: center;
+    }
+    .media-page-head h1 {
+      margin: 0;
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    .media-page-head .back-link,
+    .media-page-head .ig-link {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 14px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg-elev-2);
+      transition: border-color 120ms ease, color 120ms ease;
+    }
+    .media-page-head .back-link:hover,
+    .media-page-head .ig-link:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* "📦 Archived media · 4 items · 1.2 MB total" — center it,
+       size it to feel proportional to the bigger thumbnails. */
+    .archived-media-block .archived-heading {
+      justify-content: center;
+      flex-wrap: wrap;
+      font-size: 18px;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .archived-media-block .archived-heading .muted.small {
+      font-size: 14px;
+    }
+
+    /* Bigger thumbs and group section spacing — reads as a real
+       gallery rather than a cramped sidebar. */
+    .archived-media-block .archived-grid {
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 12px;
+    }
+    .archived-media-block .archived-group {
+      margin-top: 24px;
+    }
+    .archived-media-block .archived-group + .archived-group {
+      margin-top: 32px;
+      padding-top: 24px;
+    }
+    .archived-media-block .archived-group-h {
+      font-size: 16px;
+      margin-bottom: 12px;
+    }
+
+    /* Center the master select-all pill under the heading. */
+    .archived-media-block .archived-select-all {
+      display: inline-flex;
+      padding: 12px 24px;
+      font-size: 15px;
+      gap: 12px;
+      margin: 0 auto 20px;
+    }
+    .archived-media-block .archived-select-all[hidden] {
+      display: none;
+    }
+    /* The label is inline-flex but its parent (the block) is block;
+       use a wrapper trick — center via text-align on the block. */
+    .archived-media-block {
+      text-align: center;
+    }
+    /* Keep the grid + group contents left-aligned within their
+       centered container; only the headings/pills are centered. */
+    .archived-media-block .archived-grid,
+    .archived-media-block .archived-group-h {
+      text-align: left;
+    }
+
+    /* The modal hid the heading's full-page link — on the standalone
+       page itself the link is redundant. Hide it. */
+    .archived-media-block .archived-fullpage-link { display: none; }
+
+    /* Larger, easier-to-click select controls on the full page. */
+    .archived-media-block .archived-select-toggle {
+      padding: 8px 18px;
+      font-size: 14px;
+    }
+    .archived-media-block .archived-select-all input[type="checkbox"] {
+      width: 22px;
+      height: 22px;
+    }
+    /* Per-group "select all in this album" checkbox — comfortably
+       clickable, with the whole label as a hover target. */
+    .archived-media-block.archived-select-mode .archived-group-select {
+      padding: 6px 10px;
+      margin: 0 0 4px -10px;
+      border-radius: 6px;
+      gap: 10px;
+    }
+    .archived-media-block.archived-select-mode .archived-group-select:hover {
+      background: var(--bg-elev-2);
+    }
+    .archived-media-block.archived-select-mode .archived-group-select input[type="checkbox"] {
+      width: 20px;
+      height: 20px;
+    }
+    .archived-media-block .archived-bulk-delete {
+      padding: 12px 24px;
+      font-size: 15px;
+      font-weight: 600;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+    }
+    /* Pin the bulk-delete bar to the top of the viewport so it stays
+       reachable no matter how far you've scrolled. Only floats while
+       in select mode + with at least one selection (the bar is hidden
+       via `hidden` attr otherwise). */
+    .archived-media-block.archived-select-mode .archived-bulk-bar {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      margin: 0;
+      z-index: 100;
+    }
+  </style>
+</head>
+<body>
+  <div class="media-page-head">
+    <a class="back-link" href="/">← Back to tracker</a>
+    <h1 id="page-title">Loading…</h1>
+    <a class="ig-link" id="ig-link" href="#" target="_blank" rel="noopener">View on Instagram ↗</a>
+  </div>
+  <div class="archived-media-block" id="archive-block"></div>
+
+  <script src="/static/archive-gallery.js"></script>
+  <script>
+    (function () {
+      // Pull username from /media/<username>. Path-segment form (no
+      // query string) keeps it shareable and bookmarkable.
+      const path = window.location.pathname;
+      const m = path.match(/^\/media\/([^\/]+)\/?$/);
+      const username = m ? decodeURIComponent(m[1]) : "";
+      if (!username) {
+        document.getElementById("page-title").textContent = "No username in URL";
+        return;
+      }
+      document.title = `📦 ${username} — archived media`;
+      document.getElementById("page-title").textContent = `📦 @${username}`;
+      const igLink = document.getElementById("ig-link");
+      igLink.href = `https://www.instagram.com/${encodeURIComponent(username)}/`;
+      window.ArchiveGallery.mount(document.getElementById("archive-block"), username);
+    })();
+  </script>
+</body>
+</html>

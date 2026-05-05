@@ -1124,7 +1124,31 @@ textarea {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   resize: vertical;
   margin-bottom: 12px;
+  /* Compact paste boxes: even with many lines, the area stays
+     small (~2 names visible) and scrolls invisibly. The fade mask
+     hints there's more content below. resize: vertical above lets
+     the user grow it manually if they prefer. */
 }
+textarea#lookup-input,
+textarea#queue-input {
+  height: 58px !important;
+  max-height: 58px !important;
+  min-height: 58px !important;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 12px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 12px), transparent 100%);
+}
+textarea#lookup-input::-webkit-scrollbar,
+textarea#queue-input::-webkit-scrollbar { display: none; }
+
+/* Follow queue: keep the existing 240px height cap from .result-list,
+   but hide the visible scrollbar. Wheel/trackpad still scrolls. */
+#queue-list.result-list {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+#queue-list.result-list::-webkit-scrollbar { display: none; }
 .row-tags { display: flex; gap: 4px; flex-shrink: 0; }
 .row-open {
   display: inline-flex;
@@ -1330,11 +1354,302 @@ textarea {
   align-items: center;
   gap: 8px;
 }
+.account-note-block {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+}
+.account-note-h {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.account-note-input {
+  width: 100%;
+  min-height: 72px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-1);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  resize: vertical;
+  box-sizing: border-box;
+  transition: border-color 120ms ease;
+}
+.account-note-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.account-note-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.account-note-save {
+  padding: 6px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 120ms ease, transform 80ms ease;
+}
+.account-note-save:hover { opacity: 0.9; }
+.account-note-save:active { transform: translateY(1px); }
+.account-note-save:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.account-note-status {
+  font-size: 12px;
+  color: var(--muted, #888);
+}
+.card-link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  transition: transform 80ms ease, border-color 120ms ease;
+}
+.card-link:hover { border-color: var(--accent); transform: translateY(-1px); }
+.card-link:active { transform: translateY(0); }
+.notes-card-head {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  margin: -2px 0 4px;
+}
+.notes-card-head:hover h2 { color: var(--accent); }
+.notes-users {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+.notes-user {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2, rgba(255,255,255,0.03));
+  text-decoration: none;
+  color: var(--text);
+  font-size: 13px;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.notes-user:hover { border-color: var(--accent); background: var(--bg-elev); }
+.notes-user > span {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+.card-link h2 .count {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  padding: 1px 8px;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+.note-tag {
+  font-size: 11px;
+  color: var(--muted, #888);
+  background: var(--bg-elev-2, rgba(255,255,255,0.04));
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+  display: inline-block;
+  vertical-align: middle;
+}
 .archived-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
   gap: 6px;
 }
+.archived-group {
+  margin-top: 10px;
+}
+.archived-group + .archived-group {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+.archived-group-h {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  word-break: break-all;
+}
+/* The group-level "select all in this group" checkbox is hidden by
+   default and only appears when the parent block is in select mode.
+   Hides the label-with-checkbox markup behind a visual that matches
+   the existing group-h style. */
+.archived-group-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+  /* Outside select mode the wrapping <label> is inert. Without this,
+     clicking on the group title text (e.g. "📷 Post DXbHYw6lfo5 ·
+     8 items") would toggle the hidden checkbox via native label
+     behavior — and even though _onGroupChange ignores the change
+     when select mode is off, the brief visual flip + checkbox-reset
+     felt like the page was hijacking benign clicks. */
+  pointer-events: none;
+}
+.archived-select-mode .archived-group-select { cursor: pointer; pointer-events: auto; }
+.archived-group-select input[type="checkbox"] {
+  margin: 0;
+  width: 13px;
+  height: 13px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  /* Hide the checkbox until the gallery enters select mode — keeps
+     the headings clean during normal browsing. */
+  display: none;
+}
+.archived-select-mode .archived-group-select input[type="checkbox"] {
+  display: inline-block;
+}
+.archived-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 10px;
+  padding: 6px 12px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.archived-select-all input[type="checkbox"] {
+  margin: 0;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.archived-select-all:hover { border-color: var(--accent); }
+.archived-fullpage-link {
+  margin-left: auto;
+  padding: 3px 10px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elev-2, transparent);
+  color: var(--muted);
+  text-decoration: none;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+.archived-fullpage-link:hover { border-color: var(--accent); color: var(--accent); }
+/* Once the full-page link is present the Select toggle no longer
+   needs auto-margin — it sits next to the full-page link. */
+.archived-fullpage-link + .archived-select-toggle { margin-left: 0; }
+.archived-tile-wrap {
+  position: relative;
+}
+.archived-tile-wrap:hover .archived-delete { opacity: 1; }
+/* Select-mode visual: dim everything, accent-outline the selected tiles.
+   pointer-events on the <a> is disabled so target="_blank" can't sneak
+   a synchronous navigation past the JS toggle handler — without this,
+   clicking a tile in Select mode both selected it AND opened the
+   media in a new tab, which felt like a misclick every time. The wrap
+   element keeps cursor: pointer so it still looks clickable. */
+.archived-select-mode .archived-tile { cursor: pointer; pointer-events: none; }
+.archived-select-mode .archived-tile-wrap { cursor: pointer; }
+.archived-select-mode .archived-tile-wrap::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  pointer-events: none;
+  transition: border-color 80ms ease, background 80ms ease;
+}
+.archived-select-mode .archived-selected .archived-tile-wrap::after,
+.archived-select-mode .archived-tile-wrap.archived-selected::after {
+  border-color: var(--accent);
+  background: rgba(80, 120, 255, 0.15);
+}
+.archived-select-mode .archived-delete { display: none; }
+.archived-select-toggle {
+  margin-left: auto;
+  padding: 3px 10px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elev-2, transparent);
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+.archived-select-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.archived-bulk-bar {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+.archived-bulk-delete {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--bad, #c73a4a);
+  background: var(--bad, #c73a4a);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.archived-bulk-delete:hover { opacity: 0.9; }
+.archived-bulk-delete:disabled { opacity: 0.6; cursor: progress; }
+.archived-delete {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, border-color 120ms ease;
+  z-index: 1;
+}
+.archived-delete:hover { background: var(--bad, #c73a4a); border-color: var(--bad, #c73a4a); }
+.archived-delete:disabled { opacity: 0.4; cursor: progress; }
 .archived-tile {
   position: relative;
   display: block;
@@ -1363,6 +1678,13 @@ textarea {
   padding: 2px 5px;
   border-radius: 3px;
 }
+.archive-open-hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: 6px;
+  font-weight: 400;
+}
+.notes-card-head:hover .archive-open-hint { color: var(--accent); }
 .archive-users { display: flex; flex-wrap: wrap; gap: 6px; }
 .archive-user {
   display: inline-flex;
