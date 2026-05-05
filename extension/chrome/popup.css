@@ -54,6 +54,16 @@ html, body {
 .primary:hover { background: var(--accent-hover); }
 .secondary { background: transparent; color: var(--text); border-color: var(--border); }
 .secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Run + Stop side-by-side. Run takes the bulk of the width (it's the
+   primary affordance); Stop is a small fixed-width companion. */
+.run-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+.run-row .primary { flex: 1; }
+.run-row #stop-export { width: 70px; flex: 0 0 70px; }
 .link-row {
   display: block;
   padding: 6px 8px;
@@ -64,6 +74,70 @@ html, body {
   font-size: 13px;
 }
 .link-row:hover { background: var(--bg-elev); color: var(--accent); }
+
+/* Schedule controls — checkbox toggle + number input + unit picker. */
+.schedule-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.schedule-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--text);
+}
+.schedule-toggle input[type="checkbox"] {
+  margin: 0;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+#schedule-amount {
+  width: 56px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  /* Hide the up/down spinner arrows — they look noisy in the
+     compact popup and the unit selector next to the field is the
+     primary affordance anyway. */
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+#schedule-amount::-webkit-inner-spin-button,
+#schedule-amount::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+#schedule-amount:disabled,
+#schedule-unit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+#schedule-unit {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.schedule-status {
+  margin-left: auto;
+  font-size: 11px;
+}
 .row {
   display: block;
   margin: 8px 0;
@@ -105,4 +179,44 @@ html, body {
   font-size: 10px;
   color: var(--muted);
   text-align: center;
+}
+
+/* Recent exports card. */
+.export-stats-summary {
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+.export-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  /* Show ~3 entries, then scroll the rest. ~20px per item + 3px gap.
+     Scrollbar hidden via webkit + IE/edge rules; still scrollable
+     with wheel/trackpad. The bottom edge fades to hint at more. */
+  max-height: 66px;
+  overflow-y: auto;
+  scrollbar-width: none;          /* Firefox */
+  -ms-overflow-style: none;       /* IE / old Edge */
+  mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 12px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 12px), transparent 100%);
+}
+.export-history::-webkit-scrollbar { display: none; }
+.export-history li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.export-history .badge {
+  font-size: 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
 }

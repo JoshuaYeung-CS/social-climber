@@ -14,22 +14,30 @@
   <section class="card">
     <h2>Run export</h2>
     <p class="muted">Opens Meta's data-export page and auto-fills it with your saved preferences (JSON, followers + following, all time, Google Drive). You handle the password if it asks.</p>
-    <button class="primary" id="run-export">Run export</button>
-    <p class="muted" style="margin-top:10px">Or — drive it manually and use these one-click helpers when you're on the matching screen:</p>
-    <div class="quick-row">
-      <button class="secondary" id="toggle-followers-only" title="On 'Customize information' screen">Only Followers + Following</button>
-      <button class="secondary" id="set-format-json" title="On 'Format' screen">Format → JSON</button>
-      <button class="secondary" id="set-date-all-time" title="On 'Date range' screen">Date → All time</button>
-      <button class="secondary" id="fill-email" title="Auto-types your saved notification email">Fill notification email</button>
+    <div class="run-row">
+      <button class="primary" id="run-export">Run export</button>
+      <button class="secondary" id="stop-export" title="Cancel an in-progress export and prevent auto-resume on the next page load">Stop</button>
+    </div>
+    <div class="schedule-row">
+      <label class="schedule-toggle">
+        <input type="checkbox" id="schedule-on" />
+        <span>Run automatically every</span>
+      </label>
+      <input type="number" id="schedule-amount" min="1" step="1" value="1" inputmode="numeric" />
+      <select id="schedule-unit">
+        <option value="minutes">minutes</option>
+        <option value="hours" selected>hours</option>
+        <option value="days">days</option>
+      </select>
+      <span class="schedule-status muted small" id="schedule-status"></span>
     </div>
   </section>
 
   <section class="card">
-    <h2>Quick links</h2>
-    <a class="link-row" id="open-tracker" href="#">Open tracker home →</a>
-    <a class="link-row" id="open-lists" href="#">Open lists →</a>
-    <a class="link-row" id="open-imports" href="#">Open imports →</a>
-    <button class="secondary" id="save-all-tabs" style="margin-top:8px">Save all open IG tabs to follow queue</button>
+    <h2>Tools</h2>
+    <button class="secondary" id="save-all-tabs">Save all open IG tabs to follow queue</button>
+    <button class="secondary" id="archive-current-media" style="margin-top:6px" title="Save the post or reel you're currently viewing">📦 Archive current post / reel</button>
+    <button class="secondary" id="copy-debug-log" style="margin-top:6px" title="Copy the recent [IG Tracker] console output to your clipboard">📋 Copy debug log</button>
   </section>
 
   <section class="card">
@@ -39,8 +47,8 @@
       <input type="text" id="tracker-url" placeholder="http://127.0.0.1:8000" />
     </label>
     <label class="row">
-      <span>Vault URL (optional — for personal media archive)</span>
-      <input type="text" id="vault-url" placeholder="http://localhost:8765 (leave empty to disable)" />
+      <span>Vault URL (optional secondary archive — only if you run a separate vault service. Auto-archive to the tracker's data/media/ works regardless of this)</span>
+      <input type="text" id="vault-url" placeholder="http://localhost:8765 (leave empty unless you run a vault service)" />
     </label>
     <label class="row">
       <span>Save IG password (opt-in, used only on the verify-password screen)</span>
@@ -49,6 +57,10 @@
     <label class="row">
       <span>Notification email (for the "Fill notification email" button)</span>
       <input type="email" id="notification-email" autocomplete="off" placeholder="you@example.com" />
+    </label>
+    <label class="row">
+      <span>Google account email (auto-pick on the OAuth chooser)</span>
+      <input type="email" id="google-account-email" autocomplete="off" placeholder="(leave empty to pick manually)" />
     </label>
     <label class="row check">
       <input type="checkbox" id="autosubmit-google" />
@@ -63,6 +75,12 @@
       <span>Auto-archive viewed posts &amp; reels (saves locally to data/media/)</span>
     </label>
     <button class="secondary" id="save-settings">Save settings</button>
+  </section>
+
+  <section class="card" id="export-stats-card" hidden>
+    <h2>Recent exports</h2>
+    <div class="export-stats-summary muted small" id="export-stats-summary"></div>
+    <ul class="export-history" id="export-history"></ul>
   </section>
 
   <footer class="foot">

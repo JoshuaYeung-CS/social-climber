@@ -1,12 +1,14 @@
 {
   "manifest_version": 3,
   "name": "IG Tracker companion",
-  "version": "1.0.0",
+  "version": "1.0.82",
   "description": "Auto-fills the Instagram data export wizard and overlays your local IG Tracker history on profile pages.",
   "permissions": [
     "storage",
     "activeTab",
-    "tabs"
+    "tabs",
+    "alarms",
+    "debugger"
   ],
   "host_permissions": [
     "https://www.instagram.com/*",
@@ -39,6 +41,13 @@
   "content_scripts": [
     {
       "matches": ["https://www.instagram.com/*"],
+      "js": ["content/ig-network-interceptor.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://www.instagram.com/*"],
       "js": ["content/ig-profile.js"],
       "css": ["content/ig-profile.css"],
       "run_at": "document_idle"
@@ -49,7 +58,8 @@
         "https://www.instagram.com/accounts/center/*"
       ],
       "js": ["content/meta-export.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     },
     {
       "matches": ["https://accounts.google.com/*"],
