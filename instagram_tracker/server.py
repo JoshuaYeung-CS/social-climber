@@ -3019,6 +3019,7 @@ def archive_queue():
         skip_tagged = (
             {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
             | {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
+            | {r["username"] for r in tags_mod.list_with_flag(conn, "archive_skip")}
         )
 
     seen = set()

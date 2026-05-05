@@ -1618,6 +1618,68 @@ textarea#queue-input::-webkit-scrollbar { display: none; }
 .notes-users::-webkit-scrollbar-thumb:hover {
   background: rgba(79, 140, 255, 0.7);
 }
+
+.archive-queue-add-row {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+.archive-queue-add-row input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 13px;
+}
+.archive-queue-add-row button {
+  white-space: nowrap;
+}
+.archive-queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.archive-queue-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.archive-queue-list li:last-child { border-bottom: none; }
+.archive-queue-list .qbadge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(79, 140, 255, 0.15);
+  color: var(--accent);
+  white-space: nowrap;
+}
+.archive-queue-list .qbadge.manual {
+  background: rgba(255, 165, 70, 0.15);
+  color: #ffa946;
+}
+.archive-queue-list .qname { flex: 1; font-variant-numeric: tabular-nums; }
+.archive-queue-list .qremove {
+  padding: 2px 8px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.archive-queue-list .qremove:hover {
+  border-color: #b45a5a;
+  color: #ffb4b4;
+}
 .notes-user {
   display: flex;
   align-items: baseline;

@@ -324,11 +324,106 @@ async function loadHome() {
     );
 
     loadArchiveCard();
+    loadArchiveQueueCard();
   } catch (e) {
     console.error(e);
     toast(`Couldn't load home: ${e.message}`);
   }
 }
+
+// Archive queue card — shows what the auto-archive runner will visit
+// next, with add/remove. Hidden when both queue is empty AND no
+// favorites have been set up (no point showing an empty queue if
+// the user isn't using the runner).
+async function loadArchiveQueueCard() {
+  const card = $("#archive-queue-card");
+  if (!card) return;
+  let data;
+  try {
+    data = await api.get("/api/archive-queue");
+  } catch (e) {
+    card.hidden = true;
+    return;
+  }
+  const queue = data.queue || [];
+  const stats = data.stats || {};
+  const manualSet = new Set(data.manual_in_queue || []);
+  if (queue.length === 0 && !stats.favorite_total && !stats.manual_total) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  const summary = [
+    `${queue.length} queued`,
+    stats.manual_in_queue ? `${stats.manual_in_queue} manual` : null,
+    stats.skipped_already_archived ? `${stats.skipped_already_archived} already archived` : null,
+    stats.skipped_user_cleared ? `${stats.skipped_user_cleared} you cleared` : null,
+    stats.skipped_tagged ? `${stats.skipped_tagged} skipped (tagged)` : null,
+  ].filter(Boolean).join(" · ");
+  $("#archive-queue-summary").textContent = summary;
+
+  const list = $("#archive-queue-list");
+  list.innerHTML = queue.map((u) => {
+    const isManual = manualSet.has(u);
+    const safeU = escapeHtml(u);
+    return `<li>
+      <span class="qbadge${isManual ? " manual" : ""}">${isManual ? "manual" : "favorite"}</span>
+      <span class="qname"><a href="https://www.instagram.com/${encodeURIComponent(u)}/" target="_blank" rel="noopener">@${safeU}</a></span>
+      <button class="qremove" data-username="${escapeAttr(u)}" data-manual="${isManual ? "1" : "0"}">Remove</button>
+    </li>`;
+  }).join("");
+
+  list.querySelectorAll(".qremove").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const u = btn.dataset.username;
+      const isManual = btn.dataset.manual === "1";
+      btn.disabled = true;
+      btn.textContent = "…";
+      try {
+        if (isManual) {
+          // Manual entries: just untag need_archive.
+          await api.post("/api/tags", { username: u, flag: "need_archive", value: false });
+        } else {
+          // Favorite entries: set archive_skip so they don't re-appear,
+          // without un-favoriting them.
+          await api.post("/api/tags", { username: u, flag: "archive_skip", value: true });
+        }
+        await loadArchiveQueueCard();
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = "Failed";
+        setTimeout(() => { btn.textContent = "Remove"; }, 1500);
+      }
+    });
+  });
+}
+
+async function _archiveQueueAdd() {
+  const input = $("#archive-queue-add-input");
+  const btn = $("#archive-queue-add-btn");
+  const u = (input.value || "").trim().replace(/^@/, "");
+  if (!u) return;
+  btn.disabled = true;
+  btn.textContent = "Adding…";
+  try {
+    // If the account was previously archive_skip'd, clear that too so
+    // it actually re-enters the queue.
+    await api.post("/api/tags", { username: u, flag: "archive_skip", value: false });
+    await api.post("/api/tags", { username: u, flag: "need_archive", value: true });
+    btn.textContent = "Added ✓";
+    input.value = "";
+    setTimeout(() => { btn.textContent = "Add"; btn.disabled = false; loadArchiveQueueCard(); }, 700);
+  } catch (e) {
+    btn.textContent = "Failed";
+    setTimeout(() => { btn.textContent = "Add"; btn.disabled = false; }, 1500);
+  }
+}
+document.addEventListener("DOMContentLoaded", () => {
+  const btn = $("#archive-queue-add-btn");
+  const input = $("#archive-queue-add-input");
+  if (btn) btn.addEventListener("click", _archiveQueueAdd);
+  if (input) input.addEventListener("keydown", (e) => { if (e.key === "Enter") _archiveQueueAdd(); });
+});
 
 // Surface the local media archive on the home view. Hidden entirely
 // when nothing has been auto-archived yet (the auto-archive setting

@@ -8,7 +8,7 @@ import sqlite3
 
 from .db import utc_now_iso
 
-VALID_FLAGS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive"}
+VALID_FLAGS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive", "archive_skip"}
 
 
 def _added_at_col(flag: str) -> str:
@@ -97,8 +97,9 @@ def set_flag(
                 random_request, random_request_added_at,
                 now_public, now_public_added_at,
                 need_archive, need_archive_added_at,
+                archive_skip, archive_skip_added_at,
                 profile_url, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 username,
@@ -110,6 +111,7 @@ def set_flag(
                 cols["random_request"], added["random_request_added_at"],
                 cols["now_public"], added["now_public_added_at"],
                 cols["need_archive"], added["need_archive_added_at"],
+                cols["archive_skip"], added["archive_skip_added_at"],
                 profile_url, now,
             ),
         )

@@ -212,6 +212,15 @@ def connect(db_path: Path) -> sqlite3.Connection:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN need_archive INTEGER NOT NULL DEFAULT 0")
     if "need_archive_added_at" not in cols:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN need_archive_added_at TEXT")
+    # archive_skip: explicit "do NOT include in the auto-archive
+    # queue" flag. Used by the home-page queue UI's Remove button so
+    # the user can take a favorited account off the queue without
+    # un-favoriting it. The runner endpoint excludes any account with
+    # this flag set even if it's also in favorites or need_archive.
+    if "archive_skip" not in cols:
+        conn.execute("ALTER TABLE profile_tags ADD COLUMN archive_skip INTEGER NOT NULL DEFAULT 0")
+    if "archive_skip_added_at" not in cols:
+        conn.execute("ALTER TABLE profile_tags ADD COLUMN archive_skip_added_at TEXT")
     # Free-form per-account notes — the user can jot down a VSCO link,
     # who introduced them, why they're tagged, etc. One row per username
     # max; an empty/whitespace string is treated as no note.

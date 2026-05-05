@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/static/icon.svg" />
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/static/styles.css?v=10" />
+  <link rel="stylesheet" href="/static/styles.css?v=11" />
   <title>Instagram Tracker</title>
 </head>
 <body>
@@ -114,6 +114,17 @@
         </a>
         <p class="muted small" id="archive-summary"></p>
         <div id="archive-users" class="notes-users"></div>
+      </div>
+
+      <div class="card" id="archive-queue-card" hidden>
+        <h2>📥 Archive queue</h2>
+        <p class="muted small">Accounts the auto-archive runner will visit (favorites + manually-added). Add a username to queue it; remove takes it off the queue without un-favoriting.</p>
+        <div class="archive-queue-add-row">
+          <input type="text" id="archive-queue-add-input" placeholder="Add @username to queue" autocomplete="off" />
+          <button class="secondary" id="archive-queue-add-btn">Add</button>
+        </div>
+        <p class="muted small" id="archive-queue-summary"></p>
+        <ul id="archive-queue-list" class="archive-queue-list"></ul>
       </div>
     </section>
 
@@ -246,6 +257,6 @@
   <div id="toast" class="toast" hidden></div>
 
   <script src="/static/archive-gallery.js"></script>
-  <script src="/static/app.js?v=3"></script>
+  <script src="/static/app.js?v=4"></script>
 </body>
 </html>
