@@ -1258,8 +1258,12 @@ window.addEventListener("popstate", (e) => {
   modalTaggedDirty = false;
 });
 
-// Bootstrap initial state from URL hash.
-(function bootstrapHistory() {
+// Bootstrap initial state from URL hash. NOTE: must run AFTER all the
+// `const select = ...` etc. declarations later in this file have been
+// initialized — `goToList` references `select`, which is in the
+// temporal dead zone if we run the bootstrap inline here. Called from
+// the boot section at the bottom of the file.
+function bootstrapHistory() {
   if (!history.state) {
     const hash = location.hash.slice(1);
     if (hash) {
@@ -1284,7 +1288,7 @@ window.addEventListener("popstate", (e) => {
     }
     history.replaceState({ view: "home" }, "", "");
   }
-})();
+}
 
 async function openAccountModal(username, push = true) {
   // Open the modal immediately with a spinner — feedback that the click
@@ -3038,6 +3042,12 @@ function escapeAttr(s) {
 
 // ---------- boot ----------
 
+// Resolve URL-hash routing FIRST so that on a fresh new-tab open of
+// e.g. /#lists/<kind> we navigate to the list before loadHome paints
+// the home view underneath. bootstrapHistory may call goToList (which
+// uses const-declared `select` etc.), so it has to run after all the
+// declarations above have initialized.
+bootstrapHistory();
 loadHome();
 
 // Allow ?lookup=<username|url> to auto-open a lookup. Used by iOS Shortcuts and bookmarklets.
