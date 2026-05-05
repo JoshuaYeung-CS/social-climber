@@ -83,15 +83,37 @@ async function _trackerScan() {
 async function _onScheduledExportFire() {
   console.log("[IG Tracker] Scheduled export alarm fired — opening wizard.");
   const startedAt = Date.now();
-  // Open the tab first so we know its id, then tag the run flag with
-  // it. Other wizard tabs the user opens manually within the run
-  // window won't match this tab id and will skip auto-filling.
-  const tab = await chrome.tabs.create({
-    url: "https://accountscenter.instagram.com/info_and_permissions/dyi/",
-    active: false, // open in background so it doesn't steal focus
-  });
+  // Open in a SEPARATE non-focused window rather than a background
+  // tab in the user's main window. Why: background tabs get
+  // aggressive timer throttling (≥1s minimum interval) which breaks
+  // the wizard's pacing, and the AudioContext keep-awake can't arm
+  // without a user gesture in an unattended scheduled run. A tab in
+  // its own window is in the foreground of that window — full speed
+  // — but the window doesn't steal focus from the main work area
+  // (focused: false). Window opens compact and minimized-style so
+  // it stays out of the way.
+  let tabId = null;
+  try {
+    const win = await chrome.windows.create({
+      url: "https://accountscenter.instagram.com/info_and_permissions/dyi/",
+      focused: false,
+      type: "normal",
+      state: "minimized",
+    });
+    tabId = win?.tabs?.[0]?.id ?? null;
+  } catch (e) {
+    // Fallback: if windows.create fails (e.g., insufficient permissions
+    // on some platforms), fall back to a foreground tab. Worse UX
+    // but at least the wizard runs.
+    console.warn("[IG Tracker] windows.create failed, falling back to active tab:", e?.message || e);
+    const tab = await chrome.tabs.create({
+      url: "https://accountscenter.instagram.com/info_and_permissions/dyi/",
+      active: true,
+    });
+    tabId = tab?.id ?? null;
+  }
   await chrome.storage.local.set({
-    wizardRunRequested: { ts: startedAt, tabId: tab?.id ?? null },
+    wizardRunRequested: { ts: startedAt, tabId },
     pendingArrival: { startedAt },
   });
   await _appendHistory({ ts: startedAt, status: "triggered" });
@@ -224,10 +246,31 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 async function _dispatchTrustedClick(tabId, x, y) {
-  // Two-step (mousePressed → mouseReleased) plus a synthetic move
-  // first so the page sees a hover transition before the click.
-  // Useful because some React onClicks debounce against rapid
-  // synthetic-only bursts; a real interaction always has a move.
+  // Strategy A: Input.synthesizeTapGesture. Produces a complete
+  // touch+pointer+mouse event cascade that matches a real user tap
+  // (Chrome's input layer generates the canonical sequence). The
+  // simpler Input.dispatchMouseEvent (Strategy B below) only fires
+  // mouse events directly — Meta's React handlers appear to gate
+  // against that on critical buttons (Create export, destination
+  // chooser). v1.0.112 log: clicking <div role=button> "Create export"
+  // via dispatchMouseEvent did NOT advance the page across 6 ancestor
+  // levels. The tap gesture may slip past because it goes through
+  // the same input pipeline as a real touch/click.
+  try {
+    await chrome.debugger.sendCommand({ tabId }, "Input.synthesizeTapGesture", {
+      x, y,
+      duration: 60,
+      tapCount: 1,
+      gestureSourceType: "default",
+    });
+    console.log(`[IG Tracker] trusted-click: synthesizeTapGesture @ (${x},${y}) ✓`);
+    return;
+  } catch (e) {
+    console.warn(`[IG Tracker] trusted-click: synthesizeTapGesture failed (${e?.message || e}) — falling back to dispatchMouseEvent`);
+  }
+  // Strategy B: legacy dispatchMouseEvent (mouseMoved → mousePressed
+  // → mouseReleased). Kept as fallback in case the gesture API isn't
+  // available on this Chrome version or fails for other reasons.
   await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
     type: "mouseMoved", x, y, button: "none", buttons: 0,
   });
@@ -237,6 +280,7 @@ async function _dispatchTrustedClick(tabId, x, y) {
   await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
     type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1,
   });
+  console.log(`[IG Tracker] trusted-click: dispatchMouseEvent @ (${x},${y}) ✓ [fallback]`);
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

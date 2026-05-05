@@ -108,6 +108,15 @@ async function consumeWizardFlag() {
 // runs between every step without the per-step code needing to
 // know about cancellation.
 async function _abortIfStopped() {
+  // Danger guard: did the user click "Export to device" / similar
+  // mid-run? The user-click tracker sets `_userPickedDeviceDuringRun`
+  // when it sees one, so we halt cleanly before the wizard submits
+  // to the wrong destination. Without this, an accidental tap on
+  // "Export to device" silently re-caches device on Meta's side and
+  // unwinds whatever destination work was already done.
+  if (_userPickedDeviceDuringRun) {
+    throw new Error("You clicked 'Export to device' during the wizard — halted to prevent submitting to device. Re-run after fixing destination.");
+  }
   const stored = await chrome.storage.local.get(["wizardRunRequested"]);
   const flag = stored.wizardRunRequested;
   if (!flag) {
@@ -227,16 +236,84 @@ function findByText(text, within = document) {
   return _findByText(text, within, false) || _findByText(text, within, true);
 }
 
+// Walk the DOM including any shadow roots. Meta sometimes mounts
+// modal content inside a shadow DOM, which document.querySelectorAll
+// won't traverse — _allDeep collects everything, including elements
+// inside ::shadow boundaries. Used by findByText / findRowByLabel
+// when the standard light-DOM walk yields nothing.
+function _allDeep(root) {
+  const out = [];
+  const stack = [root];
+  while (stack.length) {
+    const r = stack.pop();
+    if (!r) continue;
+    const nodes = r.querySelectorAll ? r.querySelectorAll("*") : [];
+    for (const n of nodes) {
+      out.push(n);
+      if (n.shadowRoot) stack.push(n.shadowRoot);
+    }
+  }
+  return out;
+}
+
+// True if `el` is inside one of our injected UI panels (status panel,
+// manual prompt, toast). Used to filter findByText results so we never
+// match against text rendered by our own overlays — a v1.0.92 bug had
+// _clickButtonByText("Google Drive") matching the status panel's
+// "Auto-fix: switching destination to Google Drive" text and clicking
+// our own UI instead of Meta's.
+function _isInIgtInjected(el) {
+  let cur = el;
+  while (cur && cur !== document.body) {
+    if (cur.id && _IGT_INJECTED_IDS.has(cur.id)) return true;
+    cur = cur.parentElement;
+  }
+  return false;
+}
+
 function _findByText(text, within, lenient) {
   const target = String(text).trim().toLowerCase();
   if (!target) return null;
-  const all = within.querySelectorAll("*");
+  // Light-DOM pass first (cheaper). If nothing matches we fall to
+  // _allDeep which descends into shadow roots.
+  let all = within.querySelectorAll("*");
+  let r = _findByTextScan(target, Array.from(all), lenient);
+  if (r) return r;
+  // Shadow-DOM scan.
+  return _findByTextScan(target, _allDeep(within), lenient);
+}
+
+function _findByTextScan(target, all, lenient) {
   const tryReturn = (el) => {
+    if (_isInIgtInjected(el)) return null;  // ignore matches in our own panels
     const c = _climbToClickable(el);
-    if (c && _isVisible(c)) return c;
+    if (c && _isVisible(c) && !_isInIgtInjected(c)) return c;
     if (lenient && _isVisible(el)) return el;
     return null;
   };
+  // Pass 0: aria-label exact match. Meta sometimes renders buttons
+  // with the label set via accessibility (aria-label) rather than
+  // visible text — particularly on icon-prefixed buttons or React
+  // components that put the text in a sibling element. Without this
+  // pass, findByText was returning null for elements that DOM-look
+  // empty but are clearly labeled "Create export" or "Export your
+  // information" to the accessibility tree.
+  for (const el of all) {
+    if (!el.getAttribute) continue;
+    const al = (el.getAttribute("aria-label") || "").trim().toLowerCase();
+    if (al !== target) continue;
+    const r = tryReturn(el); if (r) return r;
+  }
+  // Pass 0b: aria-label substring match for the target inside a
+  // longer label (e.g., aria-label="Create export — start a new
+  // download" still matches target "create export").
+  for (const el of all) {
+    if (!el.getAttribute) continue;
+    const al = (el.getAttribute("aria-label") || "").trim().toLowerCase();
+    if (!al.includes(target)) continue;
+    if (al.length > Math.max(target.length + 60, 80)) continue;
+    const r = tryReturn(el); if (r) return r;
+  }
   // Pass 1: a leaf node whose direct text equals the target — this is
   // typically the <span> inside a row that holds just "Google Drive"
   // or "JSON".
@@ -293,10 +370,11 @@ function _findRowByLabel(text, within, lenient) {
   // a toggle (Customize Information items, where the label and
   // checkbox are siblings). Else, in lenient mode, the element itself.
   const tryReturn = (el) => {
+    if (_isInIgtInjected(el)) return null;
     const clickable = _climbToClickable(el);
-    if (clickable && _isVisible(clickable)) return clickable;
+    if (clickable && _isVisible(clickable) && !_isInIgtInjected(clickable)) return clickable;
     const row = _climbToRow(el);
-    if (row && _isVisible(row)) return row;
+    if (row && _isVisible(row) && !_isInIgtInjected(row)) return row;
     if (lenient && _isVisible(el)) return el;
     return null;
   };
@@ -428,31 +506,45 @@ async function detectCurrentScreen(timeoutMs = 3000) {
     if (text.includes("connect to google drive")) {
       return "connect";
     }
+    // chooseWhere — SPECIFIC heading. Checked BEFORE the manage-
+    // requests start pattern because when the bot clicks Create-
+    // export on the manage-requests modal, the chooseWhere modal
+    // opens ON TOP of it, but the underlying modal's text
+    // ("Current activity" + "Past activity" + "Create export") is
+    // still in the DOM. Without this ordering, detectCurrentScreen
+    // returned "start" after a successful click → waitForScreenChange
+    // saw no advance → "Stuck on screen 'start'" even though the
+    // click had actually worked.
+    if (text.includes("choose where to export") ||
+        text.includes("where do you want to export")) {
+      return "chooseWhere";
+    }
+    // chooseService — SPECIFIC heading only here. The (drive &&
+    // dropbox) fallback is checked AFTER the start matcher, since
+    // the manage-requests modal mentions Google Drive in existing-
+    // request descriptions and would otherwise misclassify start.
+    if (text.includes("choose an external service") ||
+        text.includes("choose external service")) {
+      return "chooseService";
+    }
     // Manage-requests start screen: the May 2026 layout shows a
     // tabbed "Current activity / Past activity" view with a
-    // "Create export" CTA. Identifying this before chooseService
-    // is critical — the existing-request descriptions inside this
-    // modal say "Google Drive", which would otherwise trip the
-    // chooseService matcher's (google drive && dropbox) fallback.
+    // "Create export" CTA.
     if (text.includes("current activity") &&
         text.includes("past activity") &&
         text.includes("create export")) {
       return "start";
     }
-    // Service-selection screen: list of providers (Google Drive, Dropbox, …).
-    if (text.includes("choose an external service") ||
-        text.includes("choose external service") ||
-        (text.includes("google drive") && text.includes("dropbox"))) {
+    // Service-selection fallback: providers list visible without an
+    // explicit heading. Last because of the manage-requests false-
+    // positive risk noted above.
+    if (text.includes("google drive") && text.includes("dropbox")) {
       return "chooseService";
     }
-    // Where screen: distinctive heading "Choose where to export". Older
-    // variants surfaced the option labels themselves in body text
-    // ("Export to external service" + "Download to your device") — keep
-    // those as a fallback so old rollouts still detect.
-    if (text.includes("choose where to export") ||
-        text.includes("where do you want to export") ||
-        (text.includes("export to external service") &&
-         text.includes("download to your device"))) {
+    // chooseWhere fallback for older rollouts that surfaced the
+    // option labels themselves rather than the heading.
+    if (text.includes("export to external service") &&
+        text.includes("download to your device")) {
       return "chooseWhere";
     }
     // Start screen — last resort, runs after all the more-specific
@@ -485,12 +577,175 @@ async function detectCurrentScreen(timeoutMs = 3000) {
 // earlier version dispatched both a synthetic click event AND
 // el.click(), which made server actions like "Start export" submit
 // twice and queue two exports.
+// Ring buffer of recent bot-fired click coordinates AND element refs.
+// Used by the user-click tracker to distinguish "user clicked here"
+// from "we clicked here." Two matching paths:
+//
+//   1. Coord match — works for trusted-clicks dispatched via
+//      chrome.debugger.Input.dispatchMouseEvent, which carry real
+//      clientX/Y values.
+//   2. Element identity match — works for synthetic `el.click()`
+//      fallbacks, which produce click events with clientX=0,
+//      clientY=0 (no coords) → coord match would falsely flag them
+//      as user clicks. We also store the clicked element ref and
+//      check `ev.target === el || el.contains(ev.target)`.
+//
+// Without #2, every time `_trustedClick` fell back to clickElement,
+// the resulting click event was logged as a "user click" with the
+// element's bounding rect — making it look like the user had clicked
+// somewhere they hadn't. (Specifically, this is what made it look
+// like the user accidentally clicked "Export to device" when
+// actually our bot's synthetic click on a wrapper landed on it.)
+const _BOT_CLICKS = [];
+const _BOT_CLICK_WINDOW_MS = 400;
+function _markBotClick(x, y, el) {
+  const now = Date.now();
+  _BOT_CLICKS.push({ x, y, el: el || null, ts: now });
+  // Trim entries older than 5s.
+  const cutoff = now - 5000;
+  while (_BOT_CLICKS.length && _BOT_CLICKS[0].ts < cutoff) _BOT_CLICKS.shift();
+}
+function _wasRecentBotClick(ev) {
+  const now = Date.now();
+  for (const bc of _BOT_CLICKS) {
+    if (now - bc.ts > _BOT_CLICK_WINDOW_MS) continue;
+    // Coord match — only meaningful when ev has real coords
+    // (trusted-click via chrome.debugger).
+    if (ev.clientX > 0 || ev.clientY > 0) {
+      const dx = Math.abs(bc.x - ev.clientX);
+      const dy = Math.abs(bc.y - ev.clientY);
+      if (dx <= 6 && dy <= 6) return true;
+    }
+    // Element identity match — covers synthetic el.click() events
+    // (which have clientX=0,clientY=0) and click-bubbling cascades.
+    if (bc.el && ev.target) {
+      if (ev.target === bc.el) return true;
+      try {
+        if (bc.el.contains(ev.target) || ev.target.contains(bc.el)) return true;
+      } catch (_) { /* dom errors */ }
+    }
+  }
+  return false;
+}
+
+// Passive user-click tracker. Capture-phase click listener that logs
+// every click NOT fired by us. Two states the guard cares about:
+//
+//   1. `__igtWizardRunning` — wizard is driving a screen.
+//      Halt immediately on any "Export to device" / dest-direction
+//      click (those re-cache device on Meta's side).
+//   2. `__igtInDestFix` — we're inside _navigateBackToFixDest,
+//      the most fragile sequence. Halt on ANY user click — even
+//      benign-looking ones like the destination header — because
+//      anything that changes page state during the multi-strategy
+//      attempt invalidates the verification (proven by the v1.0.105
+//      log: user clicked the destination header during the 1.5s
+//      between S1 and S2, collapsing the chooser, so S2 found rect
+//      (0,0)).
+let _userPickedDeviceDuringRun = false;
+let _userClickedDuringDestFix = false;
+function _isDangerDeviceText(txt) {
+  const t = (txt || "").trim().toLowerCase();
+  if (!t) return false;
+  // Whole-button match — these are the actual chooser button labels
+  // we want to catch. Don't substring-match: "device" appears in
+  // descriptive text too ("on your device", "device storage", etc.).
+  return t === "export to device"
+      || t === "download to device"
+      || t === "download to your device"
+      || t === "save to device"
+      || t === "save to your device"
+      || t === "export to your device";
+}
+function _initUserClickTracker() {
+  if (window.__igtClickTracker) return;
+  window.__igtClickTracker = true;
+  document.addEventListener("click", (ev) => {
+    try {
+      if (_isInIgtInjected(ev.target)) return;
+      // Only count truly user-initiated events. Meta's React dispatches
+      // its own click events internally (isTrusted=false) — those would
+      // otherwise look like user clicks. Bot clicks via chrome.debugger
+      // are isTrusted=true but still get filtered via element/coord
+      // identity match below; real user clicks are isTrusted=true and
+      // typically don't match a recent bot click.
+      if (!ev.isTrusted) return;
+      if (_wasRecentBotClick(ev)) return;
+      const el = ev.target;
+      const tag = (el.tagName || "").toLowerCase();
+      const role = el.getAttribute && el.getAttribute("role");
+      const txt = (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 80);
+      const r = el.getBoundingClientRect();
+      const pos = `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`;
+      // Build a simple selector path (3 levels up) so we can spot
+      // distinctive ancestor classes if we want to replay.
+      const path = [];
+      let cur = el;
+      for (let i = 0; cur && cur !== document.body && i < 3; i++, cur = cur.parentElement) {
+        const rl = cur.getAttribute && cur.getAttribute("role");
+        path.push(`${(cur.tagName || "").toLowerCase()}${rl ? `[role=${rl}]` : ""}`);
+      }
+      // hasFocus() tells us if the IG tab is the active foreground
+      // tab. If the user is on a different tab (e.g. Netflix), this
+      // returns false. A click event arriving with hasFocus=false is
+      // a phantom — couldn't have been a real user click on this tab.
+      // Bot's `chrome.debugger` clicks also fire with hasFocus=false
+      // when the tab is backgrounded, but those should be filtered
+      // by `_wasRecentBotClick` already.
+      const focused = (typeof document.hasFocus === "function") ? document.hasFocus() : null;
+      const visState = document.visibilityState || "?";
+      console.log(`[IG Tracker] [user click] <${tag}${role ? ` role=${role}` : ""}> "${txt}" @ ${pos} path=${path.join(">")} focused=${focused} vis=${visState} ts=${ev.timeStamp}`);
+      // Danger guard: if the wizard is running AND user clicked a
+      // device-direction button, flag it so _abortIfStopped halts.
+      // BUT: only halt if the tab actually had focus when the click
+      // fired. If hasFocus=false, the user can't be the source — the
+      // event is a phantom (or chrome.debugger residue we missed).
+      // Treating phantoms as halts caused the user (who was watching
+      // Netflix in another tab) to get falsely accused of clicking
+      // device. v1.0.111 log proved this — danger fired on a
+      // backgrounded tab.
+      if (window.__igtWizardRunning) {
+        let probe = el;
+        let dangerMatched = false;
+        for (let i = 0; probe && i < 4; i++, probe = probe.parentElement) {
+          const probeTxt = (probe.innerText || probe.textContent || "").trim();
+          if (_isDangerDeviceText(probeTxt)) { dangerMatched = true; break; }
+        }
+        if (dangerMatched) {
+          if (focused === false) {
+            console.warn(`[IG Tracker] [user click] phantom danger — click on 'Export to device' but tab NOT focused (hasFocus=${focused}). Ignoring; not halting wizard.`);
+          } else {
+            _userPickedDeviceDuringRun = true;
+            console.warn(`[IG Tracker] [user click] DANGER — clicked device-direction button while wizard running (hasFocus=${focused}). Wizard will halt.`);
+            _setStatus({
+              state: "needs-help",
+              step: "⚠ You clicked 'Export to device' — wizard halting",
+              detail: "Don't click destination buttons while the bot is running. Run again from the start.",
+            });
+          }
+        }
+      }
+      // Stricter guard: while the multi-strategy dest-fix is running,
+      // ANY user click invalidates the test. The v1.0.105 log proved
+      // this: user clicked the destination header between S1 and S2,
+      // collapsed the chooser, so we couldn't tell if S1 worked. Set
+      // the flag; _navigateBackToFixDest's loop will detect it and
+      // halt with a clear message.
+      if (window.__igtInDestFix) {
+        _userClickedDuringDestFix = true;
+        console.warn(`[IG Tracker] [user click] during dest-fix — wizard will halt. Don't click anything during the auto-fix sequence.`);
+      }
+    } catch (_) { /* never break the user's click */ }
+  }, { capture: true });
+}
+
 function clickElement(el) {
   if (!el) return false;
   el.scrollIntoView({ block: "center", behavior: "instant" });
   const rect = el.getBoundingClientRect();
   const x = rect.left + rect.width / 2;
   const y = rect.top + rect.height / 2;
+  _markBotClick(x, y, el);
   const opts = {
     bubbles: true, cancelable: true, view: window,
     clientX: x, clientY: y, button: 0,
@@ -520,6 +775,15 @@ function clickElement(el) {
 // fallback isn't lost work.
 async function _trustedClick(el) {
   if (!el) return false;
+  // Hard halt before any click if the danger guard fired. The
+  // _abortIfStopped check only runs in _settle() — the start-screen
+  // click loop doesn't go through _settle between clicks, so without
+  // this gate the wizard happily continues after a "you clicked
+  // device" event was already flagged. v1.0.106 log proved this:
+  // danger fired at 08:58:50.768, wizard kept clicking at .51.760+.
+  if (_userPickedDeviceDuringRun) {
+    throw new Error("Danger flag set (you clicked 'Export to device' during the wizard) — halted before next click.");
+  }
   el.scrollIntoView({ block: "center", behavior: "instant" });
   // Brief pause so layout settles after scroll — coords would be off
   // if we read getBoundingClientRect mid-scroll.
@@ -531,6 +795,7 @@ async function _trustedClick(el) {
   }
   const x = Math.round(rect.left + rect.width / 2);
   const y = Math.round(rect.top + rect.height / 2);
+  _markBotClick(x, y, el);
   // Coords are viewport (page-relative-to-visible). Send to SW for
   // dispatch via chrome.debugger.
   const resp = await new Promise((resolve) => {
@@ -555,6 +820,604 @@ function _describe(el) {
   const role = el.getAttribute && el.getAttribute("role");
   const txt = (el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 50);
   return `<${el.tagName.toLowerCase()}${role ? ` role=${role}` : ""}> "${txt}"`;
+}
+
+// Walk up from `el` to the closest ancestor that looks clickable —
+// role="button" / role="link" / <button> / <a> / a div with explicit
+// onclick or cursor:pointer. Returns the ancestor, or `el` if none.
+// Used so we click on the actual button container Meta wires the
+// React handler to, not on the inner <span> with the label text.
+function _findClickableAncestor(el) {
+  let cur = el;
+  for (let i = 0; cur && cur !== document.body && i < 8; i++, cur = cur.parentElement) {
+    const role = cur.getAttribute && cur.getAttribute("role");
+    if (role === "button" || role === "link") return cur;
+    const tn = (cur.tagName || "").toLowerCase();
+    if (tn === "button" || tn === "a") return cur;
+    if (cur.onclick) return cur;
+    try {
+      const cs = getComputedStyle(cur);
+      if (cs.cursor === "pointer") return cur;
+    } catch (_) {}
+  }
+  return el;
+}
+
+// Snapshot of every visible button-like element on screen, with text
+// + role + aria-disabled + bounding rect. Logged on Stage 2 anomalies
+// so we can see exactly what Meta rendered when the wizard got stuck —
+// the previous logs only showed which matchers fired, not which
+// targets were actually present and clickable.
+function _traceVisibleButtons(label = "buttons") {
+  try {
+    const sel = "[role='button'], [role='link'], button, a";
+    const all = Array.from(document.querySelectorAll(sel)).filter(_isVisible);
+    const items = all.slice(0, 30).map((el) => {
+      const txt = (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 60);
+      const role = el.getAttribute("role") || el.tagName.toLowerCase();
+      const ad = el.getAttribute("aria-disabled");
+      const dis = el.disabled === true || ad === "true";
+      const r = el.getBoundingClientRect();
+      const pos = `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`;
+      return `  · [${role}${dis ? " disabled" : ""}] "${txt}" @ ${pos}`;
+    });
+    console.log(`[IG Tracker] trace(${label}): ${all.length} visible button-like elements${all.length > 30 ? " (showing 30)" : ""}\n${items.join("\n")}`);
+  } catch (e) {
+    console.log(`[IG Tracker] trace(${label}) failed: ${e.message}`);
+  }
+}
+
+// Dump a structured JSON snapshot of every visible element in a region
+// of interest, used to diagnose dest-fix failures offline. Captures
+// tag, role, all attributes, computed cursor + pointer-events,
+// position, parent chain (up to 5 levels), and text — everything we
+// need to reverse-engineer Meta's React handler placement without a
+// live browser. Output goes to the [IG Tracker] debug log.
+function _dumpDOMSnapshot(label, opts = {}) {
+  const maxElements = opts.maxElements || 60;
+  const matchText = opts.matchText;            // optional: only elements containing this text
+  try {
+    const all = Array.from(document.querySelectorAll("*"));
+    const out = [];
+    for (const el of all) {
+      if (out.length >= maxElements) break;
+      if (_isInIgtInjected(el)) continue;
+      if (!_isVisible(el)) continue;
+      const txt = (el.innerText || el.textContent || "").trim();
+      if (matchText && !txt.toLowerCase().includes(matchText.toLowerCase())) continue;
+      // Skip the giant body wrapper, sidebar items, etc.
+      if (txt.length > 250) continue;
+      const r = el.getBoundingClientRect();
+      const attrs = {};
+      try {
+        for (const a of el.attributes) attrs[a.name] = a.value.slice(0, 60);
+      } catch (_) {}
+      let cursor = "", pe = "";
+      try {
+        const cs = getComputedStyle(el);
+        cursor = cs.cursor;
+        pe = cs.pointerEvents;
+      } catch (_) {}
+      const parents = [];
+      let p = el.parentElement;
+      for (let i = 0; p && p !== document.body && i < 5; i++, p = p.parentElement) {
+        const role = p.getAttribute && p.getAttribute("role");
+        const cls = (p.className || "").toString().slice(0, 30);
+        parents.push(`${(p.tagName || "").toLowerCase()}${role ? `[role=${role}]` : ""}${cls ? `.${cls}` : ""}`);
+      }
+      out.push({
+        tag: (el.tagName || "").toLowerCase(),
+        text: txt.replace(/\s+/g, " ").slice(0, 60),
+        rect: `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`,
+        attrs,
+        cursor,
+        pe,
+        parents: parents.join(">"),
+      });
+    }
+    console.log(`[IG Tracker] dom-snapshot(${label}): ${out.length} elements\n${JSON.stringify(out, null, 2)}`);
+  } catch (e) {
+    console.log(`[IG Tracker] dom-snapshot(${label}) failed: ${e.message}`);
+  }
+}
+
+// Did the destination chooser advance? Returns true if the page state
+// indicates a successful click — either the confirm header now shows
+// drive (and not device), OR a service chooser appeared (Google Drive
+// button visible), OR connect/howOften appeared.
+function _destFixAdvanced() {
+  const t = _wizardPageText();
+  const hasDeviceHeader = /(?:export|download|save)\s+to\s+(?:your\s+)?device\s*[·•]\s*(?:once|daily|monthly|yearly)\b/i.test(t);
+  const hasDriveHeader = /(?:export|send|transfer)\s+to\s+(?:google\s+)?drive\s*[·•]\s*(?:once|daily|monthly|yearly)\b/i.test(t);
+  if (hasDriveHeader && !hasDeviceHeader) return "drive-on-confirm";
+  if (findByText("Google Drive") && !findByText("Export to external service")) return "service-chooser-open";
+  if (/choose how often|how often you want to export/i.test(t)) return "howOften";
+  if (/connect to google drive/i.test(t)) return "connect";
+  return null;
+}
+
+// Find a button by its visible text and click it via trusted-click
+// targeting the button's clickable ancestor (not the inner label).
+// Returns true if a click was issued. Reserved for cases where we
+// know the EXACT button we want (e.g., "Export to external service",
+// "Google Drive") — never use for wrong-direction labels.
+// Strict button matcher: prefers actual <button> / [role=button]
+// elements whose visible text matches `text` exactly or starts with it.
+// findByText's pass-by-pass walk can return a `<div>` whose cursor is
+// 'pointer' (passing _isClickable) but is NOT the React-bound click
+// target — clicking that div fires a no-op while the real button
+// container goes untouched. v1.0.98 hit this exact bug: clicking
+// "Export to external service" returned a wrapper <div>, the click
+// did nothing useful, and the chooser collapsed without selecting.
+function _findStrictButton(text) {
+  const target = String(text).trim().toLowerCase();
+  if (!target) return null;
+  const buttons = Array.from(document.querySelectorAll("button, [role='button']"));
+  for (const b of buttons) {
+    if (_isInIgtInjected(b)) continue;
+    if (!_isVisible(b)) continue;
+    const txt = (b.innerText || b.textContent || "").trim().toLowerCase();
+    if (txt === target) return b;
+    // Multi-line button (e.g. "Notify\njoshua@..." or "Format HTML") — accept
+    // a starts-with match if the button text begins with our target.
+    if (txt.startsWith(target + "\n") || txt.startsWith(target + " ")) return b;
+  }
+  // Aria-label fallback.
+  for (const b of buttons) {
+    if (_isInIgtInjected(b)) continue;
+    if (!_isVisible(b)) continue;
+    const al = (b.getAttribute("aria-label") || "").trim().toLowerCase();
+    if (al === target) return b;
+  }
+  return null;
+}
+
+async function _clickButtonByText(text) {
+  // Strict button match first — picks up the real <button> / [role=button]
+  // element so the trusted-click hits whatever React wired the handler to.
+  const strict = _findStrictButton(text);
+  if (strict) {
+    console.log(`[IG Tracker] _clickButtonByText("${text}") → ${_describe(strict)} [strict]`);
+    await _trustedClick(strict);
+    return true;
+  }
+  // Loose fallback for elements that don't carry a button role
+  // (Meta sometimes renders custom interactive divs with no role).
+  const el = findByText(text);
+  if (!el) return false;
+  const target = _findClickableAncestor(el);
+  console.log(`[IG Tracker] _clickButtonByText("${text}") → ${_describe(target)} [loose]`);
+  await _trustedClick(target);
+  return true;
+}
+
+// Click at a viewport coordinate computed as an offset from a known-
+// findable reference button. Useful when the target button can't be
+// reliably matched / climbed-to (e.g., Meta's React handler is bound
+// to a wrapper our matchers don't reach), but a NEIGHBOURING button
+// IS findable. We grab the reference's bounding rect and click at
+// (refCenterX + dx, refCenterY + dy) directly via chrome.debugger.
+// This bypasses the element-search entirely — the click lands at a
+// real viewport position the same way a user's real cursor would.
+//
+// For example, on the destination chooser, "Export to device" is
+// findable (strict button match works), and "Export to external
+// service" is exactly 53px below it (same x). Calling this with
+// (refButtonText="Export to device", dx=0, dy=53) hits the external
+// service button directly.
+async function _clickAtOffsetFromButton(refButtonText, dx, dy) {
+  const ref = _findStrictButton(refButtonText);
+  if (!ref) {
+    console.warn(`[IG Tracker] _clickAtOffsetFromButton: ref "${refButtonText}" not found`);
+    return false;
+  }
+  ref.scrollIntoView({ block: "center", behavior: "instant" });
+  // Settle the scroll before reading rect.
+  await sleep(120);
+  const rect = ref.getBoundingClientRect();
+  const x = Math.round(rect.left + rect.width / 2 + dx);
+  const y = Math.round(rect.top + rect.height / 2 + dy);
+  console.log(`[IG Tracker] _clickAtOffsetFromButton: ref "${refButtonText}" rect=(${Math.round(rect.left)},${Math.round(rect.top)} ${Math.round(rect.width)}x${Math.round(rect.height)}) → click @ (${x},${y}) [dx=${dx} dy=${dy}]`);
+  _markBotClick(x, y, null);
+  // Direct chrome.debugger dispatch — bypasses all element search.
+  const resp = await new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ type: "trusted-click", x, y }, (r) => {
+        if (chrome.runtime.lastError) { resolve({ ok: false, error: chrome.runtime.lastError.message }); return; }
+        resolve(r || { ok: false, error: "no response" });
+      });
+    } catch (e) { resolve({ ok: false, error: String(e?.message || e) }); }
+  });
+  if (!resp.ok) {
+    console.warn(`[IG Tracker] _clickAtOffsetFromButton: trusted-click failed (${resp.error})`);
+    return false;
+  }
+  return true;
+}
+
+// Find the back-arrow button on the Meta wizard modal — the "<" at
+// top-left that navigates to the previous step. Uses two strategies:
+//
+//   (a) Aria-label match. Meta usually labels the back button as
+//       "Back" or "Go back" for accessibility. Strongest signal.
+//   (b) Geometry fallback. If aria-label isn't there, find the
+//       smallest empty-text button at the top-left of the modal —
+//       small (20–60px), positioned near the top of the viewport,
+//       on the left half. Avoids matching the "X" close button (top
+//       right) or the global Meta-header X (extreme top-right).
+function _findBackArrow() {
+  // Aria-label first.
+  for (const el of document.querySelectorAll("[aria-label]")) {
+    if (_isInIgtInjected(el)) continue;
+    const al = (el.getAttribute("aria-label") || "").trim().toLowerCase();
+    if (al === "back" || al === "go back" || al === "previous") {
+      const c = _findClickableAncestor(el);
+      if (c && _isVisible(c)) return c;
+    }
+  }
+  // Geometry fallback. Prefer the LEFT-MOST empty/short-text button
+  // in the upper-left quadrant of the viewport.
+  let best = null;
+  const buttons = Array.from(document.querySelectorAll("button, [role='button'], a"));
+  for (const b of buttons) {
+    if (_isInIgtInjected(b)) continue;
+    if (!_isVisible(b)) continue;
+    const txt = (b.innerText || b.textContent || "").trim();
+    if (txt.length > 3) continue;       // empty or single-char like "<"
+    const r = b.getBoundingClientRect();
+    if (r.top < 0 || r.top > 220) continue;     // top of viewport only
+    if (r.left > window.innerWidth / 2) continue;  // left half only
+    if (r.width < 20 || r.width > 80) continue;    // small button
+    if (r.height < 20 || r.height > 80) continue;
+    if (!best || r.left < best.r.left) best = { el: b, r };
+  }
+  return best ? best.el : null;
+}
+
+// Find the destination header row on the confirm modal — the box
+// containing text like "joshuajyeung • Instagram • Export to Device
+// · Once". Used by the dest-fix when the chooseWhere chooser is
+// collapsed (Layout B) and we need to click the header to open it.
+//
+// Strategy: scan all visible elements for ones whose text matches the
+// active-destination header pattern (the same regex `detectActive
+// Destination` uses). Of those, prefer the SMALLEST text-content
+// element that still contains a clickable wrapper — that's typically
+// the row container, not the whole modal body.
+function _findDestinationHeaderRow() {
+  const re = /(?:export|download|send|save|transfer)\s+to\s+(?:[^\n·•]+?)\s*[·•]\s*(?:once|daily|monthly|yearly)\b/i;
+
+  // Strict pass: look for an actual <button> or [role='button']
+  // whose innerText matches the active-destination pattern. The
+  // user-click log proved Meta's "Create export" structure is
+  // <div role=none><div role=button><div>...</div></div></div>
+  // — the React-bound click target is the role=button MIDDLE
+  // wrapper. The destination row likely follows the same pattern.
+  // Picking the smallest matching button = the row, not a larger
+  // container.
+  const buttons = Array.from(document.querySelectorAll("button, [role='button']"));
+  let bestBtn = null;
+  let bestBtnLen = Infinity;
+  for (const b of buttons) {
+    if (_isInIgtInjected(b)) continue;
+    if (!_isVisible(b)) continue;
+    const txt = (b.innerText || b.textContent || "").trim();
+    if (!txt || txt.length > 300) continue;
+    if (!re.test(txt)) continue;
+    if (txt.length < bestBtnLen) {
+      bestBtn = b;
+      bestBtnLen = txt.length;
+    }
+  }
+  if (bestBtn) {
+    console.log(`[IG Tracker] _findDestinationHeaderRow: strict match → ${_describe(bestBtn)}`);
+    return bestBtn;
+  }
+
+  // Lenient fallback: smallest text-matching element, then climb up
+  // PREFERRING role=button / <button> / role=link / <a> over any
+  // cursor:pointer wrapper. Previous _climbToClickable returned the
+  // first ancestor matching ANY clickable signal — usually a
+  // cursor:pointer wrapper div, NOT the role=button — so the click
+  // hit a wrapper that doesn't fire React's handler.
+  const all = Array.from(document.querySelectorAll("*"));
+  let bestEl = null;
+  for (const el of all) {
+    if (_isInIgtInjected(el)) continue;
+    if (!_isVisible(el)) continue;
+    const txt = (el.innerText || el.textContent || "").trim();
+    if (!txt || txt.length > 200) continue;
+    if (!re.test(txt)) continue;
+    if (!bestEl || txt.length < bestEl.txt.length) {
+      bestEl = { el, txt };
+    }
+  }
+  if (!bestEl) return null;
+  // Custom climb: STRONG hit (role=button / <button> / role=link / <a>)
+  // wins immediately. WEAK hit (cursor:pointer etc.) is kept as
+  // fallback if no strong hit shows up before document.body.
+  let cur = bestEl.el;
+  let strongHit = null;
+  let weakHit = null;
+  for (let i = 0; cur && cur !== document.body && i < 10; i++, cur = cur.parentElement) {
+    if (_isInIgtInjected(cur) || !_isVisible(cur)) continue;
+    const role = cur.getAttribute && cur.getAttribute("role");
+    const tag = (cur.tagName || "").toLowerCase();
+    if (role === "button" || role === "link" || tag === "button" || tag === "a") {
+      strongHit = cur;
+      break;
+    }
+    if (!weakHit && _isClickable(cur)) weakHit = cur;
+  }
+  const target = strongHit || weakHit || bestEl.el;
+  console.log(`[IG Tracker] _findDestinationHeaderRow: ${strongHit ? "lenient-strong" : weakHit ? "lenient-weak" : "leaf"} → ${_describe(target)}`);
+  return target;
+}
+
+// Switch destination to Google Drive when the confirm modal is on
+// device. Meta ships TWO confirm-modal layouts:
+//
+//   Layout A — chooser INLINE: both "Export to device" and
+//   "Export to external service" buttons are visible on the confirm
+//   modal alongside the other rows. Click external service directly.
+//
+//   Layout B — chooser COLLAPSED: only the destination header
+//   ("joshuajyeung • Instagram • Export to Device · Once") is shown.
+//   Clicking that header opens a "Choose where to export" sub-modal
+//   on top, which has the two buttons. Then click external service.
+//
+// We try A first (cheap text check). If external service isn't on
+// the page, fall back to B: find the destination header by its
+// "Export to <X> · Once" text and click it to open the chooser.
+async function _navigateBackToFixDest() {
+  // Activate the stricter user-click guard for the duration of the
+  // multi-strategy dest-fix. Any user click during this window
+  // invalidates verification, so we want to halt fast and clearly.
+  window.__igtInDestFix = true;
+  _userClickedDuringDestFix = false;
+  try {
+    return await _navigateBackToFixDestInner();
+  } finally {
+    window.__igtInDestFix = false;
+  }
+}
+
+async function _navigateBackToFixDestInner() {
+  // Layout A: chooser already inline. Try MULTIPLE click strategies
+  // in sequence, checking after each whether the page advanced.
+  // Stops at the first one that works. Each strategy targets the
+  // same goal ("click Export to external service") via a different
+  // mechanism — covers the case where one strategy hits a wrapper
+  // that doesn't fire React's handler while another does.
+  if (findByText("Export to external service")) {
+    console.log("[IG Tracker] dest-fix: Layout A — chooser inline, running multi-strategy");
+    _traceVisibleButtons("dest-fix Layout A entry");
+
+    const strategies = [
+      // Strategy 1: strict button match + trusted-click. Targets the
+      // <button>/[role=button] element directly.
+      {
+        name: "strict-button",
+        fn: async () => {
+          const btn = _findStrictButton("Export to external service");
+          if (!btn) return false;
+          console.log(`[IG Tracker] dest-fix S1 strict-button → ${_describe(btn)}`);
+          await _trustedClick(btn);
+          return true;
+        },
+      },
+      // Strategy 2: fixed-offset click below "Export to device" via
+      // direct chrome.debugger dispatch at viewport coords.
+      {
+        name: "fixed-offset",
+        fn: async () => {
+          if (!_findStrictButton("Export to device")) return false;
+          console.log(`[IG Tracker] dest-fix S2 fixed-offset (53px below 'Export to device')`);
+          return await _clickAtOffsetFromButton("Export to device", 0, 53);
+        },
+      },
+      // Strategy 3: walk ancestors of the matched leaf, clicking each
+      // until one fires React's handler. Same pattern as howOften.
+      {
+        name: "ancestor-walk",
+        fn: async () => {
+          const leaf = findByText("Export to external service");
+          if (!leaf) return false;
+          let cur = leaf;
+          for (let lvl = 0; cur && cur !== document.body && lvl < 6; lvl++, cur = cur.parentElement) {
+            console.log(`[IG Tracker] dest-fix S3 ancestor-walk L${lvl} → ${_describe(cur)}`);
+            await _trustedClick(cur);
+            await sleep(700);
+            if (_destFixAdvanced()) return true;
+          }
+          return false;
+        },
+      },
+      // Strategy 4: dispatch an explicit pointermove + click event
+      // sequence on the strict button to simulate hover-then-click,
+      // in case Meta's React component requires a hover state first.
+      {
+        name: "pointer-sequence",
+        fn: async () => {
+          const btn = _findStrictButton("Export to external service");
+          if (!btn) return false;
+          const r = btn.getBoundingClientRect();
+          const cx = Math.round(r.left + r.width / 2);
+          const cy = Math.round(r.top + r.height / 2);
+          console.log(`[IG Tracker] dest-fix S4 pointer-sequence → ${_describe(btn)} @ (${cx},${cy})`);
+          // Synthesize a richer event sequence including hover.
+          const opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 };
+          try { btn.dispatchEvent(new PointerEvent("pointerover",  { ...opts, pointerType: "mouse" })); } catch (_) {}
+          try { btn.dispatchEvent(new PointerEvent("pointerenter", { ...opts, pointerType: "mouse" })); } catch (_) {}
+          try { btn.dispatchEvent(new MouseEvent("mouseover", opts)); } catch (_) {}
+          try { btn.dispatchEvent(new MouseEvent("mouseenter", opts)); } catch (_) {}
+          await sleep(80);
+          await _trustedClick(btn);
+          return true;
+        },
+      },
+    ];
+
+    let advanced = false;
+    for (const s of strategies) {
+      // Halt immediately if user clicked anything during dest-fix.
+      // (See _userClickedDuringDestFix wiring above.)
+      if (_userClickedDuringDestFix) {
+        console.warn(`[IG Tracker] dest-fix: user click detected — halting before strategy "${s.name}"`);
+        _setStatusFinal("error", "You clicked during auto-fix — halted",
+          "Don't click anything while the bot is running the destination fix. Re-run from popup.", 60000);
+        return false;
+      }
+      console.log(`[IG Tracker] dest-fix: trying strategy "${s.name}"`);
+      try {
+        const ok = await s.fn();
+        if (!ok) { console.log(`[IG Tracker] dest-fix: strategy "${s.name}" couldn't run`); continue; }
+      } catch (e) {
+        console.warn(`[IG Tracker] dest-fix: strategy "${s.name}" threw: ${e.message}`);
+        continue;
+      }
+      // IMMEDIATE check before any wait — captures whether the click
+      // had instant effect (no time for user interference).
+      const immediate = _destFixAdvanced();
+      if (immediate) {
+        console.log(`[IG Tracker] dest-fix: strategy "${s.name}" advanced IMMEDIATELY → ${immediate}`);
+        advanced = true;
+        break;
+      }
+      // Short wait for delayed React renders, then re-check. Capped
+      // at 400ms — short enough that a slow user can't easily click
+      // during it. Trace immediately after click so log shows the
+      // post-click state regardless.
+      _traceVisibleButtons(`after strategy "${s.name}" (immediate)`);
+      await sleep(400);
+      // User-click check before re-evaluating — if user clicked
+      // during the 400ms, the post-wait state is contaminated.
+      if (_userClickedDuringDestFix) {
+        console.warn(`[IG Tracker] dest-fix: user click during wait after "${s.name}" — halting`);
+        return false;
+      }
+      const result = _destFixAdvanced();
+      if (result) {
+        console.log(`[IG Tracker] dest-fix: strategy "${s.name}" advanced after wait → ${result}`);
+        advanced = true;
+        break;
+      } else {
+        console.log(`[IG Tracker] dest-fix: strategy "${s.name}" clicked but page didn't advance`);
+      }
+    }
+
+    if (!advanced) {
+      console.warn("[IG Tracker] dest-fix: all 4 strategies failed on Layout A");
+      _dumpDOMSnapshot("dest-fix Layout A all-failed", { matchText: "export to external" });
+      _dumpDOMSnapshot("dest-fix Layout A all-failed (device button area)", { matchText: "export to device" });
+      return false;
+    }
+    await sleep(500);
+  } else {
+    // Layout B: chooser collapsed. Programmatic click on the
+    // destination header has been proven to NOT open the chooser
+    // (multiple runs across v1.0.92–107: identical button traces
+    // before and after the click — no state change). Meta's React
+    // doesn't bind a click handler to any of the destination-header
+    // divs that's reachable via chrome.debugger Input.dispatchMouseEvent.
+    //
+    // Pragmatic fallback: halt with a clear prompt asking the user
+    // to click the destination row ONCE (their real cursor click
+    // does work — we've seen it succeed in past logs). Poll for the
+    // chooser to appear (Layout A becomes visible). Once it does,
+    // resume into the multi-strategy click below.
+    console.warn("[IG Tracker] dest-fix: Layout B (chooser collapsed) — programmatic header click is known-broken");
+    console.log("[IG Tracker] dest-fix: surfacing manual prompt; waiting for chooser to open");
+    _setStatus({
+      state: "needs-help",
+      step: "👆 Click the destination row at the top of the modal",
+      detail: "Click 'Export to Device · Once' at the top — that opens the destination chooser. Bot resumes automatically.",
+    });
+    _showManualPrompt(
+      "Click the destination row",
+      'At the top of the confirm modal, click the row that says <b>"Export to Device · Once"</b>. That opens a chooser with two options. The bot will take over from there.'
+    );
+    const t0 = Date.now();
+    let chooserOpen = false;
+    while (Date.now() - t0 < 5 * 60 * 1000) {
+      await sleep(800);
+      // If the user closes / cancels the wizard, exit cleanly.
+      try { await _abortIfStopped(); } catch (e) {
+        _hideManualPrompt();
+        throw e;
+      }
+      if (findByText("Export to external service")) { chooserOpen = true; break; }
+    }
+    _hideManualPrompt();
+    if (!chooserOpen) {
+      console.warn("[IG Tracker] dest-fix: chooser didn't open within 5 min — giving up");
+      return false;
+    }
+    console.log("[IG Tracker] dest-fix: chooser opened — running multi-strategy click");
+    _setStatus({ state: "running", step: "Resuming…", detail: "Chooser is open — clicking external service." });
+    // Recursively call the same function — now that "Export to
+    // external service" is visible, the Layout A branch will run
+    // and execute the 4-strategy multi-fix.
+    return await _navigateBackToFixDestInner();
+  }
+  _traceVisibleButtons("after Export-to-external click");
+
+  // Step 2: drive whatever comes next until destination is drive on
+  // confirm. Could be a service chooser inline, a separate screen, or
+  // straight back to confirm with drive selected. Try up to 12
+  // iterations.
+  for (let i = 0; i < 12; i++) {
+    const t = _wizardPageText();
+
+    // Success: confirm header now shows Drive (and not device).
+    const hasDeviceHeader = /(?:export|download|save)\s+to\s+(?:your\s+)?device\s*[·•]\s*(?:once|daily|monthly|yearly)\b/i.test(t);
+    const hasDriveHeader = /(?:export|send|transfer)\s+to\s+(?:google\s+)?drive\s*[·•]\s*(?:once|daily|monthly|yearly)\b/i.test(t);
+    if (hasDriveHeader && !hasDeviceHeader) {
+      console.log(`[IG Tracker] dest-fix: confirm now shows Drive after iter ${i} ✓`);
+      return true;
+    }
+
+    // Service chooser: pick Google Drive if visible.
+    if (findByText("Google Drive")) {
+      console.log(`[IG Tracker] dest-fix: iter ${i} — clicking Google Drive`);
+      await _clickButtonByText("Google Drive");
+      await sleep(1200);
+      // After picking Drive, click Next/Continue/Save if present.
+      for (const lbl of ["Next", "Continue", "Save", "Done"]) {
+        if (await _clickButtonByText(lbl)) {
+          console.log(`[IG Tracker] dest-fix: iter ${i} — clicked "${lbl}" after Google Drive`);
+          await sleep(1500);
+          break;
+        }
+      }
+      continue;
+    }
+
+    // howOften screen mid-flow.
+    if (/choose how often|how often you want to export/i.test(t)) {
+      console.log(`[IG Tracker] dest-fix: iter ${i} — howOften, clicking Next`);
+      if (!(await _clickButtonByText("Next"))) {
+        await _clickButtonByText("Continue");
+      }
+      await sleep(2000);
+      continue;
+    }
+
+    // connect screen mid-flow.
+    if (/connect to google drive/i.test(t)) {
+      console.log(`[IG Tracker] dest-fix: iter ${i} — connect, clicking Connect`);
+      await _clickButtonByText("Connect");
+      await sleep(8000);
+      continue;
+    }
+
+    // Nothing actionable yet — give the page a beat.
+    console.log(`[IG Tracker] dest-fix: iter ${i} — waiting (no actionable element)`);
+    await sleep(1200);
+  }
+  console.warn("[IG Tracker] dest-fix: hit iteration cap without reaching drive");
+  _traceVisibleButtons("dest-fix: final state");
+  return false;
 }
 
 // Main flow. Stage 1 (Create export → Connect) is driven by a screen-
@@ -661,6 +1524,13 @@ async function _armKeepAwake() {
 async function runWizard() {
   console.log("[IG Tracker] Auto-export starting…");
   _initKeepAwake();
+  // Activate the danger-click guard. _initUserClickTracker() is
+  // called from main(), but we use this flag specifically to scope
+  // the danger check to "wizard is currently driving" — outside of
+  // a run, the user clicking "Export to device" is fine and shouldn't
+  // interrupt anything.
+  window.__igtWizardRunning = true;
+  _userPickedDeviceDuringRun = false;
   _setStatus({ state: "running", step: "Stage 1: navigating wizard", detail: "Detecting current screen…" });
 
   // Stage 1: at each iteration, detect the current screen, click the
@@ -798,20 +1668,47 @@ async function runWizard() {
       const hasCreateExport = () => !!findByText("Create export");
       const advancedPastStart = () => {
         const t = _wizardPageText().toLowerCase();
+        // Specific markers from later screens only. We deliberately
+        // do NOT use `(google drive && dropbox)` or bare `date range`
+        // here, because the May 2026 manage-requests modal contains
+        // existing-request descriptions that mention "Google Drive"
+        // and a destination list that includes "Dropbox" — both
+        // present even though we're still on start. False positive
+        // would set advanced=true and skip the Create-export click.
         return t.includes("choose where to export") ||
                t.includes("where do you want to export") ||
-               (t.includes("export to external service") &&
-                t.includes("download to your device")) ||
                t.includes("choose how often") ||
+               t.includes("how often you want to export") ||
                t.includes("choose an external service") ||
-               (t.includes("google drive") && t.includes("dropbox")) ||
-               t.includes("date range");
+               t.includes("connect to google drive") ||
+               (t.includes("date range") && t.includes("customize information"));
       };
       let advanced = false;
 
       // Step 1: open the Create-export modal if it isn't already open.
+      // Wait + retry up to 4 seconds for at least ONE candidate to be
+      // findable before declaring step 1 exhausted. Without this, we
+      // sometimes raced page layout and exhausted in 200ms with all
+      // candidates returning null even though the elements were
+      // about to render.
       if (!hasCreateExport()) {
         console.log("[IG Tracker] start: step 1 — opening wizard modal");
+        const findAnyNav = () => {
+          for (const lbl of navCandidates) {
+            const el = findByText(lbl);
+            if (el) return { el, lbl };
+          }
+          return null;
+        };
+        let firstSeen = findAnyNav();
+        const t0 = Date.now();
+        while (!firstSeen && !hasCreateExport() && Date.now() - t0 < 4000) {
+          await sleep(400);
+          firstSeen = findAnyNav();
+        }
+        if (!firstSeen && !hasCreateExport()) {
+          console.warn(`[IG Tracker] start: step 1 — no candidate findable after ${Date.now() - t0}ms; matchers all null`);
+        }
         for (const lbl of navCandidates) {
           const el = findByText(lbl);
           if (!el) continue;
@@ -832,6 +1729,14 @@ async function runWizard() {
       }
 
       // Step 2: click "Create export" inside the modal.
+      // Capped at 2 ancestor levels. After each click, POLL up to
+      // 3 seconds for advancement instead of using a fixed 400ms
+      // sleep — Meta's React render can take 1-2s in a backgrounded
+      // or busy tab, and the fixed sleep was missing transitions
+      // that DID succeed (user's screenshot showed "Step 0: start"
+      // status while the page was already on chooseWhere — bot's
+      // L0 click had worked but the check ran before the new
+      // screen had rendered).
       if (advancedPastStart()) {
         advanced = true;
       } else if (hasCreateExport()) {
@@ -839,14 +1744,21 @@ async function runWizard() {
         const ce = findByText("Create export");
         if (ce) {
           let cur = ce;
-          for (let level = 0; level < 6; level++) {
+          for (let level = 0; level < 2; level++) {
             if (!cur || cur === document.body) break;
             console.log(`[IG Tracker] start: Create-export click L${level} → ${_describe(cur)}`);
             await _trustedClick(cur);
-            await sleep(800);
+            // Poll for advancement up to 3s, exiting as soon as it
+            // happens. 100ms granularity catches fast renders;
+            // 3s ceiling catches slow tabs.
+            const tStart = Date.now();
+            while (Date.now() - tStart < 3000) {
+              if (advancedPastStart()) break;
+              await sleep(100);
+            }
             if (advancedPastStart()) {
               advanced = true;
-              console.log(`[IG Tracker] start: advanced past start after Create-export L${level}`);
+              console.log(`[IG Tracker] start: advanced past start after Create-export L${level} (${Date.now() - tStart}ms wait)`);
               break;
             }
             cur = cur.parentElement;
@@ -856,15 +1768,40 @@ async function runWizard() {
 
       if (!advanced) {
         console.warn("[IG Tracker] start: auto-attempts exhausted — manual fallback");
-        const detail = hasCreateExport()
-          ? "Click the blue 'Create export' button — the rest will resume automatically."
-          : "Click the 'Export your information' tile — the rest will resume.";
+        // Look at what's actually on the page right now and tailor
+        // the prompt to that. The previous prompt always said "Click
+        // Create export" even when the user had already advanced and
+        // was looking at the chooser ("Choose where to export") —
+        // confusing.
+        const pageText = _wizardPageText().toLowerCase();
+        let title, detailHtml;
+        if (pageText.includes("choose where to export") ||
+            (pageText.includes("export to external service") && pageText.includes("export to device"))) {
+          title = "Click 'Export to external service'";
+          detailHtml = 'Pick <b>"Export to external service"</b>, then on the next screen choose <b>Google Drive</b> → <b>Next</b>. The bot will resume.';
+        } else if (pageText.includes("choose an external service") ||
+                   (pageText.includes("google drive") && pageText.includes("dropbox"))) {
+          title = "Pick 'Google Drive'";
+          detailHtml = 'Click <b>Google Drive</b> in the list, then <b>Next</b>. The bot will resume.';
+        } else if (pageText.includes("choose how often")) {
+          title = "Click 'Once' then 'Next'";
+          detailHtml = 'Pick <b>Once</b>, then <b>Next</b>. The bot will resume.';
+        } else if (pageText.includes("connect to google drive")) {
+          title = "Click 'Connect'";
+          detailHtml = 'Click the blue <b>Connect</b> button to authorize Google Drive. The bot resumes after the OAuth handoff.';
+        } else if (pageText.includes("create export")) {
+          title = "Click 'Create export'";
+          detailHtml = 'Click the big blue <b>"Create export"</b> button. The wizard will pick up from there.';
+        } else {
+          title = "Click whichever button is on screen";
+          detailHtml = "I can't tell which screen you're on right now. Click whatever's visible — the bot will resume from the next recognized state.";
+        }
         _setStatus({
           state: "needs-help",
-          step: "👆 Manual step needed",
-          detail,
+          step: "👆 " + title,
+          detail: "Couldn't auto-click. Bot resumes once you advance.",
         });
-        _showManualPrompt();
+        _showManualPrompt(title, detailHtml);
         const t0 = Date.now();
         while (Date.now() - t0 < 5 * 60 * 1000) {
           await sleep(1500);
@@ -883,18 +1820,60 @@ async function runWizard() {
         }
       }
     } else if (screen === "chooseWhere") {
-      await stepClickAny([
+      // Choose where to export: pick "Export to external service".
+      // Trusted-click on the row's clickable ancestor — synthetic
+      // clicks are silently rejected by Meta's React gate here, which
+      // is why this step appeared to be a no-op for the user (they
+      // had to click it manually).
+      _traceVisibleButtons("chooseWhere entry");
+      let whereOk = false;
+      for (const lbl of [
         "Export to external service",
         "Send to destination",
         "Send to a destination",
         "Transfer to a destination",
         "External service",
         "To an external service",
-      ]);
-    } else if (screen === "chooseService") {
-      await stepClickAny(["Google Drive", "Drive", "Google"]);
+      ]) {
+        if (await _clickButtonByText(lbl)) { whereOk = true; break; }
+      }
+      if (!whereOk) console.warn("[IG Tracker] chooseWhere: no candidate button found");
       await _settle();
-      await stepClickAny(["Next", "Continue"]);
+    } else if (screen === "chooseService") {
+      // Pick Google Drive from the radio list, then click Next.
+      // Same trusted-click switch as chooseWhere.
+      _traceVisibleButtons("chooseService entry");
+      let serviceOk = false;
+      for (const lbl of ["Google Drive"]) {
+        if (await _clickButtonByText(lbl)) { serviceOk = true; break; }
+      }
+      if (!serviceOk) console.warn("[IG Tracker] chooseService: Google Drive not found");
+      await _settle();
+      await sleep(600);
+      // Wait for Next to enable (radio takes a moment to register).
+      const nextEnabled = () => {
+        const n = findByText("Next") || findByText("Continue");
+        if (!n) return false;
+        let cur = n;
+        for (let i = 0; cur && i < 4; i++, cur = cur.parentElement) {
+          if (!cur.getAttribute) continue;
+          if (cur.getAttribute("aria-disabled") === "true") return false;
+          if (cur.disabled === true) return false;
+        }
+        try {
+          const cs = getComputedStyle(n);
+          if (cs.pointerEvents === "none") return false;
+          if (parseFloat(cs.opacity || "1") < 0.5) return false;
+        } catch (_) {}
+        return true;
+      };
+      const t0 = Date.now();
+      while (!nextEnabled() && Date.now() - t0 < 4000) {
+        await sleep(300);
+      }
+      if (!(await _clickButtonByText("Next"))) {
+        await _clickButtonByText("Continue");
+      }
     } else if (screen === "howOften") {
       // "Choose how often" has 4 pill toggles: Once / Daily / Monthly
       // / Yearly. Meta ships the selected state via CSS classes that
@@ -1040,7 +2019,10 @@ async function runWizard() {
             step: "👆 Manual step needed: click 'Once' then 'Next'",
             detail: "Meta won't let me click this one screen automatically. Click Once + Next yourself and the rest of the export will resume.",
           });
-          _showManualPrompt();
+          _showManualPrompt(
+            "Click 'Once' then 'Next'",
+            'Meta blocks automated clicks on this one screen.<br>Click <b>"Once"</b> then <b>"Next"</b> below — the rest will resume automatically.'
+          );
           const t0 = Date.now();
           while (Date.now() - t0 < 5 * 60 * 1000) {
             await sleep(1500);
@@ -1059,11 +2041,17 @@ async function runWizard() {
         }
       }
     } else if (screen === "connect") {
-      await stepClickAny(["Connect", "Continue"]);
-      // OAuth may take several seconds to redirect — wait longer here.
-      // If we leave the page (script dies) the post-redirect run picks
-      // up at confirm. If we stay (already authed), screen becomes
-      // confirm shortly.
+      // "Connect to Google Drive" → trusted-click the Connect button.
+      // Same isTrusted-gate concern as chooseWhere/chooseService.
+      _traceVisibleButtons("connect entry");
+      if (!(await _clickButtonByText("Connect"))) {
+        await _clickButtonByText("Continue");
+      }
+      // OAuth may take several seconds to redirect — the explicit wait
+      // below uses WAIT_AFTER_CONNECT_MS for this reason. If we leave
+      // the page (script dies) the post-redirect run picks up at
+      // confirm. If we stay (already authed), screen becomes confirm
+      // shortly.
     }
 
     // Explicit wait for the page to advance. Connect needs a longer
@@ -1085,12 +2073,151 @@ async function runWizard() {
   // Stage 2: Confirm screen — set Format → JSON, Date range → All time,
   // Customize → only Followers and following, fill notify email, Start.
   //
-  // Extra settle period before Stage 2 begins. Post-OAuth the page
-  // navigates back to tyi/ and the Confirm screen re-mounts; clicking
-  // Format too eagerly can hit a stale row from the previous render
-  // and silently no-op. A second of breathing room here is well worth
-  // the cost on a 30+ second flow.
-  await sleep(1500);
+  // Poll for the Format row to be findable before starting Stage 2.
+  // The screen detector flags `confirm` as soon as the modal heading
+  // text appears, but the row buttons can take a moment longer to
+  // mount. The poll exits AS SOON AS Format is findable (often
+  // within ~200ms on a normal render), with an 8s cap for the rare
+  // mid-transition case. v1.0.109 log without this guard: 15 row-
+  // search timeouts because the bot started Stage 2 too eagerly.
+  const stage2Ready = Date.now();
+  while (Date.now() - stage2Ready < 8000) {
+    if (findRowByLabel("Format")) break;
+    await sleep(200);
+  }
+  const readyMs = Date.now() - stage2Ready;
+  if (!findRowByLabel("Format")) {
+    console.warn(`[IG Tracker] Stage 2: Format row not findable after ${readyMs}ms — proceeding anyway`);
+  } else if (readyMs > 0) {
+    console.log(`[IG Tracker] Stage 2: rows ready after ${readyMs}ms — starting`);
+  }
+
+  // Destination safety check (position-based). The active destination
+  // heading on the confirm modal is shown at the very top of the
+  // dialog ("Export to Google Drive · Once" / "Download to your
+  // device · Once"). Past activity / available downloads sections
+  // appear LATER in the body text and may mention either destination
+  // for historical reasons.
+  //
+  // Strategy: find the FIRST occurrence of any "export to X" /
+  // "download to X" phrase in the body text. Whichever appears first
+  // is the active destination. This ignores past-request mentions
+  // entirely, since those come after the active heading.
+  //
+  // We also actively attempt to FIX a wrong destination by clicking
+  // into the destination row and selecting Google Drive — only abort
+  // if the fix fails too.
+  // Detect the active destination on the confirm modal. The previous
+  // implementation scanned body text for "export to X" needles —
+  // unreliable because past-request descriptions and option lists also
+  // contain those phrases. Today's bug: detector said "drive" because
+  // some past-request text contained "export to google drive" earlier
+  // in the body, while the actual selected destination shown to the
+  // user was "Export to Device · Once". Bot proceeded → submitted to
+  // device.
+  //
+  // New approach: match the EXACT active-destination header pattern,
+  // which is "<verb> to <destination> · <frequency>" with the trailing
+  // " · Once/Daily/Monthly/Yearly" frequency. Past requests in the
+  // listing don't use this exact pattern (they say things like
+  // "specific information transfer to Google Drive" without a
+  // trailing frequency separator), so this discriminator is reliable.
+  //
+  // Plus a paranoid safety net: if the body text contains the literal
+  // active-destination format with "device" anywhere, treat it as
+  // device regardless of what else we found. False positives here just
+  // halt the export, which is recoverable; a wrong-destination submit
+  // is not.
+  const detectActiveDestination = () => {
+    const t = _wizardPageText();
+    const re = /(?:export|send|download|save|transfer)\s+to\s+([^\n·•]+?)\s*[·•]\s*(once|daily|monthly|yearly)\b/gi;
+    const matches = [...t.matchAll(re)];
+    let kind = null, needle = null, idx = -1;
+    if (matches.length > 0) {
+      // First match wins — the active destination heading is at the
+      // top of the modal and renders before any past-request listing.
+      const m = matches[0];
+      const target = m[1].trim().toLowerCase();
+      if (target.includes("device")) kind = "device";
+      else if (target.includes("google drive") || /\bdrive\b/.test(target)) kind = "drive";
+      else if (target.includes("dropbox")) kind = "dropbox";
+      else kind = "unknown:" + target.slice(0, 40);
+      needle = m[0].toLowerCase();
+      idx = m.index;
+    }
+    // Safety net: even if we matched drive, scan for any clear "device"
+    // active-destination pattern. If found, return device — better to
+    // over-halt than wrong-submit.
+    const deviceRe = /(?:export|download|save)\s+to\s+(?:your\s+)?device\s*[·•]\s*(?:once|daily|monthly|yearly)\b/i;
+    if (deviceRe.test(t) && kind !== "device") {
+      console.warn("[IG Tracker] dest-detect: safety net triggered — body has 'X to device · Once' pattern, overriding to device");
+      kind = "device";
+      needle = "device-safety-net";
+    }
+    return { kind, needle, idx };
+  };
+
+  let destInfo = detectActiveDestination();
+  console.log(`[IG Tracker] Stage 2: active destination detection — kind=${destInfo.kind} needle="${destInfo.needle}" pos=${destInfo.idx}`);
+
+  if (destInfo.kind && destInfo.kind !== "drive") {
+    // Destination is wrong. We've spent days trying every
+    // programmatic switch we could think of — strict button click,
+    // ancestor walk, fixed-offset coordinates, pointer-event
+    // sequences, dom-snapshot analysis — and none reliably trigger
+    // Meta's React handler from chrome.debugger.Input.dispatchMouseEvent.
+    // The honest path: halt cleanly, wait for the user to do the
+    // one click manually, then resume.
+    console.warn(`[IG Tracker] Stage 2: dest=${destInfo.kind} on confirm — halting, asking user to switch manually`);
+    _setStatus({
+      state: "needs-help",
+      step: "👆 Switch destination to Google Drive",
+      detail: `Click the destination row at the top of the modal (says '${destInfo.needle || "Export to Device · Once"}'), then pick 'Export to external service' → 'Google Drive' → Next. Bot resumes when destination shows Google Drive.`,
+    });
+    _showManualPrompt(
+      "Switch destination to Google Drive",
+      'Click the destination row at top (currently <b>device</b>), then pick <b>"Export to external service"</b> → <b>"Google Drive"</b> → Next. The bot will pick up and submit once it sees Google Drive.'
+    );
+    const t0 = Date.now();
+    let resolved = false;
+    while (Date.now() - t0 < 5 * 60 * 1000) {
+      await sleep(1500);
+      try { await _abortIfStopped(); } catch (e) {
+        _hideManualPrompt();
+        throw e;
+      }
+      const re = detectActiveDestination();
+      if (re.kind === "drive") {
+        console.log("[IG Tracker] Stage 2: user switched destination to Google Drive ✓");
+        resolved = true;
+        break;
+      }
+    }
+    _hideManualPrompt();
+    if (!resolved) {
+      _setStatusFinal(
+        "error",
+        `BLOCKED — destination is ${destInfo.kind}`,
+        "Destination wasn't switched to Google Drive within 5 minutes. Cancel this export, switch destination manually, re-run.",
+        300000,
+      );
+      throw new Error(`Stage 2 destination is ${destInfo.kind} on confirm — manual switch timed out`);
+    }
+    _setStatus({ state: "running", step: "Resuming…", detail: "Destination is Google Drive — picking up." });
+  } else if (destInfo.kind === "drive") {
+    console.log("[IG Tracker] Stage 2: active destination verified Google Drive ✓");
+  } else {
+    // No destination phrase found at all — could be a layout we
+    // don't recognize. Surface a warning but don't auto-abort, in
+    // case the user's Meta layout uses different wording.
+    console.warn("[IG Tracker] Stage 2: no destination phrase detected — proceeding cautiously");
+    _setStatus({
+      state: "needs-help",
+      step: "⚠ Verify destination before continuing",
+      detail: "Couldn't detect destination from page text. Glance at the modal — if it says 'export to your device', cancel now.",
+    });
+  }
+
   _setStatus({ step: "Stage 2: setting Format → JSON" });
   await stepClickRow("Format");
   await stepClick("JSON");
@@ -1136,6 +2263,25 @@ async function runWizard() {
   // Terminal step. Meta has shipped this CTA as "Start export",
   // "Submit request", and "Confirm" across rollouts.
   _setStatus({ step: "Stage 2: clicking Start export" });
+
+  // Last-line-of-defense destination check, right before submission.
+  // If anything between the start-of-Stage-2 check and now changed
+  // the active destination away from Google Drive (extra unlikely
+  // given how synchronous our flow is, but worth one final sanity
+  // probe), we abort instead of submitting to the wrong destination.
+  const finalDest = detectActiveDestination();
+  if (finalDest.kind && finalDest.kind !== "drive") {
+    console.warn(`[IG Tracker] Stage 2: FINAL CHECK — destination is ${finalDest.kind}, refusing to click Start export`);
+    _setStatusFinal(
+      "error",
+      `BLOCKED — destination is ${finalDest.kind}`,
+      `Right before clicking Start export the destination was detected as ${finalDest.kind}. NOT submitting. Cancel this export, manually pick Google Drive, re-run.`,
+      300000,
+    );
+    throw new Error(`Final-check destination is ${finalDest.kind}, not Google Drive — refused to submit`);
+  }
+  console.log(`[IG Tracker] Stage 2: final-check destination = ${finalDest.kind || 'unknown'} — proceeding with Start export`);
+
   await stepClickAny([
     "Start export",
     "Submit request",
@@ -1224,6 +2370,12 @@ async function uncheckAll() {
     console.log(`[IG Tracker] uncheckAll pass ${pass + 1}: ${checkedBoxes.length} box(es)`);
     for (const box of checkedBoxes) {
       box.scrollIntoView({ block: "center", behavior: "instant" });
+      // Mark the click as bot-fired so the user-click tracker doesn't
+      // log it as "user click". HTMLInputElement.click() fires an
+      // isTrusted=true event (Chrome special case), so the isTrusted
+      // filter alone doesn't catch it — we need element identity.
+      const r = box.getBoundingClientRect();
+      _markBotClick(r.left + r.width / 2, r.top + r.height / 2, box);
       box.click();
       await sleep(50);
     }
@@ -1268,11 +2420,15 @@ async function checkLabel(label) {
   }
   if (cb) {
     if (cb.getAttribute("aria-checked") !== "true" && !cb.checked) {
+      const cbr = cb.getBoundingClientRect();
+      _markBotClick(cbr.left + cbr.width / 2, cbr.top + cbr.height / 2, cb);
       cb.click();
     }
   } else {
     // No toggle found — last resort, click the row itself in case the
     // whole row is the toggle target.
+    const rr = row.getBoundingClientRect();
+    _markBotClick(rr.left + rr.width / 2, rr.top + rr.height / 2, row);
     row.click();
   }
   await _settle();
@@ -1441,6 +2597,12 @@ const ONE_SHOT_HANDLERS = {
 };
 
 (async function main() {
+  // Always-on user-click tracker. Logs every user click on the wizard
+  // page to the [IG Tracker] debug log so it shows up in "Copy debug
+  // log" output. Filters out bot-fired clicks via _markBotClick coord
+  // matching. Helps diagnose "I had to do X manually — where exactly
+  // did I click?" by capturing element/role/text/path for replay.
+  _initUserClickTracker();
   if (!(await shouldRun())) {
     // Even when we don't actively drive the wizard, we should still be ready
     // to fill in the password if the user reaches that screen manually.
@@ -1460,6 +2622,16 @@ const ONE_SHOT_HANDLERS = {
     // Best-effort detach so the yellow infobar disappears even when
     // the wizard errored mid-flight.
     try { chrome.runtime.sendMessage({ type: "wizard-detach-debugger" }); } catch (_) {}
+    // Clear the run flag on failure. Without this, the flag's 20-min
+    // TTL keeps triggering re-runs every time the user navigates or
+    // reloads the page — exactly the "why does it keep running again
+    // and again" complaint. One failed run = stop. User must click
+    // "Run automatic export now" again to retry.
+    try { await consumeWizardFlag(); } catch (_) {}
+  } finally {
+    // Always disarm the wizard-running flag so danger-click guard
+    // only fires while we're actively driving.
+    window.__igtWizardRunning = false;
   }
 })();
 
@@ -1468,17 +2640,28 @@ const ONE_SHOT_HANDLERS = {
 // pills (pointer-events: none on the panel, auto on the inner card so
 // only the close button is interactive). Disappears once the wizard
 // detects the page has advanced past howOften.
-function _showManualPrompt() {
-  if (document.getElementById("igtracker-manual-prompt")) return;
-  const prompt = document.createElement("div");
-  prompt.id = "igtracker-manual-prompt";
-  prompt.style.cssText = `
-    position: fixed; inset: 0; pointer-events: none;
-    z-index: 2147483646; display: flex;
-    align-items: flex-start; justify-content: center;
-    padding-top: 80px;
-    font-family: -apple-system, sans-serif;
-  `;
+// Show a big-overlay manual prompt with caller-supplied instruction
+// text. Both `title` and `detailHtml` are required because we use this
+// from multiple screens and the wrong instruction is worse than none —
+// previously the prompt hard-coded "Click Once then Next" (a howOften
+// hint), which then got shown on the start screen too and confused the
+// user (they were looking at a "Create export" button, not Once/Next).
+function _showManualPrompt(title = "One manual click needed", detailHtml = "Resume automatically once you advance the wizard.") {
+  // If a prompt is already up, refresh its text so a later callsite
+  // can override an earlier (now-stale) instruction.
+  let prompt = document.getElementById("igtracker-manual-prompt");
+  if (!prompt) {
+    prompt = document.createElement("div");
+    prompt.id = "igtracker-manual-prompt";
+    prompt.style.cssText = `
+      position: fixed; inset: 0; pointer-events: none;
+      z-index: 2147483646; display: flex;
+      align-items: flex-start; justify-content: center;
+      padding-top: 80px;
+      font-family: -apple-system, sans-serif;
+    `;
+    document.body.appendChild(prompt);
+  }
   prompt.innerHTML = `
     <div style="
       pointer-events: auto;
@@ -1489,12 +2672,10 @@ function _showManualPrompt() {
       animation: igt-pulse 1.5s ease-in-out infinite;
     ">
       <div style="font-size: 16px; font-weight: 700; margin-bottom: 8px;">
-        👆 One manual click needed
+        👆 ${title}
       </div>
       <div style="font-size: 13px; line-height: 1.5; opacity: 0.95;">
-        Meta blocks automated clicks on this one screen. <br>
-        Click <b>"Once"</b> then <b>"Next"</b> below — the rest of the
-        export will resume automatically.
+        ${detailHtml}
       </div>
     </div>
     <style>
@@ -1504,7 +2685,6 @@ function _showManualPrompt() {
       }
     </style>
   `;
-  document.body.appendChild(prompt);
 }
 function _hideManualPrompt() {
   document.getElementById("igtracker-manual-prompt")?.remove();
