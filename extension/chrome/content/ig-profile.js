@@ -3041,6 +3041,45 @@ if (_IS_RUNNER_TAB) {
   console.log("[IG Tracker] runner tab detected — visibility override on");
 }
 
+// Runner mode auto-trigger. Lives in its OWN IIFE so it runs even when
+// the user has toggled "Show profile overlay" OFF — the overlay-gated
+// main() below would early-return and never reach the runner code.
+// Loads settings independently, then fires archiveAllVisiblePosts
+// directly (no overlay needed for the archive flow itself).
+if (_IS_RUNNER_TAB) {
+  (async function runnerBoot() {
+    console.log("[IG Tracker] runner: boot start, url=" + window.location.href);
+    try {
+      _settings = await loadSettings();
+      console.log("[IG Tracker] runner: settings loaded, archiveCategories=" + JSON.stringify(_archiveCategories));
+    } catch (e) {
+      console.error("[IG Tracker] runner: loadSettings failed:", e);
+      return;
+    }
+    // Wait for IG's grid to render a few tiles before kicking off
+    // archive-all (which scrolls + downloads). 3s seems to be enough
+    // for cold-loaded profiles.
+    await new Promise((r) => setTimeout(r, 3000));
+    const username = isProfilePath(window.location.pathname);
+    if (!username) {
+      console.warn("[IG Tracker] runner: not on a profile path (" + window.location.pathname + "), abort");
+      return;
+    }
+    const cats = { ..._archiveCategories };
+    if (Object.values(cats).every((v) => !v)) {
+      console.warn("[IG Tracker] runner: NO archive categories enabled — toggle at least one of posts/reels/tagged/highlights via the overlay or chrome.storage.local.archiveCategories");
+      return;
+    }
+    console.log(`[IG Tracker] runner: archiving @${username} with categories ${JSON.stringify(cats)}`);
+    try {
+      const result = await archiveAllVisiblePosts(username, cats);
+      console.log(`[IG Tracker] runner: archive-all returned for @${username}`, result);
+    } catch (e) {
+      console.error("[IG Tracker] runner: archive-all threw:", e);
+    }
+  })();
+}
+
 (async function main() {
   _settings = await loadSettings();
   if (!_settings.showOverlay) return;
@@ -3064,28 +3103,9 @@ if (_IS_RUNNER_TAB) {
   // Initial pass.
   setTimeout(onLocationMaybeChanged, 200);
 
-  // Runner mode: after the overlay renders, programmatically fire the
-  // archive-all flow. The 2.5s delay lets IG's grid load some tiles
-  // first (otherwise we'd start scrolling against an empty grid). We
-  // don't go through the overlay button click — calling the function
-  // directly skips the AudioContext arming (which needs a real user
-  // gesture). Visibility override above handles throttling instead.
-  if (_IS_RUNNER_TAB) {
-    setTimeout(async () => {
-      const username = isProfilePath(window.location.pathname);
-      if (!username) {
-        console.warn("[IG Tracker] runner: not on a profile path, abort");
-        return;
-      }
-      console.log(`[IG Tracker] runner: auto-archiving @${username} with categories ${JSON.stringify(_archiveCategories)}`);
-      try {
-        await archiveAllVisiblePosts(username, { ..._archiveCategories });
-        console.log(`[IG Tracker] runner: archive-all returned for @${username}`);
-      } catch (e) {
-        console.error("[IG Tracker] runner: archive-all threw:", e);
-      }
-    }, 2500);
-  }
+  // (Runner-mode auto-trigger lives in its own IIFE earlier in this
+  // file, outside the showOverlay gate, so it works even if the
+  // overlay is hidden.)
 
   // Listen for live setting changes from the popup so the overlay can be
   // toggled on/off without reloading the page.
