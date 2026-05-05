@@ -125,6 +125,28 @@ CREATE TABLE IF NOT EXISTS profile_observations (
     follow_state_changed_at TEXT,
     is_unavailable INTEGER
 );
+
+-- Append-only audit trail of significant data operations: imports,
+-- backfills, errors, resets, manual deletions. Lets the user (and a
+-- future debugging session) reconstruct exactly what happened to the
+-- DB without having to dig through console logs.
+--
+-- `op` is a short verb ("import", "import_error", "backfill",
+-- "skip", "reset_snapshots", "rescan", "quarantine", etc.).
+-- `target` is whatever object the op acted on (file path, snapshot id,
+-- "all snapshots" for a wipe). `details_json` stores the full reason /
+-- context as JSON so we don't have to invent columns for every kind of
+-- detail.
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    op TEXT NOT NULL,
+    target TEXT,
+    ok INTEGER NOT NULL DEFAULT 1,
+    details_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
+CREATE INDEX IF NOT EXISTS idx_audit_log_op ON audit_log(op);
 """
 
 

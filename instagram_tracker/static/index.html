@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/static/icon.svg" />
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/static/styles.css?v=4" />
+  <link rel="stylesheet" href="/static/styles.css?v=10" />
   <title>Instagram Tracker</title>
 </head>
 <body>
@@ -42,13 +42,19 @@
         <div class="scan-row">
           <button class="ghost-btn" id="scan-drive-btn" hidden>Scan Drive folder for new exports</button>
           <button class="ghost-btn" id="scan-drive-force-btn" hidden title="Re-extract every file regardless of fingerprint cache. Slower but catches files the fast scan incorrectly skipped.">Force re-scan all</button>
+          <button class="ghost-btn danger" id="reset-snapshots-btn" hidden title="Wipe all snapshot data and re-import every export from Drive. Tags, notes, and archived media are preserved.">Reset snapshots &amp; re-import</button>
         </div>
         <div id="scan-folder-hint" class="hint" hidden></div>
         <div id="scan-status" class="status"></div>
+        <details class="audit-details" style="margin-top:14px;">
+          <summary class="muted small">View activity log</summary>
+          <div id="audit-log" class="audit-log"></div>
+        </details>
       </div>
 
       <div class="card" id="alerts-card" hidden>
         <h2>Alerts</h2>
+        <div id="alerts-diff-summary" class="alerts-diff-summary muted small" hidden></div>
         <ul class="alerts" id="alerts-list"></ul>
       </div>
 
@@ -78,12 +84,36 @@
         <div id="notes-users" class="notes-users"></div>
       </div>
 
+      <div class="card" id="public-followback-card" hidden>
+        <a class="notes-card-head" href="#lists/public_mutuals">
+          <h2>🌐 Public follow-backs <span class="count" id="count-public_followed_back">0</span></h2>
+        </a>
+        <p class="muted small">Public accounts that follow you back. Tap a name to open in the tracker.</p>
+        <div id="public-followback-users" class="notes-users"></div>
+      </div>
+
+      <div class="card" id="private-accepted-card" hidden>
+        <a class="notes-card-head" href="#lists/private_accepted_no_follow_back">
+          <h2>🔒 Private accepted, no follow-back <span class="count" id="count-private_accepted_no_follow_back">0</span></h2>
+        </a>
+        <p class="muted small">Private accounts that accepted your request but didn't follow you back.</p>
+        <div id="private-accepted-users" class="notes-users"></div>
+      </div>
+
+      <div class="card" id="request-rejected-card" hidden>
+        <a class="notes-card-head" href="#lists/request_dropped">
+          <h2>✕ Follow Request Rejected <span class="count" id="count-request_dropped">0</span></h2>
+        </a>
+        <p class="muted small">Requests you sent that never made it into your following list — rejected or expired.</p>
+        <div id="request-rejected-users" class="notes-users"></div>
+      </div>
+
       <div class="card" id="archive-card" hidden>
         <a class="notes-card-head" href="/archive" target="_blank" rel="noopener" title="Open all archived media on a full page">
           <h2>📦 Archived media <span class="archive-open-hint">↗</span></h2>
         </a>
         <p class="muted small" id="archive-summary"></p>
-        <div id="archive-users" class="archive-users"></div>
+        <div id="archive-users" class="notes-users"></div>
       </div>
     </section>
 

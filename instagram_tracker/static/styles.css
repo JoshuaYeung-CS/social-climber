@@ -33,6 +33,32 @@
 }
 
 * { box-sizing: border-box; }
+
+/* Global slim themed scrollbars — replaces the chunky white OS
+   scrollbar that breaks the dark-mode aesthetic everywhere it
+   appears (page, modals, scrollable lists, tag-bucket dropdowns).
+   Firefox gets the standardized thin/color rules; WebKit gets a
+   6-8px translucent thumb that highlights on hover. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(143, 143, 153, 0.35) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: rgba(143, 143, 153, 0.30);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(79, 140, 255, 0.55);
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-corner { background: transparent; }
 html, body { margin: 0; padding: 0; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
@@ -129,6 +155,26 @@ main {
   border-radius: var(--radius);
   padding: 16px;
   box-shadow: var(--shadow);
+  /* Subtle hover-lift for cards that contain a clickable head
+     (notes, archived media, public/private follow-back). The
+     transition is slight enough to feel "interactive" without
+     looking flashy; cards without internal links won't hover-lift
+     because they don't have a hover trigger. */
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.card:has(.notes-card-head:hover) {
+  border-color: rgba(79, 140, 255, 0.30);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.3),
+              0 8px 24px rgba(79, 140, 255, 0.10);
+}
+/* Better focus ring across the site — replaces the browser default
+   solid-blue outline with a soft glow that matches the theme.
+   :focus-visible (not :focus) so mouse clicks don't trigger it,
+   only keyboard navigation. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 .card h2 {
   margin: 0 0 8px 0;
@@ -192,7 +238,34 @@ code {
 .status .warn-box ul { margin: 6px 0 0 18px; padding: 0; }
 .status .warn-box li { margin-bottom: 2px; }
 
-.alerts { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.alerts {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Same scrollable-list pattern as the notes / public-followback /
+     private-accepted / request-rejected cards. Cap at ~5 rows tall,
+     show a slim themed scrollbar, fade the bottom edge so users
+     intuit there's more below. */
+  max-height: 280px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent) transparent;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 16px), transparent 100%);
+          mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 16px), transparent 100%);
+  padding-bottom: 8px;
+}
+.alerts::-webkit-scrollbar { width: 6px; }
+.alerts::-webkit-scrollbar-track { background: transparent; }
+.alerts::-webkit-scrollbar-thumb {
+  background: rgba(79, 140, 255, 0.4);
+  border-radius: 3px;
+}
+.alerts::-webkit-scrollbar-thumb:hover {
+  background: rgba(79, 140, 255, 0.7);
+}
 .alerts li {
   display: flex;
   align-items: center;
@@ -208,6 +281,24 @@ code {
 .alerts li.normal { border-left-color: var(--warn); }
 .alerts li.good { border-left-color: var(--good); }
 .alerts li .username { font-weight: 600; }
+/* New-alert highlight: subtle accent-colored background tint + glow.
+   Distinguishes "this just appeared in the latest export" without
+   being noisy. The 🆕 inline badge gives extra visual cue. */
+.alerts li.is-new {
+  background: linear-gradient(90deg, rgba(79, 140, 255, 0.15), var(--bg-elev-2) 60%);
+  box-shadow: 0 0 0 1px rgba(79, 140, 255, 0.25);
+}
+.alert-new-badge {
+  display: inline-block;
+  font-size: 11px;
+  margin-right: 4px;
+  filter: saturate(1.2);
+}
+.alerts-diff-summary {
+  margin-bottom: 8px;
+}
+.alert-diff-new { color: var(--accent); font-weight: 600; }
+.alert-diff-cleared { color: var(--good, #34d399); }
 .alerts li .open-btn {
   background: transparent;
   border: 1px solid var(--border);
@@ -227,6 +318,12 @@ code {
   background: var(--bg-elev-2);
   padding: 10px 12px;
   border-radius: 8px;
+  /* Reset anchor defaults — these tiles are rendered as <a> so cmd-
+     click opens the linked list in a new tab. Without these resets the
+     browser would underline + blue-color them. */
+  display: block;
+  color: inherit;
+  text-decoration: none;
 }
 .summary-grid .stat.clickable {
   cursor: pointer;
@@ -1098,6 +1195,63 @@ code {
   opacity: 0.85;
 }
 
+/* Reset-snapshots button — same shape as ghost-btn but flagged red so
+   it's hard to misclick. */
+.ghost-btn.danger {
+  border-color: rgba(239, 68, 68, 0.4);
+  color: var(--bad, #ef4444);
+}
+.ghost-btn.danger:hover {
+  border-color: var(--bad, #ef4444);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+/* Audit log inside the Imports card — collapsible, same slim-scrollbar
+   pattern as the per-file scan details. Each row is one audit entry:
+   timestamp · op · target · key=val details. */
+.audit-details summary {
+  cursor: pointer;
+  padding: 6px 0;
+  user-select: none;
+}
+.audit-details summary::-webkit-details-marker { display: none; }
+.audit-details summary::before { content: "▸ "; opacity: 0.7; }
+.audit-details[open] summary::before { content: "▾ "; }
+.audit-log {
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 4px 12px 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent) transparent;
+}
+.audit-log::-webkit-scrollbar { width: 6px; }
+.audit-log::-webkit-scrollbar-thumb {
+  background: rgba(79, 140, 255, 0.4);
+  border-radius: 3px;
+}
+.audit-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 3px 0;
+  align-items: baseline;
+  font-variant-numeric: tabular-nums;
+}
+.audit-row.err .audit-op { color: var(--bad, #ef4444); }
+.audit-row .audit-op { font-weight: 600; min-width: 110px; }
+.audit-row .audit-target {
+  font-size: 11px;
+  background: transparent;
+  padding: 0;
+  color: var(--muted);
+}
+.audit-row .audit-det { flex: 1 1 100%; padding-left: 118px; }
+
 /* ---------- select-mode toggle in toolbar ---------- */
 .select-toggle {
   appearance: none;
@@ -1436,6 +1590,33 @@ textarea#queue-input::-webkit-scrollbar { display: none; }
   flex-direction: column;
   gap: 4px;
   margin-top: 8px;
+  /* Show ~5 rows then scroll. The bottom edge fades out so the cap
+     reads as "more below" rather than a hard truncation. We use a
+     custom slim scrollbar (Firefox: scrollbar-width thin, accent
+     color; WebKit: 6px with rounded thumb in the accent color)
+     instead of the OS default — keeps the home page visually
+     consistent and out of the way. */
+  max-height: 220px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent) transparent;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 16px), transparent 100%);
+          mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 16px), transparent 100%);
+  /* When the list is short enough that no scroll is needed, the mask
+     would still fade the last row. paint-only when overflowing —
+     achieved by skipping the mask if the element fits its content.
+     Since CSS can't easily test that, we simply pad bottom so the
+     fade lands beyond the last row when the list is short. */
+  padding-bottom: 8px;
+}
+.notes-users::-webkit-scrollbar { width: 6px; }
+.notes-users::-webkit-scrollbar-track { background: transparent; }
+.notes-users::-webkit-scrollbar-thumb {
+  background: rgba(79, 140, 255, 0.4);
+  border-radius: 3px;
+}
+.notes-users::-webkit-scrollbar-thumb:hover {
+  background: rgba(79, 140, 255, 0.7);
 }
 .notes-user {
   display: flex;
@@ -1685,22 +1866,6 @@ textarea#queue-input::-webkit-scrollbar { display: none; }
   font-weight: 400;
 }
 .notes-card-head:hover .archive-open-hint { color: var(--accent); }
-.archive-users { display: flex; flex-wrap: wrap; gap: 6px; }
-.archive-user {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: var(--bg-elev-2);
-  border: 1px solid var(--border);
-  color: var(--text);
-  text-decoration: none;
-  font-size: 13px;
-  cursor: pointer;
-  transition: border-color 120ms ease;
-}
-.archive-user:hover { border-color: var(--accent); }
 .account-pic-link {
   display: block;
   width: 140px;

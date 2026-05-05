@@ -45,6 +45,15 @@ _SCAN_LOCK = threading.Lock()
 # Successful imports remove the path from this set.
 _RECENT_ERROR_PATHS: set[str] = set()
 
+
+def clear_seen_cache() -> None:
+    """Reset the in-memory recent-error set. Called after a snapshot
+    reset so the next scan treats every file as fresh. The on-disk
+    fingerprint cache lives in the snapshots table itself, which is
+    wiped by the reset endpoint, so we only need to clear the in-memory
+    side here."""
+    _RECENT_ERROR_PATHS.clear()
+
 # Filename patterns Meta uses for the artifacts we care about. Matched
 # case-insensitively against the basename. Two flavors:
 #   - .zip files (Meta's "Send to email" delivery, or a Drive download)

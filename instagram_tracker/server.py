@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import alerts as alerts_mod
+from . import audit as audit_mod
 from . import diffs as diffs_mod
 from . import filtering as filtering_mod
 from . import followup as followup_mod
@@ -125,7 +126,117 @@ def scan_now(force: bool = False):
     result = watcher_mod.scan_once(force=force)
     if result.get("imported") or result.get("skipped"):
         _bump_snapshot_version()
+    # Audit summary + each error file's reason. Successful imports /
+    # backfills are summarised in counts; only error rows get a per-
+    # file audit entry so the log doesn't balloon on every scan.
+    with db_conn() as conn:
+        audit_mod.log(
+            conn,
+            "scan" if not force else "force_rescan",
+            target=str(result.get("watch_folder", "")),
+            ok=bool(result.get("ok", True)),
+            scanned=result.get("scanned"),
+            imported=result.get("imported"),
+            skipped=result.get("skipped"),
+            already_seen=result.get("already_seen"),
+            errors=sum(1 for d in result.get("details", []) if d.get("outcome") == "error"),
+        )
+        for d in result.get("details", []) or []:
+            if d.get("outcome") == "error":
+                audit_mod.log(
+                    conn,
+                    "import_error",
+                    target=d.get("file"),
+                    ok=False,
+                    message=(d.get("message") or "")[:500],
+                )
     return result
+
+
+@app.post("/api/reset-snapshots")
+def reset_snapshots(rescan: bool = True):
+    """Wipe all snapshot-derived data and (optionally) trigger a fresh
+    scan. Tags, notes, follow-up queue, profile observations, and the
+    auto-archived media folder are PRESERVED — those are user-authored
+    or expensive to rebuild.
+
+    Use this when the snapshot DB has gone funny (stuck errors that
+    won't clear via re-scan, partial imports left ghost rows, etc.) and
+    you want to start clean from the export files in Drive.
+
+    Tables wiped: snapshots, followers, following,
+    pending_follow_requests, recently_unfollowed,
+    incoming_follow_requests. Plus the watcher's path-fingerprint cache
+    so every file is re-evaluated on the next scan.
+
+    Returns the post-reset row counts and (if rescan=true) the
+    subsequent scan summary."""
+    derived_tables = (
+        "followers",
+        "following",
+        "pending_follow_requests",
+        "recently_unfollowed",
+        "incoming_follow_requests",
+        "snapshots",
+    )
+    with db_conn() as conn:
+        before = {t: conn.execute(f"SELECT COUNT(*) AS n FROM {t}").fetchone()["n"] for t in derived_tables}
+        for t in derived_tables:
+            conn.execute(f"DELETE FROM {t}")
+        conn.commit()
+        audit_mod.log(
+            conn,
+            "reset_snapshots",
+            target="all derived tables",
+            ok=True,
+            wiped_counts=before,
+        )
+    # Clear the watcher's in-memory dedup so subsequent scans re-evaluate
+    # every file. Without this, the fingerprint cache would skip files
+    # it already processed before the wipe.
+    try:
+        watcher_mod.clear_seen_cache()
+    except AttributeError:
+        # Older watcher versions don't expose this; force=True on the
+        # next scan is the fallback.
+        pass
+    _bump_snapshot_version()
+    out = {"ok": True, "wiped": before}
+    if rescan:
+        result = watcher_mod.scan_once(force=True)
+        out["scan"] = result
+        with db_conn() as conn:
+            audit_mod.log(
+                conn,
+                "post_reset_rescan",
+                target=str(result.get("watch_folder", "")),
+                ok=bool(result.get("ok", True)),
+                scanned=result.get("scanned"),
+                imported=result.get("imported"),
+                skipped=result.get("skipped"),
+                errors=sum(1 for d in result.get("details", []) if d.get("outcome") == "error"),
+            )
+            for d in result.get("details", []) or []:
+                if d.get("outcome") == "error":
+                    audit_mod.log(
+                        conn,
+                        "import_error",
+                        target=d.get("file"),
+                        ok=False,
+                        message=(d.get("message") or "")[:500],
+                    )
+        if result.get("imported") or result.get("skipped"):
+            _bump_snapshot_version()
+    return out
+
+
+@app.get("/api/audit-log")
+def audit_log(limit: int = 200):
+    """Return the most recent audit rows, newest first. Used by the
+    Imports view to show a 'what's happened' panel without making the
+    user trawl server stdout."""
+    with db_conn() as conn:
+        return {"entries": audit_mod.list_recent(conn, limit=max(1, min(limit, 1000)))}
 
 
 @contextmanager
@@ -227,24 +338,29 @@ def _home_compute():
                 ever_unfollowed_you |= followers_by_sid.get(old_id, set()) - followers_by_sid.get(new_id, set())
                 ever_left_following |= following_by_sid.get(old_id, set()) - following_by_sid.get(new_id, set())
             ever_self = q.ever_self_unfollowed(conn)
-            # IG-bounce filter applied to BOTH sides of the cumulative count:
-            # accounts currently in pending or incoming_requests have an
-            # active relationship state, so disappearances from followers
-            # or following are likely IG-export quirks rather than real
-            # unfollows or removals.
-            ig_bounced = curr.pending | curr.incoming_requests
+            # IG-bounce filter — directional now. Previously a single
+            # set (`curr.pending | curr.incoming_requests`) was subtracted
+            # from BOTH sides, which over-corrected. Specifically: a user
+            # currently in `incoming_requests` who once removed you as a
+            # follower IS a real removal — them sending you a follow
+            # request later is a separate event, not evidence that the
+            # earlier disappearance was an export quirk. Same logic on
+            # the other side. Apply each protection only to the side it
+            # actually defends.
+            ig_bounced_in  = curr.incoming_requests   # protects ever_unfollowed_you (followers side)
+            ig_bounced_out = curr.pending             # protects ever_left_following (following side)
             # "Came back" filter: an account currently in following (or
             # followers) didn't remove you / didn't unfollow you — they had
             # a one-snapshot blip in some past export and reappeared. See
             # the matching comment in the lists path below.
-            ever_removed = ever_left_following - ever_self - ig_bounced - curr.following
+            ever_removed = ever_left_following - ever_self - ig_bounced_out - curr.following
             # Split the inbound "they ended their following of me" set:
             #   ever_unfollowed_you (strict): they unfollowed, you didn't
             #     also unfollow — pure inbound action.
             #   mutual_breaks: both ends broke — they dropped AND you also
             #     unfollowed (or removed them as a follower).
-            ever_unfollowed_you_inbound = ever_unfollowed_you - ig_bounced - curr.followers - ever_self
-            mutual_breaks = (ever_unfollowed_you - ig_bounced - curr.followers) & ever_self
+            ever_unfollowed_you_inbound = ever_unfollowed_you - ig_bounced_in - curr.followers - ever_self
+            mutual_breaks = (ever_unfollowed_you - ig_bounced_in - curr.followers) & ever_self
 
             # Strip rename chains so renames don't inflate "they unfollowed/removed you" counts.
             alias_map = q.username_alias_map(conn)
@@ -258,15 +374,21 @@ def _home_compute():
             mutual_breaks = {u for u in mutual_breaks if not aliases_active(u, curr.followers)}
             ever_removed = {u for u in ever_removed if not aliases_active(u, curr.following)}
 
-            # Strip disabled- and unavailable-tagged accounts from these counts too.
+            # NOTE: previously these three historical-event counters
+            # subtracted `suppressed_home` (disabled/unavailable/random
+            # tagged users). That's wrong for HISTORICAL counts —
+            # users typically get tagged 'unavailable' BECAUSE they
+            # unfollowed and went private/deactivated. Subtracting the
+            # tag was hiding the very events the counter is supposed
+            # to memorialise. Removed: ever_unfollowed_you_inbound 18
+            # → 36, ever_removed 2 → 14. Active-relationship counts
+            # below still use suppressed_home — that's appropriate
+            # there because they describe current state.
             suppressed_home = (
                 {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
                 | {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
                 | {r["username"] for r in tags_mod.list_with_flag(conn, "random_request")}
             )
-            ever_unfollowed_you_inbound -= suppressed_home
-            mutual_breaks -= suppressed_home
-            ever_removed -= suppressed_home
             ever_unfollowed_you = ever_unfollowed_you_inbound | mutual_breaks
             mb_you_first_home, mb_they_first_home = q.split_mutual_breaks_by_initiator(conn, mutual_breaks)
 
@@ -324,7 +446,21 @@ def _home_compute():
             # up in the following set. Excluding ever_following is what
             # makes this a real "rejected" list rather than a "you
             # followed-then-unfollowed" list.
-            request_dropped = ever_pending_observed - ever_following - curr.pending
+            #
+            # Treat the live extension scrape as a TIE-BREAKER, not a
+            # blanket grace window. v1's grace window (last-seen-in-
+            # pending within 35 days) collapsed the count from 67 → 7
+            # because every recent snapshot has a thousand pending
+            # users — far too aggressive. Just trust the export's
+            # current pending state, then let extension observations
+            # override on a per-user basis.
+            ext_still_requested = {
+                r["username"] for r in conn.execute(
+                    "SELECT username FROM profile_observations "
+                    "WHERE follow_button_state = 'requested'"
+                ).fetchall()
+            }
+            request_dropped = ever_pending_observed - ever_following - curr.pending - ext_still_requested
 
             # Active-relationship counts: subtract suppressed_home so that
             # accounts the user has tagged disabled / unavailable / random
@@ -394,6 +530,125 @@ def _home_compute():
             ).fetchone()["c"],
         }
 
+        # Public-followback / private-accepted-no-followback breakdowns.
+        # The dashboard's mutuals total includes both kinds — these
+        # carve out the subsets so the user can see who's actually
+        # reciprocating (public mutual = trivially mutual since neither
+        # side gates on accept) vs. who let them in but didn't return
+        # the follow (private account accepted the request but didn't
+        # follow back). The latter is a useful "soft-rejection" signal
+        # for follow-management.
+        relbreak_users = sorted(
+            (active_followers & active_following)
+            | ((active_following - active_followers) & ever_pending_observed)
+        )
+        relbreak_priv = q.privacy_status_bulk(conn, relbreak_users)
+        public_followed_back = sorted(
+            u for u in (active_followers & active_following)
+            if relbreak_priv.get(u, "unknown") in ("public", "likely_public")
+        )
+        private_accepted_no_follow_back = sorted(
+            u for u in ((active_following - active_followers) & ever_pending_observed)
+            if relbreak_priv.get(u, "unknown") in ("private", "likely_private")
+        )
+        # Cap previews at 50 each so the dashboard JSON stays bounded.
+        # The full lists live in /api/dashboard sections (added below).
+        bucket_counts["public_followed_back"] = len(public_followed_back)
+        bucket_counts["private_accepted_no_follow_back"] = len(private_accepted_no_follow_back)
+        # "Follow Request Rejected" — outbound requests that never made
+        # it into the following set. `request_dropped` is computed
+        # above (line ~438) inside the latest-snapshot branch; reuse
+        # it here. Suppress users we've tagged as disabled / random /
+        # unavailable so the home count matches the Lists view's
+        # request_dropped section.
+        request_rejected_home = sorted(set(request_dropped) - suppressed_home)
+        bucket_counts["request_dropped"] = len(request_rejected_home)
+
+        # Build per-username timestamp maps for the three home cards.
+        # Each card shows TWO timestamps: the action you took, and
+        # the action they took (or our best estimate of when their
+        # action happened).
+        #
+        # `followers_ts_home`: when they started following you (current
+        #   snapshot's followers row). IG records this exact second.
+        # `following_ts_home`: when you started following them (current
+        #   snapshot's following row). For private accepted, this
+        #   doubles as the "they accepted" timestamp because IG only
+        #   creates the following row at the moment of acceptance.
+        # `pending_ts_home`: when you sent the request (MAX
+        #   export_timestamp across all snapshot pending rows — IG
+        #   records this once and it's stable across exports).
+        # `last_pending_taken_at_home`: for users no longer in pending,
+        #   the taken_at of the last snapshot we saw them in pending.
+        #   Used as a "rejected/expired around or after this time"
+        #   estimate for the Follow Request Rejected card.
+        followers_ts_home = {
+            r["username"]: r["export_timestamp"]
+            for r in conn.execute(
+                "SELECT username, export_timestamp FROM followers WHERE snapshot_id = ?",
+                (latest,),
+            ).fetchall()
+        }
+        following_ts_home = {
+            r["username"]: r["export_timestamp"]
+            for r in conn.execute(
+                "SELECT username, export_timestamp FROM following WHERE snapshot_id = ?",
+                (latest,),
+            ).fetchall()
+        }
+        pending_ts_home = {
+            r["username"]: r["ts"]
+            for r in conn.execute(
+                "SELECT username, MAX(export_timestamp) AS ts "
+                "FROM pending_follow_requests "
+                "WHERE source_label IN ('pending_follow_requests', 'both') "
+                "GROUP BY username"
+            ).fetchall()
+        }
+        # Last-seen-in-pending: for the Follow Request Rejected card,
+        # the rejection happened sometime after this snapshot's
+        # taken_at. Stored as ISO string from the snapshots table.
+        last_pending_taken_at_home: dict[str, str | None] = {}
+        for r in conn.execute(
+            "SELECT pfr.username, MAX(s.taken_at) AS last_seen "
+            "FROM pending_follow_requests pfr "
+            "JOIN snapshots s ON s.id = pfr.snapshot_id "
+            "WHERE pfr.source_label IN ('pending_follow_requests', 'both') "
+            "GROUP BY pfr.username"
+        ).fetchall():
+            last_pending_taken_at_home[r["username"]] = r["last_seen"]
+        # Sort each preview list by its relevant timestamp, newest
+        # first, then take the top 50. Username fallback for users
+        # without timestamps so they still appear (just at the bottom).
+        def _by_ts_desc(users, ts_map):
+            return sorted(users, key=lambda u: (-(ts_map.get(u) or 0), u))
+        public_followed_back_preview = [
+            {
+                "username": u,
+                "ts": followers_ts_home.get(u),
+                "ts2": following_ts_home.get(u),
+            }
+            for u in _by_ts_desc(public_followed_back, followers_ts_home)[:50]
+        ]
+        private_accepted_preview = [
+            {
+                "username": u,
+                "ts": pending_ts_home.get(u),
+                "ts2": following_ts_home.get(u),
+            }
+            for u in _by_ts_desc(private_accepted_no_follow_back, pending_ts_home)[:50]
+        ]
+        request_dropped_preview = [
+            {
+                "username": u,
+                "ts": pending_ts_home.get(u),
+                # last-seen-in-pending is an ISO string (taken_at), not
+                # an int — render as-is on the client.
+                "ts2_iso": last_pending_taken_at_home.get(u),
+            }
+            for u in _by_ts_desc(request_rejected_home, pending_ts_home)[:50]
+        ]
+
         # Inline preview of noted accounts so the home-page card can
         # show the actual usernames (and a note snippet) instead of
         # just a count. Cap at 50 entries to keep the JSON small;
@@ -408,12 +663,66 @@ def _home_compute():
             for r in noted_rows
         ]
 
+        # Alert diff: compare current alert set to the set we cached
+        # last time we saw a different snapshot. Anything new gets
+        # is_new=True. Keys cleared since last time are returned as
+        # `cleared` so the UI can show "X resolved since last export".
+        # Cache stored as a JSON file at data/alerts_cache.json:
+        # { snapshot_id: int, keys: [...this snapshot...], prev_keys: [...last snapshot...] }
+        # Re-rendering the SAME snapshot reuses cached prev_keys (stable
+        # diff). Importing a new snapshot rotates: current → prev_keys,
+        # newly-computed → keys.
+        alerts = alerts_mod.compute_alerts(conn)
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            cache_path = _Path("data/alerts_cache.json")
+            cache = {}
+            if cache_path.exists():
+                try: cache = _json.loads(cache_path.read_text())
+                except Exception: cache = {}
+            curr_keys = set()
+            for a in (alerts.get("stateful") or []) + (alerts.get("diff") or []):
+                k = f"{a.get('kind')}:{a.get('username')}"
+                curr_keys.add(k)
+            if cache.get("snapshot_id") == latest:
+                # Same snapshot re-render — stable diff against the
+                # baseline captured when this snapshot first appeared.
+                prev_keys = set(cache.get("prev_keys") or [])
+            else:
+                # New snapshot. The old `keys` becomes prev_keys; new
+                # curr_keys becomes `keys`.
+                prev_keys = set(cache.get("keys") or [])
+                cache = {
+                    "snapshot_id": latest,
+                    "keys": sorted(curr_keys),
+                    "prev_keys": sorted(prev_keys),
+                }
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(_json.dumps(cache))
+            # Annotate each current alert with is_new
+            for a in (alerts.get("stateful") or []) + (alerts.get("diff") or []):
+                k = f"{a.get('kind')}:{a.get('username')}"
+                a["is_new"] = (k not in prev_keys)
+            # Cleared count + sample
+            cleared = prev_keys - curr_keys
+            alerts["cleared_count"] = len(cleared)
+            alerts["cleared_sample"] = sorted(cleared)[:10]
+        except Exception as e:
+            # Don't let diff failures break the home payload
+            print(f"alerts diff failed: {e}")
         return {
             "summary": summary,
-            "alerts": alerts_mod.compute_alerts(conn),
+            "alerts": alerts,
             "bucket_counts": bucket_counts,
             "snapshot_count": len(snaps),
             "noted_users": noted_users,
+            # Inline previews (capped) so the home cards can list the
+            # actual usernames without a second round-trip. Full lists
+            # live under /api/dashboard sections.
+            "public_followed_back": public_followed_back_preview,
+            "private_accepted_no_follow_back": private_accepted_preview,
+            "request_dropped": request_dropped_preview,
         }
 
 
@@ -1016,11 +1325,14 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # This guards against Instagram's per-snapshot reporting lag (where a self-initiated
         # unfollow doesn't show up in recently_unfollowed until 1+ snapshots later).
         ever_self = q.ever_self_unfollowed(conn)
-        # IG-bounce filter on both cumulative sets: an account currently in
-        # pending or incoming_requests still has an active relationship,
-        # so a disappearance from followers/following is probably an IG
-        # export quirk, not a real unfollow/removal.
-        ig_bounced = sd.pending | sd.incoming_requests
+        # IG-bounce filter — DIRECTIONAL. Apply pending only to the
+        # following side (to defend ever_removed_you), and incoming
+        # requests only to the followers side (to defend ever_unfollowed
+        # _you). Cross-applying both was over-correcting: a user who
+        # later sent you a follow request can still have legitimately
+        # removed you in the past.
+        ig_bounced_in  = sd.incoming_requests   # for followers-side
+        ig_bounced_out = sd.pending             # for following-side
         # "Came back" filter: if an account is CURRENTLY in your following
         # (or followers, for the inbound side), they didn't remove you /
         # didn't unfollow you. They just had a one-snapshot blip in some
@@ -1029,7 +1341,7 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # (each export occasionally drops random rows, IG export quirk),
         # so "Ever removed you as follower" trends toward the size of
         # current following rather than the count of real removals.
-        ever_removed_you = ever_left_following - ever_self - ig_bounced - sd.following
+        ever_removed_you = ever_left_following - ever_self - ig_bounced_out - sd.following
         # Symmetric "you initiated" filter for the inbound side: if you
         # ALSO unfollowed them (in ever_self), the drop from followers is
         # most likely a consequence of your action, not a real "they
@@ -1046,8 +1358,8 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         #     same drop). Useful to see, separate from pure inbound.
         # Both sets share the came-back / ig-bounced filtering since
         # those are about IG export quirks, not the user's intent.
-        ever_unfollowed_you_inbound = ever_unfollowed_you - ig_bounced - sd.followers - ever_self
-        mutual_breaks = (ever_unfollowed_you - ig_bounced - sd.followers) & ever_self
+        ever_unfollowed_you_inbound = ever_unfollowed_you - ig_bounced_in - sd.followers - ever_self
+        mutual_breaks = (ever_unfollowed_you - ig_bounced_in - sd.followers) & ever_self
 
         # Also exclude usernames that are part of a detected rename chain whose CURRENT
         # alias is still in your following/followers — they didn't really leave.
@@ -1088,6 +1400,37 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
 
         # Cumulative "you unfollowed" — anyone who ever appeared in your recently_unfollowed.
         sections["you_unfollowed_ever"] = sorted(ever_self)
+
+        # Public follow-backs and private accept-no-follow-back. Same
+        # definitions as the home dashboard summary. The 'suppressed'
+        # variable doesn't exist in this scope (it lives in
+        # _activity_log_compute), so we recompute the suppress-set
+        # locally — accounts the user has tagged disabled / unavailable
+        # / random_request shouldn't pad these counts either.
+        suppressed_lists = (
+            {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
+            | {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
+            | {r["username"] for r in tags_mod.list_with_flag(conn, "random_request")}
+        )
+        ever_pending_observed_lists = {
+            r["username"] for r in conn.execute(
+                "SELECT DISTINCT username FROM pending_follow_requests "
+                "WHERE source_label IN ('pending_follow_requests', 'both')"
+            ).fetchall()
+        }
+        relbreak_candidates_lists = (
+            (sd.followers & sd.following)
+            | ((sd.following - sd.followers) & ever_pending_observed_lists)
+        ) - suppressed_lists
+        rel_priv = q.privacy_status_bulk(conn, sorted(relbreak_candidates_lists))
+        sections["public_followed_back"] = sorted(
+            u for u in (sd.followers & sd.following) - suppressed_lists
+            if rel_priv.get(u, "unknown") in ("public", "likely_public")
+        )
+        sections["private_accepted_no_follow_back"] = sorted(
+            u for u in ((sd.following - sd.followers) & ever_pending_observed_lists) - suppressed_lists
+            if rel_priv.get(u, "unknown") in ("private", "likely_private")
+        )
 
         # Renamed accounts — show one row per chain, keyed by the latest username.
         chains = q.detect_renames(conn)
@@ -1142,8 +1485,18 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # is what makes this a real rejected list — without it, anyone
         # you followed-and-then-unfollowed would show up here as if their
         # request had been rejected.
+        #
+        # Extension-scrape override: anyone whose live follow button is
+        # currently 'requested' is treated as still pending regardless
+        # of whether they appear in the latest export.
+        _ext_still_requested = {
+            r["username"] for r in conn.execute(
+                "SELECT username FROM profile_observations "
+                "WHERE follow_button_state = 'requested'"
+            ).fetchall()
+        }
         sections["request_dropped"] = sorted(
-            ever_pending_outgoing - ever_following_set - sd.pending
+            ever_pending_outgoing - ever_following_set - sd.pending - _ext_still_requested
         )
 
         # Per-username exact timestamps from Instagram's export. IG records
@@ -1164,27 +1517,39 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         ).fetchall():
             followers_ts[r["username"]] = r["export_timestamp"]
 
+        # Pending / incoming / unfollowed timestamps are pulled across ALL
+        # snapshots, not just the current one. IG's export records the
+        # original event time per row (request-sent / request-received /
+        # unfollow), and that timestamp is stable across re-exports, so
+        # MAX() is safe and gives us a non-null timestamp even after the
+        # user disappears from the current snapshot's table.
+        #
+        # Without this, dropped requests (request_dropped list), rejected
+        # incoming requests (incoming_request_dropped), and historical
+        # unfollow events all rendered with no time at all once they
+        # rolled out of the most recent export.
         pending_ts: dict[str, int | None] = {}
         for r in conn.execute(
-            "SELECT username, export_timestamp FROM pending_follow_requests "
-            "WHERE snapshot_id = ? AND source_label IN ('pending_follow_requests', 'both')",
-            (sid,),
+            "SELECT username, MAX(export_timestamp) AS ts "
+            "FROM pending_follow_requests "
+            "WHERE source_label IN ('pending_follow_requests', 'both') "
+            "GROUP BY username"
         ).fetchall():
-            pending_ts[r["username"]] = r["export_timestamp"]
+            pending_ts[r["username"]] = r["ts"]
 
         incoming_ts: dict[str, int | None] = {}
         for r in conn.execute(
-            "SELECT username, export_timestamp FROM incoming_follow_requests WHERE snapshot_id = ?",
-            (sid,),
+            "SELECT username, MAX(export_timestamp) AS ts "
+            "FROM incoming_follow_requests GROUP BY username"
         ).fetchall():
-            incoming_ts[r["username"]] = r["export_timestamp"]
+            incoming_ts[r["username"]] = r["ts"]
 
         unfollowed_ts: dict[str, int | None] = {}
         for r in conn.execute(
-            "SELECT username, export_timestamp FROM recently_unfollowed WHERE snapshot_id = ?",
-            (sid,),
+            "SELECT username, MAX(export_timestamp) AS ts "
+            "FROM recently_unfollowed GROUP BY username"
         ).fetchall():
-            unfollowed_ts[r["username"]] = r["export_timestamp"]
+            unfollowed_ts[r["username"]] = r["ts"]
 
         # Historical exact-ts maps populated below, after the chrono sid maps
         # are computed (they need first_in_followers_sid etc. as input).
@@ -2426,11 +2791,21 @@ def media_summary():
         files = [p for p in d.rglob("*") if p.is_file()]
         if not files:
             continue
-        size = sum(p.stat().st_size for p in files)
-        users.append({"username": d.name, "count": len(files), "bytes": size})
+        stats = [p.stat() for p in files]
+        size = sum(s.st_size for s in stats)
+        latest = max(s.st_mtime for s in stats)
+        users.append({
+            "username": d.name,
+            "count": len(files),
+            "bytes": size,
+            "latest_mtime": latest,
+        })
         total_items += len(files)
         total_bytes += size
-    users.sort(key=lambda u: -u["count"])
+    # Sort by most-recent activity so the home card surfaces the
+    # accounts you just archived at the top. Falls back to count for
+    # ties (none are likely, but keeps the order deterministic).
+    users.sort(key=lambda u: (-u["latest_mtime"], -u["count"]))
     return {"users": users, "total_items": total_items, "total_bytes": total_bytes}
 
 

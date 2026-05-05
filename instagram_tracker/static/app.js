@@ -124,12 +124,21 @@ async function loadHome() {
         ["🎲 Tagged random requests", s.random_request_tagged ?? 0, "random_request"],
       ];
       for (const [label, value, listKind] of stats) {
-        const div = document.createElement("div");
-        div.className = "stat clickable";
-        div.dataset.listKind = listKind;
-        div.innerHTML = `<div class="label">${label}</div><div class="value">${value}</div>`;
-        div.addEventListener("click", () => goToList(listKind));
-        grid.appendChild(div);
+        // Render as an <a> with a real hash href so cmd/ctrl/shift-
+        // click and middle-click open the list in a new tab via the
+        // browser's default anchor behavior. Plain left-click is
+        // intercepted to do SPA navigation (no full reload).
+        const a = document.createElement("a");
+        a.className = "stat clickable";
+        a.dataset.listKind = listKind;
+        a.href = `#lists/${listKind}`;
+        a.innerHTML = `<div class="label">${label}</div><div class="value">${value}</div>`;
+        a.addEventListener("click", (ev) => {
+          if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button !== 0) return;
+          ev.preventDefault();
+          goToList(listKind);
+        });
+        grid.appendChild(a);
       }
     } else {
       summaryCard.hidden = true;
@@ -138,16 +147,40 @@ async function loadHome() {
     const alertsCard = $("#alerts-card");
     const alertsList = $("#alerts-list");
     const all = [...(data.alerts.diff || []), ...(data.alerts.stateful || [])];
-    if (all.length === 0) {
+    // Sort: new alerts first (so the user sees what changed since
+    // last export at the top of the scrollable list), then by
+    // severity within each group.
+    all.sort((a, b) => {
+      const an = a.is_new ? 0 : 1;
+      const bn = b.is_new ? 0 : 1;
+      if (an !== bn) return an - bn;
+      return 0;  // preserve server's secondary order (severity-then-ts)
+    });
+    const newCount = all.filter((a) => a.is_new).length;
+    const clearedCount = data.alerts.cleared_count || 0;
+    if (all.length === 0 && clearedCount === 0) {
       alertsCard.hidden = true;
     } else {
       alertsCard.hidden = false;
       alertsList.innerHTML = "";
+      // Diff summary above the list — only shown when there's
+      // actually something new or cleared since the last snapshot.
+      // First-ever load shows nothing here (no baseline to diff).
+      const summary = $("#alerts-diff-summary");
+      if (summary) {
+        const parts = [];
+        if (newCount > 0)     parts.push(`<span class="alert-diff-new">🆕 ${newCount} new</span>`);
+        if (clearedCount > 0) parts.push(`<span class="alert-diff-cleared">✓ ${clearedCount} resolved since last export</span>`);
+        summary.innerHTML = parts.join(" · ");
+        summary.hidden = parts.length === 0;
+      }
       for (const a of all) {
         const li = document.createElement("li");
-        li.className = a.severity || "normal";
+        li.className = (a.severity || "normal") + (a.is_new ? " is-new" : "");
         const igHref = `https://www.instagram.com/${encodeURIComponent(a.username || "")}/`;
-        li.innerHTML = `<span>${escapeHtml(a.message)}</span>`;
+        // Add a 🆕 badge inline in the message for new alerts.
+        const newBadge = a.is_new ? `<span class="alert-new-badge" title="New since last export">🆕</span> ` : "";
+        li.innerHTML = `<span>${newBadge}${escapeHtml(a.message)}</span>`;
         // Direct IG link, then "Details" for the modal — gives one tap to
         // jump to the profile without going through the detail view first.
         const linkBtn = document.createElement("a");
@@ -185,15 +218,105 @@ async function loadHome() {
       notesUsersEl.innerHTML = noted.map((n) => {
         const snippet = String(n.note || "").trim();
         const truncated = snippet.length > 80 ? snippet.slice(0, 77) + "…" : snippet;
-        return `<a class="notes-user" data-username="${escapeAttr(n.username)}" href="#" title="${escapeAttr(snippet)}">@${escapeHtml(n.username)} <span class="muted small">${escapeHtml(truncated)}</span></a>`;
+        return `<a class="notes-user" data-username="${escapeAttr(n.username)}" href="${escapeAttr(instagramUrl(n.username))}" target="_blank" rel="noopener" title="${escapeAttr(snippet)}">@${escapeHtml(n.username)} <span class="muted small">${escapeHtml(truncated)}</span></a>`;
       }).join("");
       $$(".notes-user", notesUsersEl).forEach((el) =>
+        // Plain click → open modal. Cmd/ctrl/shift-click and
+        // middle-click fall through to the <a>'s default behavior
+        // (open Instagram profile in new tab) since target=_blank.
         el.addEventListener("click", (e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
           e.preventDefault();
           openAccountModal(el.dataset.username);
         })
       );
     }
+
+    // Public follow-backs / private accept-no-follow-back / Follow
+    // Request Rejected cards. Hidden when empty; otherwise shows the
+    // count + clickable usernames that open the per-account modal.
+    // `tsConfigs` is an array of `{key, label, format}` describing
+    // timestamps to render — one bullet-separated chip per entry.
+    //   key: property on the entry object (e.g. "ts", "ts2", "ts2_iso")
+    //   label: leading text ("you requested", "they accepted", "rejected ~")
+    //   format: "datetime" (default, fmtDateTime on int/iso) or "iso" (ISO string passthrough)
+    const renderUserCard = (cardId, listEl, countId, users, tsConfigs = []) => {
+      const card = $(`#${cardId}`);
+      const countEl = $(`#${countId}`);
+      if (countEl) countEl.textContent = (users && users.length) || 0;
+      if (!users || users.length === 0) { if (card) card.hidden = true; return; }
+      if (card) card.hidden = false;
+      if (!listEl) return;
+      listEl.innerHTML = users.map((entry) => {
+        const u = typeof entry === "string" ? entry : entry.username;
+        const tsParts = [];
+        if (typeof entry === "object") {
+          for (const cfg of tsConfigs) {
+            const v = entry[cfg.key];
+            if (v == null || v === "") continue;
+            let formatted;
+            if (cfg.format === "iso") {
+              // ISO string from server (taken_at). Convert to epoch
+              // seconds so fmtDateTime can render consistently.
+              const ms = Date.parse(v);
+              if (Number.isNaN(ms)) continue;
+              formatted = fmtDateTime(Math.floor(ms / 1000));
+            } else {
+              formatted = fmtDateTime(v);
+            }
+            tsParts.push(`${escapeHtml(cfg.label)} ${escapeHtml(formatted)}`);
+          }
+        }
+        const tsHtml = tsParts.length
+          ? `<span class="muted small">${tsParts.join(" · ")}</span>`
+          : "";
+        return `<a class="notes-user" data-username="${escapeAttr(u)}" href="${escapeAttr(instagramUrl(u))}" target="_blank" rel="noopener">@${escapeHtml(u)}${tsHtml ? " " + tsHtml : ""}</a>`;
+      }).join("");
+      $$(".notes-user", listEl).forEach((el) =>
+        // Plain click → modal. Modifier / middle clicks → browser
+        // default (new tab to instagram.com/<u>/).
+        el.addEventListener("click", (e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+          e.preventDefault();
+          openAccountModal(el.dataset.username);
+        })
+      );
+    };
+    renderUserCard(
+      "public-followback-card",
+      $("#public-followback-users"),
+      "count-public_followed_back",
+      data.public_followed_back || [],
+      [
+        { key: "ts",  label: "they followed you" },
+        { key: "ts2", label: "you followed them" },
+      ]
+    );
+    renderUserCard(
+      "private-accepted-card",
+      $("#private-accepted-users"),
+      "count-private_accepted_no_follow_back",
+      data.private_accepted_no_follow_back || [],
+      [
+        { key: "ts",  label: "you requested" },
+        { key: "ts2", label: "they accepted" },
+      ]
+    );
+    renderUserCard(
+      "request-rejected-card",
+      $("#request-rejected-users"),
+      "count-request_dropped",
+      data.request_dropped || [],
+      [
+        { key: "ts",      label: "you requested" },
+        // ts2_iso is a snapshot taken_at string (ISO). Fall back to
+        // "rejected ~" prefix since this is an ESTIMATE: rejection
+        // happened sometime after the last snapshot we observed
+        // them in pending.
+        { key: "ts2_iso", label: "rejected ~", format: "iso" },
+      ]
+    );
+
     loadArchiveCard();
   } catch (e) {
     console.error(e);
@@ -216,16 +339,25 @@ async function loadArchiveCard() {
     const totalMb = (data.total_bytes / 1024 / 1024).toFixed(1);
     $("#archive-summary").textContent =
       `${data.total_items} item${data.total_items === 1 ? "" : "s"} across ${data.users.length} account${data.users.length === 1 ? "" : "s"} · ${totalMb} MB`;
-    $("#archive-users").innerHTML = data.users.map((u) => {
-      const sizeKb = (u.bytes / 1024).toFixed(0);
-      return `<a class="archive-user" data-username="${escapeAttr(u.username)}" href="#" title="${escapeAttr(u.username)} · ${u.count} items · ${sizeKb} KB">@${escapeHtml(u.username)} <span class="muted small">${u.count}</span></a>`;
-    }).join("");
-    $$(".archive-user", card).forEach((el) =>
-      el.addEventListener("click", (e) => {
-        e.preventDefault();
-        openAccountModal(el.dataset.username);
-      })
+    // List rows match the notes / public-followback / private-accepted
+    // cards: username on the left, "<count> items · <size> · <when>"
+    // on the right. Each row links to /media/<username> in a new tab
+    // (real <a target="_blank"> so cmd/ctrl-click works without any
+    // JS interception). Server already sorts by latest_mtime desc, so
+    // most-recently archived accounts surface at the top.
+    const users = (data.users || []).slice().sort(
+      (a, b) => (b.latest_mtime || 0) - (a.latest_mtime || 0)
     );
+    const fmtSize = (bytes) => bytes >= 1024 * 1024
+      ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+      : `${(bytes / 1024).toFixed(0)} KB`;
+    $("#archive-users").innerHTML = users.map((u) => {
+      const size = fmtSize(u.bytes);
+      const when = fmtMtimeAgo(u.latest_mtime);
+      const href = `/media/${encodeURIComponent(u.username)}`;
+      const detail = `${u.count} item${u.count === 1 ? "" : "s"} · ${size}${when ? ` · ${when}` : ""}`;
+      return `<a class="notes-user" href="${escapeAttr(href)}" target="_blank" rel="noopener" title="${escapeAttr(u.username)} · open archive page">@${escapeHtml(u.username)} <span class="muted small">${escapeHtml(detail)}</span></a>`;
+    }).join("");
   } catch {
     card.hidden = true;
   }
@@ -315,20 +447,114 @@ async function refreshScanButton() {
     const data = await api.get("/api/scan-status");
     const btn = $("#scan-drive-btn");
     const forceBtn = $("#scan-drive-force-btn");
+    const resetBtn = $("#reset-snapshots-btn");
     const hint = $("#scan-folder-hint");
     if (data.watch_folder) {
       btn.hidden = false;
       if (forceBtn) forceBtn.hidden = false;
+      if (resetBtn) resetBtn.hidden = false;
       hint.hidden = false;
       hint.textContent = `Watching: ${data.watch_folder}`;
     } else {
       btn.hidden = true;
       if (forceBtn) forceBtn.hidden = true;
+      if (resetBtn) resetBtn.hidden = true;
       hint.hidden = true;
     }
   } catch (e) { /* server not ready, ignore */ }
 }
 refreshScanButton();
+
+// Reset snapshots + auto re-import. Confirms first since this wipes
+// all derived snapshot tables. Tags, notes, and archived media are
+// preserved server-side. The result panel shows the same per-file
+// detail view as a normal scan, so the 2 errors (or whatever's left)
+// are visible inline.
+async function runReset() {
+  const ok = window.confirm(
+    "This will wipe all snapshot data (followers / following / pending / etc.) and re-import every export from Drive.\n\n" +
+    "Tags, notes, follow-up queue, and archived media are kept.\n\n" +
+    "Continue?"
+  );
+  if (!ok) return;
+  const btn = $("#reset-snapshots-btn");
+  const status = $("#scan-status");
+  const original = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = "Resetting + re-importing… (can take a few minutes)"; }
+  status.innerHTML = `<div class="loading-card"><span class="spinner"></span>Wiping snapshots and re-importing every Drive export. Don't navigate away.</div>`;
+  try {
+    const result = await api.post("/api/reset-snapshots?rescan=true");
+    const scan = result.scan || {};
+    const seen = scan.already_seen ?? 0;
+    const errors = (scan.details || []).filter((d) => d.outcome === "error").length;
+    const wipedSummary = Object.entries(result.wiped || {})
+      .map(([t, n]) => `${t}: ${n}`).join(", ");
+    const summary = `<div class="ok">✓ Reset complete · wiped {${escapeHtml(wipedSummary)}} · ${scan.imported || 0} re-imported · ${scan.skipped || 0} skipped/backfilled${errors ? ` · <span class="err">${errors} errors</span>` : ""}</div>`;
+    let detailHtml = "";
+    if ((scan.details || []).length > 0) {
+      const items = scan.details.map((d) => {
+        const cls = d.outcome === "imported" || d.outcome === "backfilled" ? "ok"
+          : d.outcome === "error" ? "err" : "muted";
+        const verb = d.outcome === "imported" ? `+${d.snapshot_id}`
+          : d.outcome === "backfilled" ? "↺"
+          : d.outcome === "duplicate" ? "↩"
+          : d.outcome === "out_of_order" ? "⏪"
+          : d.outcome === "error" ? "✗" : d.outcome;
+        const msg = (d.message || "").trim();
+        const msgHtml = msg ? ` <span class="muted small">— ${escapeHtml(msg.length > 200 ? msg.slice(0, 197) + "…" : msg)}</span>` : "";
+        return `<div class="scan-item ${cls}"><span class="scan-verb">${escapeHtml(verb)}</span> <code>${escapeHtml(d.file)}</code>${msgHtml}</div>`;
+      }).join("");
+      detailHtml = `<details class="scan-details" open><summary class="muted small">${scan.details.length} per-file details</summary><div class="scan-detail-list">${items}</div></details>`;
+    }
+    status.innerHTML = summary + detailHtml;
+    await loadHome();
+    await loadAuditLog();
+  } catch (e) {
+    status.innerHTML = `<div class="err">✗ Reset failed: ${escapeHtml(e.message)}</div>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = original; }
+  }
+}
+$("#reset-snapshots-btn")?.addEventListener("click", runReset);
+
+// Pull the audit log. Render newest-first as one row per entry with
+// op + target + a one-line detail summary. Auto-loads when the
+// "View activity log" disclosure is opened.
+async function loadAuditLog() {
+  const el = $("#audit-log");
+  if (!el) return;
+  try {
+    const data = await api.get("/api/audit-log?limit=200");
+    const entries = data.entries || [];
+    if (entries.length === 0) {
+      el.innerHTML = `<div class="muted small">No activity recorded yet. Operations like scans, imports, errors, and resets will appear here.</div>`;
+      return;
+    }
+    el.innerHTML = entries.map((e) => {
+      const cls = !e.ok ? "err" : (e.op.includes("error") ? "err" : "muted");
+      const det = e.details
+        ? Object.entries(e.details).map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join(" · ")
+        : "";
+      const tgt = e.target ? `<code class="audit-target">${escapeHtml(e.target.length > 80 ? "…" + e.target.slice(-77) : e.target)}</code>` : "";
+      return `<div class="audit-row ${cls}">
+        <span class="audit-ts muted small">${escapeHtml(e.ts)}</span>
+        <span class="audit-op">${escapeHtml(e.op)}</span>
+        ${tgt}
+        ${det ? `<span class="audit-det muted small">${escapeHtml(det)}</span>` : ""}
+      </div>`;
+    }).join("");
+  } catch (err) {
+    el.innerHTML = `<div class="err">Couldn't load audit log: ${escapeHtml(err.message)}</div>`;
+  }
+}
+// Lazy-load on first open of the disclosure; refresh on each open
+// thereafter (cheap — capped at 200 rows).
+const auditDetails = document.querySelector(".audit-details");
+if (auditDetails) {
+  auditDetails.addEventListener("toggle", () => {
+    if (auditDetails.open) loadAuditLog();
+  });
+}
 
 // Toggles a "has-overflow" / "scrolled-end" class on a scrollable list so
 // the bottom-fade-mask (CSS) only shows when there's actually content
@@ -380,7 +606,12 @@ async function runScan({ force }) {
             : d.outcome === "duplicate" ? "↩"
             : d.outcome === "out_of_order" ? "⏪"
             : d.outcome === "error" ? "✗" : d.outcome;
-          return `<div class="scan-item ${cls}"><span class="scan-verb">${escapeHtml(verb)}</span> <code>${escapeHtml(d.file)}</code></div>`;
+          // Surface the error / skip reason inline (truncated). Without
+          // this, errors and skip outcomes were just an icon — you had
+          // to dig through the API response to see why.
+          const msg = (d.message || "").trim();
+          const msgHtml = msg ? ` <span class="muted small">— ${escapeHtml(msg.length > 200 ? msg.slice(0, 197) + "…" : msg)}</span>` : "";
+          return `<div class="scan-item ${cls}"><span class="scan-verb">${escapeHtml(verb)}</span> <code>${escapeHtml(d.file)}</code>${msgHtml}</div>`;
         }).join("");
         detailHtml = `<details class="scan-details"><summary class="muted small">Show ${result.details.length} per-file detail${result.details.length === 1 ? "" : "s"}</summary><div class="scan-detail-list">${items}</div></details>`;
       }
@@ -609,7 +840,14 @@ async function runCheck({ inputId, resultId, saveToQueue }) {
         loadQueue();
       }
       $$(".clickable-name", out).forEach((el) =>
-        el.addEventListener("click", () => openAccountModal(el.dataset.username))
+        // Plain click → modal. Modifier-click → open IG profile in new tab.
+        el.addEventListener("click", (e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey) {
+            window.open(instagramUrl(el.dataset.username), "_blank", "noopener");
+            return;
+          }
+          openAccountModal(el.dataset.username);
+        })
       );
       const copyBtn = out.querySelector("#copy-pruned");
       if (copyBtn) {
@@ -1023,9 +1261,14 @@ window.addEventListener("popstate", (e) => {
       if (view) {
         if (view === "lists" && kind) {
           history.replaceState({ view: "lists", listKind: kind }, "", `#lists/${kind}`);
-          showView("lists", false);
-          if ([...select.options].some((o) => o.value === kind)) select.value = kind;
-          loadLists();
+          // Use goToList — it handles dropdown population via
+          // buildListKindOptions() when the option isn't there yet,
+          // sets the right sort default per bucket-vs-non-bucket
+          // kind, and calls loadLists. The previous inline path
+          // skipped buildListKindOptions, so on a fresh tab the
+          // select had no options → select.value never got set →
+          // loadLists ran with no kind → "Loading list…" forever.
+          goToList(kind, false);
           return;
         }
         history.replaceState({ view }, "", `#${view}`);
@@ -1122,6 +1365,7 @@ const LIST_KINDS = [
   ["all_following", "All following"],
   ["mutuals", "Mutuals"],
   ["public_mutuals", "🌐 Public mutuals (followed back)"],
+  ["private_accepted_no_follow_back", "🔒 Private accepted, no follow-back"],
   ["not_following_you_back", "Don't follow you back"],
   ["feeder_accounts", "Feeder accounts (follow you, you don't)"],
   ["pending", "Pending requests you sent"],
@@ -1164,7 +1408,7 @@ function buildListKindOptions() {
 // fast instead of opening a long dropdown. Each pill gets a count
 // once loadLists has data.
 const LIST_GROUPS = [
-  { label: "Current",  kinds: ["everyone", "all_followers", "all_following", "mutuals", "not_following_you_back", "feeder_accounts", "pending", "incoming_requests", "renamed"] },
+  { label: "Current",  kinds: ["everyone", "all_followers", "all_following", "mutuals", "public_mutuals", "private_accepted_no_follow_back", "not_following_you_back", "feeder_accounts", "pending", "incoming_requests", "renamed"] },
   { label: "History",  kinds: ["ever_unfollowed_you", "mutual_break_you_first", "mutual_break_they_first", "ever_removed_you_as_follower", "you_unfollowed_ever", "still_follow_after_drop"] },
   { label: "Requests", kinds: ["ever_incoming_requests", "real_requests", "incoming_request_dropped", "ever_requested_outgoing", "request_dropped"] },
   { label: "Tags",     kinds: ["favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public"] },
@@ -1363,6 +1607,19 @@ $("#list-output")?.addEventListener("click", async (e) => {
   // click from also bubbling up to the row (which would open the modal).
   if (e.target.closest(".row-open")) {
     e.stopPropagation();
+    return;
+  }
+
+  // Modifier-click on the row anywhere → open the Instagram profile in
+  // a new tab instead of opening the modal. Covers cmd-click (Mac),
+  // ctrl-click (Windows/Linux), and shift-click (new window). Tag
+  // buttons handle their own stopPropagation above so we don't trigger
+  // this from a tag-button click.
+  if (e.metaKey || e.ctrlKey || e.shiftKey) {
+    if (e.target.closest(".row-tag")) return;  // tag button has its own handling
+    e.preventDefault();
+    e.stopPropagation();
+    window.open(instagramUrl(row.dataset.username), "_blank", "noopener");
     return;
   }
 
@@ -1871,6 +2128,23 @@ function fmtAgo(days) {
   if (days === 0) return "today";
   if (days === 1) return "yesterday";
   if (days < 30) return `${days} days ago`;
+  if (days < 365) return `${Math.round(days / 30)} mo ago`;
+  return `${Math.round(days / 365 * 10) / 10} yr ago`;
+}
+
+// Friendly relative time for an absolute mtime (seconds since epoch).
+// Used by the home archive list — minute / hour granularity within
+// the day so a freshly archived account reads as "just now" instead
+// of "today" alongside an account archived 12 hours ago.
+function fmtMtimeAgo(secs) {
+  if (!secs) return "";
+  const diffSec = Math.max(0, Date.now() / 1000 - secs);
+  if (diffSec < 60) return "just now";
+  if (diffSec < 3600) return `${Math.round(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.round(diffSec / 3600)}h ago`;
+  const days = Math.round(diffSec / 86400);
+  if (days === 1) return "yesterday";
+  if (days < 30) return `${days}d ago`;
   if (days < 365) return `${Math.round(days / 30)} mo ago`;
   return `${Math.round(days / 365 * 10) / 10} yr ago`;
 }

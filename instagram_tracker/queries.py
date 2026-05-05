@@ -44,9 +44,27 @@ def list_snapshots(conn: sqlite3.Connection) -> list[SnapshotMeta]:
 
 
 def latest_id(conn: sqlite3.Connection) -> int | None:
-    """Most-recent snapshot CHRONOLOGICALLY (not by import order)."""
+    """Most-recent snapshot by FRESHEST-SIGNAL time.
+
+    Picks the snapshot whose `MAX(taken_at, created_at)` is highest.
+    `taken_at` and `created_at` carry different semantics depending on
+    the import source:
+
+      * Zip uploads — `taken_at` and `created_at` are both set to the
+        upload time. Meaningful as "when this data entered our system."
+      * Drive-folder deliveries — `taken_at` is parsed from the folder
+        name (Meta's export-REQUEST time), while `created_at` is the
+        time the watcher imported it (the DELIVERY time, hours later).
+
+    Naive `ORDER BY taken_at` would pick a zip uploaded at 07:58 over
+    a Drive delivery imported at 08:17 — even though the Drive delivery
+    is the freshest data. Using MAX gives both source types a fair
+    "latest" signal.
+    """
     row = conn.execute(
-        "SELECT id FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT 1"
+        "SELECT id FROM snapshots "
+        "ORDER BY max(coalesce(taken_at, ''), coalesce(created_at, '')) DESC, "
+        "id DESC LIMIT 1"
     ).fetchone()
     return None if row is None else int(row["id"])
 
