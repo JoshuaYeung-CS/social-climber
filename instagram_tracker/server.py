@@ -302,6 +302,32 @@ def _read_push_config() -> dict:
         return {"method": "none", "error": str(e)}
 
 
+def _send_reminder(title: str, body: str) -> tuple[bool, str]:
+    """Create a Reminders.app reminder due in 5 seconds. iOS pushes a
+    notification with sound when the due time hits — works for self-
+    addressed alerts where iMessage's banner gets suppressed. Reminder
+    syncs via iCloud so the user's iPhone gets it as long as Reminders
+    is enabled in iCloud (Settings → Apple ID → iCloud → Reminders)."""
+    import subprocess
+    safe_title = (title or "IG Bot alert").replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+    safe_body = (body or "").replace("\\", "\\\\").replace('"', '\\"')
+    script = (
+        f'tell application "Reminders"\n'
+        f'  set newRem to make new reminder with properties {{name:"{safe_title}", body:"{safe_body}", remind me date:((current date) + 5)}}\n'
+        f'end tell'
+    )
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            return True, "reminder created (fires in 5s)"
+        return False, (result.stderr or result.stdout or "osascript failed").strip()
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
 def _send_imessage(recipient: str, title: str, body: str) -> tuple[bool, str]:
     import subprocess
     text = f"{title}\n\n{body}" if title else body
@@ -380,7 +406,8 @@ def api_push(payload: dict = Body(...)):
     recipient = (cfg.get("recipient") or "").strip()
     if method == "none":
         return {"ok": False, "method": "none", "error": "push not configured (~/.config/igtracker/push.json)"}
-    if not recipient:
+    # Reminders doesn't need a recipient — it's local-to-iCloud.
+    if method != "reminders" and not recipient:
         return {"ok": False, "method": method, "error": "no recipient configured"}
     if method == "imessage":
         ok, info = _send_imessage(recipient, title, body)
@@ -388,6 +415,8 @@ def api_push(payload: dict = Body(...)):
         ok, info = _send_email(recipient, cfg.get("smtp") or {}, title, body)
     elif method == "ntfy":
         ok, info = _send_ntfy(recipient, title, body, priority)
+    elif method == "reminders":
+        ok, info = _send_reminder(title, body)
     else:
         return {"ok": False, "method": method, "error": f"unknown method: {method}"}
     return {"ok": ok, "method": method, "info": info}
