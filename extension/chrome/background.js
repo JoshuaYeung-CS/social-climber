@@ -150,11 +150,12 @@ async function _appendTiming(seconds) {
   await chrome.storage.local.set({ exportTimings });
 }
 
-async function _trackerScan() {
+async function _trackerScan(sinceMs) {
   const { trackerUrl } = await chrome.storage.local.get(["trackerUrl"]);
   const base = (trackerUrl || "http://127.0.0.1:8000").replace(/\/$/, "");
+  const sinceQ = (sinceMs != null && Number.isFinite(sinceMs)) ? `&since_ms=${sinceMs}` : "";
   try {
-    const r = await fetch(`${base}/api/scan?force=false`, { method: "POST" });
+    const r = await fetch(`${base}/api/scan?force=false${sinceQ}`, { method: "POST" });
     if (!r.ok) return null;
     return await r.json();
   } catch {
@@ -235,12 +236,19 @@ async function _onArrivalPollFire() {
     return;
   }
   console.log(`[IG Tracker] Drive arrival poll: scanning (elapsed ${elapsedMin.toFixed(0)}min).`);
-  const result = await _trackerScan();
+  const result = await _trackerScan(pendingArrival.startedAt);
   if (!result) return;
-  const newImports = (result.imported || []).length;
-  if (newImports > 0) {
+  const newImports = Number(result.imported) || 0;
+  // Treat duplicates as arrivals too: the export landed, we just had
+  // identical contents already so we chose not to keep it. From the
+  // bot's perspective the run succeeded — file is in Drive.
+  const newSince = Number(result.new_files_since) || 0;
+  if (newImports > 0 || newSince > 0) {
     const elapsedSec = Math.round(elapsedMs / 1000);
-    console.log(`[IG Tracker] Drive arrival! ${newImports} new import(s) after ${elapsedSec}s.`);
+    const reason = newImports > 0
+      ? `${newImports} new import(s)`
+      : `${newSince} new file(s) in Drive (deduped against existing snapshots)`;
+    console.log(`[IG Tracker] Drive arrival! ${reason} after ${elapsedSec}s.`);
     await chrome.alarms.clear(ARRIVAL_POLL_ALARM);
     await chrome.storage.local.set({ pendingArrival: null });
     await _appendTiming(elapsedSec);
@@ -249,6 +257,7 @@ async function _onArrivalPollFire() {
       status: "arrived",
       elapsedSec,
       imports: newImports,
+      duplicate: newImports === 0 && newSince > 0,
     });
   }
 }

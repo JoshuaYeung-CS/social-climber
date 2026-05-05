@@ -115,15 +115,42 @@ def scan_status():
 
 
 @app.post("/api/scan")
-def scan_now(force: bool = False):
+def scan_now(force: bool = False, since_ms: int | None = None):
     """Manually trigger a one-shot scan-and-import of the watch folder.
     Synchronous so the response carries the result; on a slow Drive root
     this can take a couple of minutes, but the user opted in by clicking.
 
     `force=true` bypasses the path-fingerprint dedup so every file is
     re-extracted and re-evaluated. Catches files that the fingerprint
-    incorrectly skipped (Drive cache mismatches, etc.)."""
+    incorrectly skipped (Drive cache mismatches, etc.).
+
+    `since_ms` (optional, unix-ms) is used by the extension's arrival
+    poller. The response adds `new_files_since` — the number of files
+    in the watch folder whose mtime is newer than `since_ms`. The
+    arrival poller treats >0 as proof the export landed, regardless
+    of whether it imported (duplicates of an existing snapshot still
+    count as a successful Drive arrival from the bot's POV — the
+    file showed up, we just chose not to keep it)."""
     result = watcher_mod.scan_once(force=force)
+    if since_ms is not None:
+        try:
+            cutoff_s = float(since_ms) / 1000.0
+            from pathlib import Path as _Path
+            from os import scandir as _scandir
+            wf = result.get("watch_folder")
+            count = 0
+            if wf:
+                with _scandir(wf) as it:
+                    for entry in it:
+                        try:
+                            if entry.stat().st_mtime > cutoff_s:
+                                count += 1
+                        except OSError:
+                            continue
+            result["new_files_since"] = count
+            result["since_ms"] = int(since_ms)
+        except (ValueError, TypeError):
+            result["new_files_since"] = 0
     if result.get("imported") or result.get("skipped"):
         _bump_snapshot_version()
     # Audit summary + each error file's reason. Successful imports /

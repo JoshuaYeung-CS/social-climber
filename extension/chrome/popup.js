@@ -145,7 +145,7 @@ async function renderExportStats() {
                 : h.status === "triggered-manual" ? "▶ manual"
                 : "▶ auto";
     const detail = h.status === "arrived"
-      ? `arrived in ${_fmtSeconds(h.elapsedSec)}`
+      ? `arrived in ${_fmtSeconds(h.elapsedSec)}${h.duplicate ? " (duplicate of existing)" : ""}`
       : h.status === "no-arrival"
         ? `no arrival within ${_fmtSeconds(h.elapsedSec)}`
         : "";
