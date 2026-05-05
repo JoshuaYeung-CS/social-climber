@@ -51,7 +51,11 @@ const AUTO_RETRY_MAX_PER_DAY = 4;
 // of 90s gives the scroll loop time to load enough media before we
 // close the tab.
 const ARCHIVE_RUNNER_DEFAULT_INTERVAL_MIN = 10;
-const ARCHIVE_RUNNER_TAB_BUDGET_MS = 90_000;
+// 4 minutes per account is enough for typical favorites (50–300 tiles).
+// At 10-min pacing we still leave 6 min idle between accounts. If you
+// have power-users with thousands of posts, raise this; the alarm
+// won't fire the next account until this expires anyway.
+const ARCHIVE_RUNNER_TAB_BUDGET_MS = 4 * 60_000;
 // Drive-arrival polling: when we have historical timings, we start
 // polling a few minutes before the EARLIEST typical arrival (so we
 // catch the fast cases) and keep going to a few minutes after the
@@ -456,7 +460,9 @@ async function _onArchiveRunnerFire() {
   let windowId = null;
   try {
     const win = await chrome.windows.create({
-      url: `https://www.instagram.com/${encodeURIComponent(username)}/`,
+      // Hash flag tells the content script "you were opened by the
+      // runner — override visibility and auto-fire archive-all".
+      url: `https://www.instagram.com/${encodeURIComponent(username)}/#igtracker-runner=archive`,
       focused: false,
       type: "normal",
       state: "minimized",

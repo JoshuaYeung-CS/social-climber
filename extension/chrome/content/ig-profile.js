@@ -3013,6 +3013,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return false;
 });
 
+// True when this tab was opened by the auto-archive runner. The
+// runner appends `#igtracker-runner=archive` to the profile URL so
+// the content script can:
+//   1. Override document.visibilityState (safe in this context — we
+//      only land on profile roots, never story/highlight URLs that
+//      track viewer identity)
+//   2. Auto-fire archiveAllVisiblePosts after the overlay renders,
+//      without needing a real user gesture (which we can't synthesize
+//      from a service worker anyway).
+const _IS_RUNNER_TAB = (() => {
+  try {
+    const h = window.location.hash || "";
+    return /(?:^|[#&])igtracker-runner=archive(?:&|$)/.test(h);
+  } catch { return false; }
+})();
+
+if (_IS_RUNNER_TAB) {
+  // Visibility override: gives this tab full-speed timers even when
+  // its window is minimized. Only applied in runner-flagged tabs so
+  // normal user browsing still respects IG's hidden-tab semantics
+  // (story-view timers, autoplay, polling backoff).
+  try {
+    Object.defineProperty(document, "hidden",          { configurable: true, get: () => false });
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+  } catch (_) { /* re-defining can fail in some Chrome builds */ }
+  console.log("[IG Tracker] runner tab detected — visibility override on");
+}
+
 (async function main() {
   _settings = await loadSettings();
   if (!_settings.showOverlay) return;
@@ -3035,6 +3063,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // Initial pass.
   setTimeout(onLocationMaybeChanged, 200);
+
+  // Runner mode: after the overlay renders, programmatically fire the
+  // archive-all flow. The 2.5s delay lets IG's grid load some tiles
+  // first (otherwise we'd start scrolling against an empty grid). We
+  // don't go through the overlay button click — calling the function
+  // directly skips the AudioContext arming (which needs a real user
+  // gesture). Visibility override above handles throttling instead.
+  if (_IS_RUNNER_TAB) {
+    setTimeout(async () => {
+      const username = isProfilePath(window.location.pathname);
+      if (!username) {
+        console.warn("[IG Tracker] runner: not on a profile path, abort");
+        return;
+      }
+      console.log(`[IG Tracker] runner: auto-archiving @${username} with categories ${JSON.stringify(_archiveCategories)}`);
+      try {
+        await archiveAllVisiblePosts(username, { ..._archiveCategories });
+        console.log(`[IG Tracker] runner: archive-all returned for @${username}`);
+      } catch (e) {
+        console.error("[IG Tracker] runner: archive-all threw:", e);
+      }
+    }, 2500);
+  }
 
   // Listen for live setting changes from the popup so the overlay can be
   // toggled on/off without reloading the page.
