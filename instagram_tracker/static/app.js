@@ -31,6 +31,12 @@ async function _fetchWithTimeout(path, init = {}, timeoutMs = API_TIMEOUT_MS) {
 const _LONG_TIMEOUT_PATHS = new Set([
   "/api/reset-snapshots",
   "/api/scan",
+  // /api/lists does the heavy cross-snapshot cumulative compute.
+  // Cold-cache hits can take 30-60s once the snapshot table grows
+  // past a few thousand rows. The cached path is sub-second so this
+  // long timeout only matters on the first request after a server
+  // restart or a snapshot import.
+  "/api/lists",
 ]);
 function _timeoutFor(path) {
   for (const p of _LONG_TIMEOUT_PATHS) {
