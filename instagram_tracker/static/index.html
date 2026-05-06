@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/static/icon.svg" />
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/static/styles.css?v=14" />
+  <link rel="stylesheet" href="/static/styles.css?v=15" />
   <title>Instagram Tracker</title>
 </head>
 <body>
@@ -117,8 +117,11 @@
       </div>
 
       <div class="card" id="archive-queue-card" hidden>
-        <h2>📥 Archive queue</h2>
-        <p class="muted small">Accounts the auto-archive runner will visit (favorites + manually-added). Add a username to queue it; remove takes it off the queue without un-favoriting.</p>
+        <h2 style="display:flex; align-items:center; gap:8px;">
+          📥 Archive queue
+          <a href="/archive-queue" target="_blank" rel="noopener" class="card-open-link" title="Open the full-screen queue manager in a new tab">↗</a>
+        </h2>
+        <p class="muted small">Accounts the auto-archive runner will visit (favorites + manually-added). Add a username to queue it; remove takes it off the queue without un-favoriting. <a href="/archive-queue" target="_blank" rel="noopener">Open full-page manager ↗</a></p>
         <div class="archive-queue-add-row">
           <input type="text" id="archive-queue-add-input" placeholder="Add @username to queue" autocomplete="off" />
           <button class="secondary" id="archive-queue-add-btn">Add</button>
@@ -257,6 +260,6 @@
   <div id="toast" class="toast" hidden></div>
 
   <script src="/static/archive-gallery.js"></script>
-  <script src="/static/app.js?v=14"></script>
+  <script src="/static/app.js?v=15"></script>
 </body>
 </html>

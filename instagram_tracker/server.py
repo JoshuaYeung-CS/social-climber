@@ -3632,6 +3632,14 @@ def archive_overview_page():
     return FileResponse(STATIC_DIR / "archive.html", headers=_NO_CACHE)
 
 
+@app.get("/archive-queue")
+def archive_queue_page():
+    """Standalone queue manager — full-screen view of the auto-archive
+    runner's queue with add/remove controls. Linked from the home
+    view's Archive queue card via the ↗ icon (opens in a new tab)."""
+    return FileResponse(STATIC_DIR / "archive-queue.html", headers=_NO_CACHE)
+
+
 @app.get("/manifest.webmanifest")
 def manifest():
     return FileResponse(
