@@ -429,23 +429,56 @@ async function _archiveTrackerUrl() {
 }
 
 async function refreshArchiveRunnerAlarm() {
-  const { archiveRunnerOn, archiveRunnerIntervalMin } = await chrome.storage.local.get([
-    "archiveRunnerOn", "archiveRunnerIntervalMin",
+  const {
+    archiveRunnerOn,
+    archiveRunnerIntervalMin,
+    archiveRunnerMode,
+    archiveRunnerGraceMin,
+  } = await chrome.storage.local.get([
+    "archiveRunnerOn",
+    "archiveRunnerIntervalMin",
+    "archiveRunnerMode",
+    "archiveRunnerGraceMin",
   ]);
   await chrome.alarms.clear(ARCHIVE_RUNNER_ALARM);
   if (!archiveRunnerOn) {
     console.log("[IG Tracker] Archive runner: off");
     return;
   }
-  const interval = Math.max(1, Number(archiveRunnerIntervalMin) || ARCHIVE_RUNNER_DEFAULT_INTERVAL_MIN);
-  // First fire after a short kick (15s) so toggling on doesn't make
-  // the user wait `interval` minutes for nothing to happen, then
-  // every `interval` minutes after that.
-  chrome.alarms.create(ARCHIVE_RUNNER_ALARM, {
-    delayInMinutes: 0.25,
-    periodInMinutes: interval,
-  });
-  console.log(`[IG Tracker] Archive runner: armed every ${interval} min`);
+  const mode = archiveRunnerMode === "completion" ? "completion" : "interval";
+  if (mode === "interval") {
+    // Periodic alarm — fires every N minutes regardless of whether the
+    // previous account finished archiving.
+    const interval = Math.max(1, Number(archiveRunnerIntervalMin) || ARCHIVE_RUNNER_DEFAULT_INTERVAL_MIN);
+    chrome.alarms.create(ARCHIVE_RUNNER_ALARM, {
+      delayInMinutes: 0.25,
+      periodInMinutes: interval,
+    });
+    console.log(`[IG Tracker] Archive runner: interval mode, every ${interval} min`);
+  } else {
+    // Completion mode — one-shot alarm. Re-armed by either:
+    //   1. The "archive-runner-complete" SW message (content script
+    //      finished — fires next account after grace_min)
+    //   2. The tab-budget setTimeout (fallback when content script
+    //      crashed or never sent the message — fires next account
+    //      after grace_min)
+    // Initial fire 15s out, just like interval mode.
+    chrome.alarms.create(ARCHIVE_RUNNER_ALARM, { delayInMinutes: 0.25 });
+    const grace = Math.max(0.25, Number(archiveRunnerGraceMin) || 1);
+    console.log(`[IG Tracker] Archive runner: completion mode, grace ${grace} min`);
+  }
+}
+
+async function _scheduleNextRunnerFireFromCompletion(reason) {
+  const { archiveRunnerOn, archiveRunnerMode, archiveRunnerGraceMin } = await chrome.storage.local.get([
+    "archiveRunnerOn", "archiveRunnerMode", "archiveRunnerGraceMin",
+  ]);
+  if (!archiveRunnerOn) return;
+  if (archiveRunnerMode !== "completion") return;
+  const grace = Math.max(0.25, Number(archiveRunnerGraceMin) || 1);
+  await chrome.alarms.clear(ARCHIVE_RUNNER_ALARM);
+  chrome.alarms.create(ARCHIVE_RUNNER_ALARM, { delayInMinutes: grace });
+  console.log(`[IG Tracker] Archive runner: completion-triggered next fire in ${grace} min (reason: ${reason})`);
 }
 
 // Failure-handling threshold. After this many cumulative failed
@@ -628,6 +661,14 @@ async function _onArchiveRunnerFire() {
     // Verification happens at the START of the NEXT fire (so the
     // server has had time to register newly-saved files). No need
     // to verify here.
+    //
+    // In completion mode the next fire is normally triggered by the
+    // content script's "archive-runner-complete" message. This budget
+    // timer is the safety net: if the content script crashed, the
+    // page never finished loading, or the SW was asleep when the
+    // message landed, we still advance to the next account after the
+    // tab budget elapses.
+    await _scheduleNextRunnerFireFromCompletion("budget-fallback");
   }, ARCHIVE_RUNNER_TAB_BUDGET_MS);
 }
 
@@ -731,7 +772,10 @@ chrome.runtime.onStartup.addListener(() => { refreshExportAlarm(); refreshArchiv
 // Re-arm runner whenever its config changes.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes.archiveRunnerOn || changes.archiveRunnerIntervalMin) {
+  if (changes.archiveRunnerOn ||
+      changes.archiveRunnerIntervalMin ||
+      changes.archiveRunnerMode ||
+      changes.archiveRunnerGraceMin) {
     refreshArchiveRunnerAlarm();
   }
 });
@@ -981,6 +1025,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const [data, alarm] = await Promise.all([
         chrome.storage.local.get([
           "archiveRunnerOn", "archiveRunnerIntervalMin",
+          "archiveRunnerMode", "archiveRunnerGraceMin",
           "archiveRunnerHistory", "archiveRunnerLastStats",
           "archiveRunnerState",
         ]),
@@ -991,6 +1036,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         ok: true,
         on: !!data.archiveRunnerOn,
         intervalMin: Number(data.archiveRunnerIntervalMin) || ARCHIVE_RUNNER_DEFAULT_INTERVAL_MIN,
+        mode: data.archiveRunnerMode === "completion" ? "completion" : "interval",
+        graceMin: Number(data.archiveRunnerGraceMin) || 1,
         history: (data.archiveRunnerHistory || []).slice(-15).reverse(),
         lastStats: data.archiveRunnerLastStats || null,
         nextFireAt: alarm ? alarm.scheduledTime : null,
@@ -999,6 +1046,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         permanentFailures: st.permanentFailures || {},
         attemptCounts: st.attemptCounts || {},
       });
+    })();
+    return true;
+  }
+  // Content script signals the archive run for an account is done.
+  // In completion mode this is the trigger for the next account; we
+  // re-arm a one-shot alarm `graceMin` minutes out. In interval mode
+  // this is informational only — the periodic alarm is what advances
+  // the queue.
+  if (msg.type === "archive-runner-complete") {
+    (async () => {
+      try {
+        const state = await _loadArchiveState();
+        // Only re-schedule if the completing account is the one we're
+        // tracking — guards against stale messages from old tabs the
+        // user might still have open after a runner restart.
+        if (msg.username && state.inFlight && state.inFlight === msg.username) {
+          await _scheduleNextRunnerFireFromCompletion("content-script-signal");
+        } else {
+          console.log(`[IG Tracker] archive-runner-complete: ignored (inFlight=${state.inFlight}, msg=${msg.username})`);
+        }
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e?.message || e) });
+      }
     })();
     return true;
   }

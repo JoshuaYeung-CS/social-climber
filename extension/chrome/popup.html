@@ -42,11 +42,23 @@
     <div class="schedule-row">
       <label class="schedule-toggle">
         <input type="checkbox" id="archive-runner-on" />
-        <span>Process queue every</span>
+        <span>Auto-archive on</span>
       </label>
-      <input type="number" id="archive-runner-interval" min="1" step="1" value="3" inputmode="numeric" />
-      <span class="schedule-dash">min</span>
       <span class="schedule-status muted small" id="archive-runner-status"></span>
+    </div>
+    <div class="archive-mode-row">
+      <label class="archive-mode-opt">
+        <input type="radio" name="archive-runner-mode" value="interval" id="archive-runner-mode-interval" />
+        <span>every</span>
+        <input type="number" id="archive-runner-interval" min="1" step="1" value="10" inputmode="numeric" />
+        <span class="schedule-dash">min (fixed cadence)</span>
+      </label>
+      <label class="archive-mode-opt">
+        <input type="radio" name="archive-runner-mode" value="completion" id="archive-runner-mode-completion" />
+        <span>after each finishes +</span>
+        <input type="number" id="archive-runner-grace" min="1" step="1" value="1" inputmode="numeric" />
+        <span class="schedule-dash">min grace</span>
+      </label>
     </div>
     <div id="archive-runner-summary" class="muted small" style="margin-top:8px"></div>
     <div id="archive-runner-permfail-banner" class="archive-permfail-banner" hidden></div>

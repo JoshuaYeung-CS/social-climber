@@ -425,6 +425,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 function initArchiveRunnerControls() {
   const onEl = el("archive-runner-on");
   const intervalEl = el("archive-runner-interval");
+  const graceEl = el("archive-runner-grace");
+  const modeIntervalEl = el("archive-runner-mode-interval");
+  const modeCompletionEl = el("archive-runner-mode-completion");
   const statusEl = el("archive-runner-status");
   const addInput = el("archive-add-input");
   const addBtn = el("archive-add-btn");
@@ -454,25 +457,58 @@ function initArchiveRunnerControls() {
     addInput.addEventListener("keydown", (e) => { if (e.key === "Enter") doAdd(); });
   }
 
-  chrome.storage.local.get(["archiveRunnerOn", "archiveRunnerIntervalMin"], (s) => {
-    onEl.checked = !!s.archiveRunnerOn;
-    intervalEl.value = String(Number(s.archiveRunnerIntervalMin) || 10);
-    intervalEl.disabled = !onEl.checked;
-    statusEl.textContent = onEl.checked ? `every ${intervalEl.value} min` : "off";
-  });
+  function _statusText(isOn, mode, intervalMin, graceMin) {
+    if (!isOn) return "off";
+    if (mode === "completion") return `after each + ${graceMin} min`;
+    return `every ${intervalMin} min`;
+  }
+
+  function _applyEnabled() {
+    const isOn = onEl.checked;
+    const mode = modeCompletionEl.checked ? "completion" : "interval";
+    intervalEl.disabled = !isOn || mode !== "interval";
+    graceEl.disabled = !isOn || mode !== "completion";
+    modeIntervalEl.disabled = !isOn;
+    modeCompletionEl.disabled = !isOn;
+  }
+
+  chrome.storage.local.get(
+    ["archiveRunnerOn", "archiveRunnerIntervalMin", "archiveRunnerMode", "archiveRunnerGraceMin"],
+    (s) => {
+      onEl.checked = !!s.archiveRunnerOn;
+      intervalEl.value = String(Number(s.archiveRunnerIntervalMin) || 10);
+      graceEl.value = String(Number(s.archiveRunnerGraceMin) || 1);
+      const mode = s.archiveRunnerMode === "completion" ? "completion" : "interval";
+      modeIntervalEl.checked = (mode === "interval");
+      modeCompletionEl.checked = (mode === "completion");
+      _applyEnabled();
+      statusEl.textContent = _statusText(
+        onEl.checked, mode,
+        Number(intervalEl.value) || 10,
+        Number(graceEl.value) || 1,
+      );
+    },
+  );
 
   const persist = async () => {
-    intervalEl.disabled = !onEl.checked;
+    _applyEnabled();
     const interval = Math.max(1, Number(intervalEl.value) || 10);
+    const grace = Math.max(1, Number(graceEl.value) || 1);
+    const mode = modeCompletionEl.checked ? "completion" : "interval";
     await chrome.storage.local.set({
       archiveRunnerOn: onEl.checked,
       archiveRunnerIntervalMin: interval,
+      archiveRunnerGraceMin: grace,
+      archiveRunnerMode: mode,
     });
-    statusEl.textContent = onEl.checked ? `every ${interval} min` : "off";
+    statusEl.textContent = _statusText(onEl.checked, mode, interval, grace);
     setTimeout(renderArchiveRunner, 400);
   };
   onEl.addEventListener("change", persist);
   intervalEl.addEventListener("input", persist);
+  graceEl.addEventListener("input", persist);
+  modeIntervalEl.addEventListener("change", persist);
+  modeCompletionEl.addEventListener("change", persist);
 }
 
 async function renderArchiveRunner() {
@@ -509,7 +545,8 @@ async function renderArchiveRunner() {
   if (resp.on && resp.nextFireAt) {
     const minsUntil = Math.max(0, Math.round((resp.nextFireAt - Date.now()) / 60000));
     const clock = new Date(resp.nextFireAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    parts.push(`next at ${clock} (~${minsUntil} min)`);
+    const modeTag = resp.mode === "completion" ? " · completion mode" : "";
+    parts.push(`next at ${clock} (~${minsUntil} min)${modeTag}`);
   }
   summary.textContent = parts.join(" · ");
 

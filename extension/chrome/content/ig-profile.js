@@ -1742,6 +1742,14 @@ async function archiveAllVisiblePosts(username, categories) {
       } catch (e) {
         console.warn(`[IG Tracker] archive-all: complete-ping failed for @${username}:`, e?.message || e);
       }
+      // Signal the SW directly so the auto-archive runner (in
+      // completion mode) can advance to the next account immediately
+      // instead of waiting for the full tab budget. Best-effort: if
+      // the SW is dormant or the message fails, the budget timer
+      // still fires the close fallback.
+      try {
+        chrome.runtime.sendMessage({ type: "archive-runner-complete", username });
+      } catch (_) { /* SW unreachable, fall back to budget timer */ }
     }
   }
 }
