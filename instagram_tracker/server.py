@@ -727,6 +727,16 @@ def _home_compute():
                 | {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
                 | {r["username"] for r in tags_mod.list_with_flag(conn, "random_request")}
             )
+            # random_request is the EXCEPTION to the historical-counts
+            # rule: a random-request tag means the user has confirmed
+            # the account was spam/noise, not a real follower
+            # relationship. Briefly appearing in followers due to IG
+            # export flicker quirks shouldn't count as "they unfollowed
+            # you." disabled/unavailable stay un-subtracted (real
+            # accounts that went private/deactivated — see comment
+            # above), but random_request is removed from event-history
+            # counts and lists.
+            random_tagged_home = {r["username"] for r in tags_mod.list_with_flag(conn, "random_request")}
             ever_unfollowed_you = ever_unfollowed_you_inbound | mutual_breaks
             mb_you_first_home, mb_they_first_home = q.split_mutual_breaks_by_initiator(conn, mutual_breaks)
 
@@ -844,11 +854,16 @@ def _home_compute():
                 # unfollowing them back. mb_you_first stays out (you
                 # initiated). The mb_* lists below still expose the
                 # split for users who want the strict sub-categories.
-                "ever_unfollowed_you": len(ever_unfollowed_you_inbound | mb_they_first_home),
-                "mutual_break_you_first": len(mb_you_first_home),
-                "mutual_break_they_first": len(mb_they_first_home),
-                "ever_removed_you_as_follower": len(ever_removed),
-                "ever_you_unfollowed": len(ever_self),
+                # All event-history counts subtract random_request_tagged
+                # (the user's "this was spam, not a real interaction"
+                # flag); see note above for why disabled/unavailable
+                # stay un-subtracted while random_request is the
+                # exception.
+                "ever_unfollowed_you": len((ever_unfollowed_you_inbound | mb_they_first_home) - random_tagged_home),
+                "mutual_break_you_first": len(mb_you_first_home - random_tagged_home),
+                "mutual_break_they_first": len(mb_they_first_home - random_tagged_home),
+                "ever_removed_you_as_follower": len(ever_removed - random_tagged_home),
+                "ever_you_unfollowed": len(ever_self - random_tagged_home),
                 "still_follow_after_drop": len(still_follow_them),
                 "ever_incoming_requests": len(ever_incoming),
                 "ever_requested_outgoing": len(ever_requested_outgoing),
@@ -2605,12 +2620,18 @@ def _lists_apply_overlay(pure: dict) -> dict:
         u for u, t in flagged.items()
         if t.get("disabled") or t.get("unavailable") or t.get("random_request")
     }
-    # Cumulative event-log lists. Suppression (disabled/unavailable/
-    # random_request) MUST NOT apply here — historical events are facts
-    # about the past, and an account being tagged 'unavailable' BECAUSE
-    # they unfollowed and went private would otherwise hide the event
-    # from its own log. Matches the home dashboard counts which already
-    # skip suppression for these (see _home_compute).
+    # random_request alone — used to suppress noise from the cumulative
+    # event-log lists. disabled/unavailable stay visible in those lists
+    # because users typically get tagged that BECAUSE they unfollowed,
+    # so suppressing them would hide the event we're trying to log.
+    # random_request is the user's explicit "this was spam, not a real
+    # interaction" flag, so we DO suppress it everywhere.
+    random_only = {u for u, t in flagged.items() if t.get("random_request")}
+    # Cumulative event-log lists. Full suppression (disabled/unavailable/
+    # random_request) MUST NOT apply here — see comment above. We only
+    # apply random_only to keep these lists noise-free without hiding
+    # the disabled/unavailable accounts whose tag is itself a
+    # consequence of the historical event.
     _EVENT_HISTORY_KINDS = {
         "ever_unfollowed_you",
         "mutual_break_you_first",
@@ -2629,7 +2650,8 @@ def _lists_apply_overlay(pure: dict) -> dict:
         rows_for_kind = pure["non_bucket_rows"].get(kind, {})
         out = []
         out_full = []
-        skip_suppression = kind in _EVENT_HISTORY_KINDS
+        is_event_history = kind in _EVENT_HISTORY_KINDS
+        suppressed_for_kind = random_only if is_event_history else suppressed
         for u in usernames:
             base = rows_for_kind.get(u)
             if base is None:
@@ -2643,7 +2665,7 @@ def _lists_apply_overlay(pure: dict) -> dict:
             if u in notes_map:
                 row["note"] = notes_map[u]
             out_full.append(row)
-            if skip_suppression or u not in suppressed:
+            if u not in suppressed_for_kind:
                 out.append(row)
         annotated[kind] = out
         sections_full[kind] = out_full
