@@ -855,12 +855,18 @@ def _home_compute():
                 # first" view is `rats` below.
                 "ever_unfollowed_you": len(ever_unfollowed_you_inbound | mutual_breaks),
                 # rats = strict subset: pure inbound + mb_they_first,
-                # minus random_request-tagged. The user's mental
-                # "people who actually unfollowed me first, that I
-                # care about" list. mb_you_first omitted because the
-                # user initiated those, regardless of who eventually
-                # broke the mutual.
-                "rats": len((ever_unfollowed_you_inbound | mb_they_first_home) - random_tagged_home),
+                # minus random_request AND unavailable-tagged accounts.
+                # The user's mental "people who actually unfollowed me
+                # first, that I care about" list. mb_you_first omitted
+                # because the user initiated those. unavailable is
+                # filtered (per user 2026-05-06): pages they can't
+                # see anymore aren't worth surfacing in this view,
+                # even though we keep them in the broader event log.
+                "rats": len(
+                    (ever_unfollowed_you_inbound | mb_they_first_home)
+                    - random_tagged_home
+                    - {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
+                ),
                 "mutual_break_you_first": len(mb_you_first_home - random_tagged_home),
                 "mutual_break_they_first": len(mb_they_first_home - random_tagged_home),
                 "ever_removed_you_as_follower": len(ever_removed - random_tagged_home),
@@ -1800,16 +1806,14 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # rats = the strict, noise-free version of ever_unfollowed_you:
         # only counts when THEY unfollowed first (pure inbound, where
         # you never reciprocated, OR mutual breaks where they
-        # initiated), and excludes accounts the user has tagged as
-        # random_request. mb_you_first is intentionally omitted (you
+        # initiated). mb_you_first is intentionally omitted (you
         # initiated). Whether the user still follows them or not
-        # doesn't matter — historical event, not current state.
-        random_request_tagged_lists = {
-            r["username"] for r in tags_mod.list_with_flag(conn, "random_request")
-        }
-        sections["rats"] = sorted(
-            (ever_unfollowed_you_inbound | mb_they_first) - random_request_tagged_lists
-        )
+        # doesn't matter — historical event, not current state. The
+        # additional tag-based filters (random_request and unavailable
+        # are stripped) live in `_lists_apply_overlay()` so changes
+        # take effect immediately when the user toggles a tag,
+        # without waiting for a snapshot reimport.
+        sections["rats"] = sorted(ever_unfollowed_you_inbound | mb_they_first)
         sections["mutual_break_you_first"] = sorted(mb_you_first)
         sections["mutual_break_they_first"] = sorted(mb_they_first)
         sections["ever_removed_you_as_follower"] = sorted(ever_removed_you)
@@ -2643,6 +2647,12 @@ def _lists_apply_overlay(pure: dict) -> dict:
     # random_request is the user's explicit "this was spam, not a real
     # interaction" flag, so we DO suppress it everywhere.
     random_only = {u for u, t in flagged.items() if t.get("random_request")}
+    # rats list = random_only + unavailable. The user explicitly asked
+    # for unavailable-tagged accounts (pages they can't see anymore)
+    # to be hidden from the curated rats list, while keeping them
+    # visible in the broader ever_unfollowed_you log and in the other
+    # event-history lists.
+    rats_suppression = random_only | {u for u, t in flagged.items() if t.get("unavailable")}
     # Cumulative event-log lists. Full suppression (disabled/unavailable/
     # random_request) MUST NOT apply here — see comment above. We only
     # apply random_only to keep these lists noise-free without hiding
@@ -2651,7 +2661,6 @@ def _lists_apply_overlay(pure: dict) -> dict:
     # is intentionally NOT in this set: it's the broad event log, no
     # filtering at all (`rats` is the noise-filtered counterpart).
     _EVENT_HISTORY_KINDS = {
-        "rats",
         "mutual_break_you_first",
         "mutual_break_they_first",
         "ever_removed_you_as_follower",
@@ -2676,6 +2685,8 @@ def _lists_apply_overlay(pure: dict) -> dict:
         out_full = []
         if kind in _NO_SUPPRESSION_KINDS:
             suppressed_for_kind: set[str] = set()
+        elif kind == "rats":
+            suppressed_for_kind = rats_suppression
         elif kind in _EVENT_HISTORY_KINDS:
             suppressed_for_kind = random_only
         else:
