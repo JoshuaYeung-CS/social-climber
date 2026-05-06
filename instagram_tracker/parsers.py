@@ -74,18 +74,38 @@ def parse_followers(path: Path) -> list[Row]:
 
 
 def parse_following(path: Path) -> list[Row]:
+    """following.json has its OWN shape variations:
+
+    Old format:
+      {"relationships_following": [
+        {"title": "...",
+         "string_list_data": [{"value": "user", "href": "...", "timestamp": 1234}]}
+      ]}
+
+    New format (May 2026+):
+      {"relationships_following": [
+        {"title": "user",                    ← username in title
+         "string_list_data": [{"href": "...", "timestamp": 1234}]}  ← no value!
+      ]}
+
+    The standard _row_from_item helper expects username in
+    string_list_data[0].value, so for new-format following.json it
+    returns None. We fall back to title for the username AND read
+    href + timestamp directly from string_list_data[0] — that
+    preserves the 'you followed them' timestamp on the home cards
+    that was being silently dropped before.
+    """
     data = _read_json(path)
     items = _items_from_payload(data, "relationships_following")
     rows: list[Row] = []
     for item in items:
-        # Old shape sometimes has username at item.title; the helper
-        # also covers both shapes via string_list_data / label_values.
         row = _row_from_item(item)
         if row is None and isinstance(item, dict):
-            # Legacy fallback: title-only entries.
             username = item.get("title")
             if username:
-                row = (username, None, None)
+                sld = item.get("string_list_data") or []
+                entry = sld[0] if sld else {}
+                row = (username, entry.get("href"), entry.get("timestamp"))
         if row is not None:
             rows.append(row)
     return rows
