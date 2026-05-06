@@ -56,15 +56,29 @@ def latest_id(conn: sqlite3.Connection) -> int | None:
         name (Meta's export-REQUEST time), while `created_at` is the
         time the watcher imported it (the DELIVERY time, hours later).
 
-    Naive `ORDER BY taken_at` would pick a zip uploaded at 07:58 over
-    a Drive delivery imported at 08:17 — even though the Drive delivery
-    is the freshest data. Using MAX gives both source types a fair
-    "latest" signal.
+    Both source types encode the IG-side generation moment in taken_at:
+      * Zip uploads — taken_at = the moment IG generated the zip
+      * Drive folders — taken_at = the export-request moment
+
+    So taken_at IS the freshness signal for both. created_at is just
+    'when it landed in our DB' — a delivery time, not a data time.
+
+    Previous logic used MAX(taken_at, created_at) to handle a
+    hypothetical case where taken_at was missing on zip uploads —
+    but that's not how zip imports populate taken_at, and the MAX
+    biased toward backfills (recently-imported old exports) over
+    actually-recent exports. A 'Reset & re-import' that bulk-imported
+    a March 2025 backfill at the same instant as a fresh May 6
+    delivery would pick the March one (highest id among same-second
+    created_at), so home showed 1544 followers when the latest real
+    export had 1652.
+
+    Fix: order by taken_at DESC, fall back to created_at when
+    taken_at is missing, tiebreak by id.
     """
     row = conn.execute(
         "SELECT id FROM snapshots "
-        "ORDER BY max(coalesce(taken_at, ''), coalesce(created_at, '')) DESC, "
-        "id DESC LIMIT 1"
+        "ORDER BY coalesce(taken_at, created_at, '') DESC, id DESC LIMIT 1"
     ).fetchone()
     return None if row is None else int(row["id"])
 
