@@ -350,15 +350,25 @@ def detect_renames(conn: sqlite3.Connection) -> list[dict]:
             f"SELECT username, export_timestamp, snapshot_id FROM {table} WHERE export_timestamp IS NOT NULL"
         ).fetchall()
 
-        # Group rows by (username, timestamp) -> snapshot ids
+        # Group rows by (username, timestamp) -> snapshot ids.
+        # Filter to only sids that exist in our snap_index. A new
+        # snapshot can be inserted between the all_snaps query above
+        # and the table query just now (the watcher thread is always
+        # running). Without this filter, the snap_index lookup below
+        # raises KeyError and 500s the entire /api/home request.
         per_user_ts: dict[tuple, list[int]] = {}
         for r in rows:
+            sid = int(r["snapshot_id"])
+            if sid not in snap_index:
+                continue
             key = (r["username"], int(r["export_timestamp"]))
-            per_user_ts.setdefault(key, []).append(int(r["snapshot_id"]))
+            per_user_ts.setdefault(key, []).append(sid)
 
         # Slice into contiguous runs per (username, ts)
         runs_by_ts: dict[int, list[dict]] = {}
         for (username, ts), sids in per_user_ts.items():
+            if not sids:
+                continue
             sorted_sids = sorted(sids)
             run_start = sorted_sids[0]
             run_end = sorted_sids[0]
