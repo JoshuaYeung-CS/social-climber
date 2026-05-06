@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -215,6 +216,140 @@ def _is_drive_placeholder(p: Path) -> bool:
         return p.stat().st_size < 1024
     except OSError:
         return True
+
+
+def _ingest_via_subprocess(meta_dir: Path, timeout_s: int = 180) -> dict | None:
+    """Last-resort import path when the in-process attempt hit EDEADLK.
+
+    Drive Desktop's File Provider repeatedly returns EDEADLK to this
+    long-running FastAPI server process for both directory listing
+    (rglob/iterdir) AND raw file reads (json.load) on freshly-synced
+    folders, even though the same operations succeed from a fresh
+    standalone Python process. We can't unstick that state from
+    Python — but `/bin/cp -R` operates through different syscalls
+    that aren't affected by whatever's poisoned in our process. So:
+    copy the meta-folder to local /tmp via subprocess, then run the
+    in-process import on the local copy (where there's no Drive
+    File Provider involvement at all). Slower (a few-MB copy per
+    stuck folder) but reliable.
+
+    Returns the {imports:[…], skipped:[…]} dict on success or None.
+    """
+    import sys
+    import json as _json
+    import tempfile
+    import shutil
+
+    tmp_root = Path(tempfile.mkdtemp(prefix="ig_drive_rescue_"))
+    try:
+        local_copy = tmp_root / meta_dir.name
+        try:
+            r = subprocess.run(
+                ["/bin/cp", "-R", str(meta_dir), str(local_copy)],
+                capture_output=True,
+                timeout=timeout_s,
+                text=True,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"[watcher] cp -R timed out for {meta_dir.name}", flush=True)
+            return None
+        if r.returncode != 0:
+            # Most common: kernel returns EDEADLK to /bin/cp's
+            # fcopyfile too. That's the genuinely-stuck case — Drive
+            # Desktop has the file open in some inconsistent state
+            # this process can't get around. Will retry next scan.
+            print(f"[watcher] cp -R failed for {meta_dir.name}: rc={r.returncode} stderr={r.stderr[:200]}", flush=True)
+            return None
+        if not local_copy.is_dir():
+            return None
+        # Run import on the local copy. We can do this in-process —
+        # the local /tmp copy isn't on Drive's File Provider, so the
+        # cached-state issue doesn't apply.
+        from .ingest import import_path
+        from .db import connect
+        from .config import DB_PATH
+        conn = connect(DB_PATH)
+        try:
+            run = import_path(conn, local_copy)
+            return {
+                "imports": [{"snapshot_id": r.snapshot_id, "label": r.label, "counts": r.counts} for r in run.imports],
+                "skipped": [{"reason": s.reason, "label": s.label, "message": s.message} for s in run.skipped],
+            }
+        finally:
+            conn.close()
+    except OSError as e:
+        print(f"[watcher] /tmp-copy ingest failed for {meta_dir.name}: errno={e.errno} {e}", flush=True)
+        return None
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+
+
+def _materialize_drive_folder(p: Path, timeout_s: int = 30) -> bool:
+    """Force Google Drive Desktop to materialize a folder's contents by
+    listing the tree via subprocess. The File Provider returns
+    EDEADLK to Python's iterdir/scandir on freshly-synced placeholder
+    folders, but the same listing via /bin/ls (different syscall path,
+    different VFS context) reliably forces the placeholder to download.
+    After this primer call returns, Python's iter primitives stop
+    deadlocking. Used as a one-shot pre-warm before retrying an
+    import that hit EDEADLK."""
+    try:
+        subprocess.run(
+            ["/bin/ls", "-laR", str(p)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout_s,
+            check=False,
+        )
+        return True
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+# Drive Desktop placeholder sentinel: an unmaterialized folder reports
+# nlink=65535 (max u16) and a size of exactly 2097120 in its dirent
+# stat. Python's iterdir/scandir on such a folder triggers EDEADLK
+# while Drive's File Provider tries to download the contents. Detect
+# the sentinel up-front so we can skip these folders without
+# triggering the deadlock at all — they'll show up in a later scan
+# once Drive has finished syncing.
+_PLACEHOLDER_NLINK = 65535
+_PLACEHOLDER_SIZE = 2097120
+
+
+def _looks_like_drive_placeholder_dir(d: Path) -> bool:
+    try:
+        st = d.stat()
+    except OSError:
+        return False
+    return st.st_nlink == _PLACEHOLDER_NLINK and st.st_size == _PLACEHOLDER_SIZE
+
+
+def _has_unmaterialized_subdir(p: Path, max_depth: int = 3) -> bool:
+    """Walk up to max_depth levels and return True if any subdirectory
+    shows the Drive Desktop placeholder sentinel. Stops at the first
+    hit. Bails on any OSError as 'unknown' (treat as not-placeholder
+    so import gets attempted; the EDEADLK retry path catches actual
+    deadlocks)."""
+    if _looks_like_drive_placeholder_dir(p):
+        return True
+    if max_depth <= 0:
+        return False
+    try:
+        children = list(p.iterdir())
+    except OSError:
+        # Listing the parent itself failed — let the import path's
+        # error handling deal with it instead of silently skipping.
+        return False
+    for child in children:
+        try:
+            if not child.is_dir():
+                continue
+        except OSError:
+            continue
+        if _has_unmaterialized_subdir(child, max_depth - 1):
+            return True
+    return False
 
 
 def _import_one(zip_path: Path) -> None:
@@ -420,10 +555,66 @@ def _scan_once_locked(force: bool = False) -> dict:
                             "message": "Drive hasn't synced this file's content yet"})
             _RECENT_ERROR_PATHS.add(str(p))
             continue
+        # Pre-warm: if any subdir under p still shows the Drive
+        # Desktop placeholder sentinel (nlink=65535 + size=2097120),
+        # the File Provider hasn't finished streaming. We don't defer
+        # outright — the sentinel can be present even when the inner
+        # files are accessible — but we DO kick Drive with a /bin/ls
+        # so by the time we get to the import attempt the placeholder
+        # has had a head-start downloading. Cheap insurance against
+        # the EDEADLK that would otherwise abort the import below.
+        if p.is_dir() and _has_unmaterialized_subdir(p):
+            _materialize_drive_folder(p, timeout_s=10)
         conn = None
         try:
             conn = connect(DB_PATH)
-            run = import_path(conn, p)
+            run = None
+            child_result: dict | None = None
+            last_oserr: OSError | None = None
+            # Errno 11 (EDEADLK) is a Drive Desktop / File Provider
+            # contention quirk inside the long-running server process.
+            # The same code from a FRESH Python process reads the
+            # folder fine — verified by spawning standalone scripts
+            # that import these exact paths cleanly while the server
+            # was simultaneously hitting EDEADLK on them. The
+            # FastAPI/uvicorn worker has cached scandir state poisoned
+            # by Drive's File Provider that no in-process workaround
+            # (subprocess /bin/ls prewarm, retries, ff_dir redirect)
+            # could clear. The escape hatch: respawn the import in a
+            # child Python process. Slower (a fresh interpreter spin-up
+            # per stuck folder) but reliable. Only invoked when the
+            # in-process attempt actually deadlocked.
+            try:
+                run = import_path(conn, p)
+            except OSError as e0:
+                if getattr(e0, "errno", None) != 11 or not p.is_dir():
+                    raise
+                last_oserr = e0
+                print(f"[watcher] EDEADLK on {p.name} — retrying via subprocess find + child _ingest_one", flush=True)
+                child_result = _ingest_via_subprocess(p)
+                if child_result is None:
+                    print(f"[watcher] {p.name}: child process import didn't produce a result — deferring", flush=True)
+            if run is None and child_result is not None:
+                # Translate the child's JSON status into the same
+                # bookkeeping path the in-process flow uses below.
+                # Synthetic ImportResult / SkippedImport-shaped objects
+                # so the existing per-row logic (zero-followers warning,
+                # skipped reason classification) applies unchanged.
+                from .ingest import ImportResult as _IR, SkippedImport as _SI, ImportRun as _IRun
+                imps = [
+                    _IR(snapshot_id=i["snapshot_id"], label=i["label"], counts=i.get("counts") or {}, missing_files=[])
+                    for i in child_result.get("imports", [])
+                ]
+                skps = [
+                    _SI(reason=s.get("reason", "skipped"), label=s.get("label", ""), message=s.get("message", ""))
+                    for s in child_result.get("skipped", [])
+                ]
+                run = _IRun(imports=imps, skipped=skps)
+            if run is None:
+                # Both in-process and child-process attempts failed.
+                # Surface the OSError so the outer handler classifies
+                # this as deferred (errno 11) or error otherwise.
+                raise last_oserr if last_oserr is not None else OSError("import_path returned no result")
             had_real_import = False
             for r in run.imports:
                 imported += 1
@@ -448,25 +639,24 @@ def _scan_once_locked(force: bool = False) -> dict:
                 skipped += 1
                 details.append({"file": p.name, "outcome": s.reason,
                                 "label": s.label, "message": s.message[:200]})
-            # Successful, non-empty import → clear any prior error record.
+            # Successful, non-empty import → clear any prior error record
+            # AND drop from the deferred set (the EDEADLK retry path is
+            # how 'previously deferred' files exit the limbo state).
             if had_real_import or run.skipped:
                 _RECENT_ERROR_PATHS.discard(str(p))
+                _DEFERRED_PATHS.discard(str(p))
         except OSError as e:
-            # Errno 11 (EDEADLK) on Drive-synced folders means Google Drive
-            # Desktop is holding a sync lock — file is materialized as a
-            # placeholder but contents haven't downloaded yet. Treat as
-            # 'deferred', not 'error': don't spam the audit log every
-            # minute with the same lock failure. Drive will eventually
-            # finish; we'll pick the file up on a later scan.
+            # If we still get EDEADLK after the materialize+retry above,
+            # genuinely defer — the folder's still mid-sync. Don't add
+            # to _RECENT_ERROR_PATHS (which triggers force-retry) since
+            # there's nothing the user can do about an in-flight sync.
             if getattr(e, "errno", None) == 11:
                 details.append({
                     "file": p.name,
                     "outcome": "deferred",
-                    "message": "Drive Desktop still syncing this folder (EDEADLK). Will retry on next scan.",
+                    "message": "Drive Desktop still syncing this folder (EDEADLK after prewarm+retry). Will retry on next scan.",
                 })
                 _DEFERRED_PATHS.add(str(p))
-                # Don't add to _RECENT_ERROR_PATHS — that triggers force-
-                # retry semantics meant for actual errors.
             else:
                 details.append({"file": p.name, "outcome": "error", "message": str(e)})
                 _RECENT_ERROR_PATHS.add(str(p))
