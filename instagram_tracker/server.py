@@ -3332,14 +3332,20 @@ def archive_queue():
         )
 
     # Build a username → added_at map so the saved-order applier and
-    # the added_at fallback can both lookup quickly.
+    # the added_at fallback can both lookup quickly. Defensively skip
+    # anything that doesn't match the IG username shape — a pasted
+    # full-page text once made it into the tags table and the resulting
+    # filesystem path lookup blew up the endpoint with ENAMETOOLONG.
+    import re as _re
+    _IG_USERNAME = _re.compile(r"^[A-Za-z0-9._]{1,30}$")
     added_at_by_user: dict[str, str | None] = {}
     seen: set[str] = set()
     for r in manual:
-        if r["username"] in seen:
+        u = r["username"]
+        if u in seen or not _IG_USERNAME.match(u or ""):
             continue
-        seen.add(r["username"])
-        added_at_by_user[r["username"]] = r.get("need_archive_added_at")
+        seen.add(u)
+        added_at_by_user[u] = r.get("need_archive_added_at")
 
     # Apply user's drag-drop order, then append unranked entries by
     # added_at (newest first so freshly-added items show up at the
@@ -3694,6 +3700,16 @@ def update_tag(payload: dict = Body(...)):
         valid = " | ".join(sorted(tags_mod.VALID_FLAGS))
         raise HTTPException(status_code=400, detail=f"Need account and a valid flag ({valid}).")
     username, profile_url = normalize_account_input(account)
+    # Final shape check — IG usernames are 1-30 chars of alnum + . + _.
+    # Pasted page text and other accidental input have made it into
+    # the tags table before; once stored, the queue endpoint chokes
+    # because the filesystem path it derives is over the OS name limit.
+    import re as _re
+    if not _re.fullmatch(r"[A-Za-z0-9._]{1,30}", username):
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{username[:60]}' isn't a valid Instagram username (must be 1–30 chars of letters, digits, '.' or '_').",
+        )
     with db_conn() as conn:
         result = tags_mod.set_flag(conn, username, flag, value, profile_url)
     _bump_tag_version()
