@@ -495,6 +495,7 @@ async function _loadArchiveState() {
     permanentFailures: archiveRunnerState.permanentFailures || {},
     passNumber: archiveRunnerState.passNumber || 1,
     inFlight: archiveRunnerState.inFlight || null,
+    inFlightWindowId: archiveRunnerState.inFlightWindowId || null,
   };
 }
 
@@ -638,9 +639,16 @@ async function _onArchiveRunnerFire() {
   } catch (e) {
     console.warn("[IG Tracker] Archive runner: window.create failed:", e?.message || e);
     state.inFlight = null;
+    state.inFlightWindowId = null;
     await _saveArchiveState(state);
     return;
   }
+  // Persist the window id so the archive-runner-complete message
+  // handler can close THIS specific window 1 minute after the
+  // content script signals done. Without this, the SW only closes
+  // via the 4-minute budget timer below regardless of completion.
+  state.inFlightWindowId = windowId;
+  await _saveArchiveState(state);
 
   await _appendArchiveRunnerHistory({
     ts: Date.now(),
@@ -922,6 +930,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     })();
     return true;
   }
+  // Wizard reached "Export submitted ✓" — close the tab ~1 minute
+  // later so the user doesn't have to reach over and kill it. Match
+  // the archive runner's post-completion delay for consistency. We
+  // don't close immediately because Meta sometimes fires the password
+  // prompt seconds after the submit click; the password watchdog
+  // (also in meta-export.js) needs the tab alive to fill it.
+  if (msg.type === "wizard-finished") {
+    (async () => {
+      const tabId = sender?.tab?.id;
+      if (tabId != null) {
+        console.log(`[IG Tracker] Wizard finished, closing tab ${tabId} in 1 min`);
+        setTimeout(async () => {
+          try { await chrome.tabs.remove(tabId); }
+          catch (_) { /* tab already closed by user */ }
+          console.log(`[IG Tracker] Wizard tab ${tabId} closed (1 min after submit)`);
+        }, 60_000);
+      }
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
   // "Start manual export" from the popup. Moved here because the
   // popup closes the instant the new tab gets focus, which was killing
   // the popup's JS context before its await chrome.storage.local.set
@@ -1058,11 +1087,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (async () => {
       try {
         const state = await _loadArchiveState();
-        // Only re-schedule if the completing account is the one we're
+        // Only act if the completing account is the one we're
         // tracking — guards against stale messages from old tabs the
         // user might still have open after a runner restart.
         if (msg.username && state.inFlight && state.inFlight === msg.username) {
           await _scheduleNextRunnerFireFromCompletion("content-script-signal");
+          // Close the runner window 1 minute after completion. Gives
+          // the page time to flush any in-flight media saves the
+          // content script may have queued without forcing the user
+          // to wait the full 4-minute budget. Captures the window id
+          // by value so a subsequent fire setting a new inFlight
+          // doesn't shift the close target.
+          const winToClose = state.inFlightWindowId;
+          if (winToClose != null) {
+            setTimeout(async () => {
+              try { await chrome.windows.remove(winToClose); }
+              catch (_) { /* already gone */ }
+              console.log(`[IG Tracker] Archive runner: closed @${msg.username} window 1 min after completion`);
+            }, 60_000);
+          }
         } else {
           console.log(`[IG Tracker] archive-runner-complete: ignored (inFlight=${state.inFlight}, msg=${msg.username})`);
         }

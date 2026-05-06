@@ -2296,6 +2296,12 @@ async function runWizard() {
   // password watchdog (still running) doesn't need trusted clicks;
   // password forms accept synthetic input fine.
   try { chrome.runtime.sendMessage({ type: "wizard-detach-debugger" }); } catch (_) {}
+  // Tell the SW the wizard finished so it can auto-close the tab
+  // ~1 minute later. We give Meta a beat to fire any password prompt
+  // (the watchdog still listens for it) before closing — the close
+  // delay matches the auto-archive runner's post-completion delay
+  // for consistency.
+  try { chrome.runtime.sendMessage({ type: "wizard-finished" }); } catch (_) {}
 }
 
 // Find the email input on the Notify dialog. Meta doesn't always tag
