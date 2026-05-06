@@ -3415,40 +3415,73 @@ def archive_queue():
 
 @app.post("/api/archive-queue/add")
 def archive_queue_add(payload: dict = Body(...)):
-    """Force-queue an account: tag need_archive, clear archive_skip,
-    AND remove the .archive_complete marker if present. This is what
-    the home page / archive-queue page Add field calls — without the
+    """Force-queue one or more accounts. Each input can be a username,
+    @handle, or instagram.com URL (normalize_account_input handles
+    all three shapes). Tags need_archive, clears archive_skip, AND
+    removes the .archive_complete marker if present. Without the
     marker-clear, re-adding an already-archived account silently
     'works' (need_archive is set) but the entry never appears in the
     queue because the file_count + marker check filters it out.
-    Removing the marker forces the runner to redo the account."""
+
+    Body shapes accepted:
+      {"username": "..."}          — single
+      {"account":  "..."}          — single (legacy alias)
+      {"usernames": ["...", ...]}  — bulk (one POST per add field's
+                                      multi-line / comma-split paste)
+
+    Returns per-entry results so the UI can show "added 3, 2 invalid".
+    """
     import re as _re
-    raw = (payload.get("username") or payload.get("account") or "").strip().lstrip("@")
-    if not _re.fullmatch(r"[A-Za-z0-9._]{1,30}", raw):
-        raise HTTPException(
-            status_code=400,
-            detail=f"'{raw[:60]}' isn't a valid Instagram username (must be 1–30 chars of letters, digits, '.' or '_').",
-        )
-    username, profile_url = normalize_account_input(raw)
+    raw_inputs: list[str] = []
+    if isinstance(payload.get("usernames"), list):
+        raw_inputs = [str(x) for x in payload["usernames"]]
+    elif payload.get("username") or payload.get("account"):
+        raw_inputs = [str(payload.get("username") or payload.get("account"))]
+    raw_inputs = [s.strip() for s in raw_inputs if str(s).strip()]
+    if not raw_inputs:
+        raise HTTPException(status_code=400, detail="Need at least one username, @handle, or URL.")
+
+    results: list[dict] = []
+    cleaned_count = 0
     with db_conn() as conn:
-        tags_mod.set_flag(conn, username, "need_archive", True, profile_url)
-        tags_mod.set_flag(conn, username, "archive_skip", False, profile_url)
-    _bump_tag_version()
-    # Remove the completion marker so the queue endpoint stops
-    # treating this account as "already archived". Idempotent — if
-    # the marker doesn't exist (account never archived before), we
-    # just continue.
-    marker = _MEDIA_DIR / username / ".archive_complete"
-    cleared_marker = False
-    try:
-        marker.unlink()
-        cleared_marker = True
-    except (FileNotFoundError, OSError):
-        pass
+        for raw in raw_inputs:
+            try:
+                username, profile_url = normalize_account_input(raw)
+            except ValueError as e:
+                results.append({"input": raw, "ok": False, "error": str(e)})
+                continue
+            if not _re.fullmatch(r"[A-Za-z0-9._]{1,30}", username):
+                results.append({
+                    "input": raw,
+                    "ok": False,
+                    "error": f"'{username[:60]}' isn't a valid Instagram username.",
+                })
+                continue
+            tags_mod.set_flag(conn, username, "need_archive", True, profile_url)
+            tags_mod.set_flag(conn, username, "archive_skip", False, profile_url)
+            marker = _MEDIA_DIR / username / ".archive_complete"
+            cleared = False
+            try:
+                marker.unlink()
+                cleared = True
+                cleaned_count += 1
+            except (FileNotFoundError, OSError):
+                pass
+            results.append({
+                "input": raw,
+                "ok": True,
+                "username": username,
+                "cleared_archive_complete_marker": cleared,
+            })
+    if any(r.get("ok") for r in results):
+        _bump_tag_version()
+    added = sum(1 for r in results if r.get("ok"))
     return {
-        "ok": True,
-        "username": username,
-        "cleared_archive_complete_marker": cleared_marker,
+        "ok": added > 0,
+        "added": added,
+        "failed": len(results) - added,
+        "cleared_markers": cleaned_count,
+        "results": results,
     }
 
 

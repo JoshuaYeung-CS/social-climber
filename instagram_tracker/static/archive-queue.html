@@ -171,7 +171,7 @@
   </div>
 
   <div class="aq-add-row">
-    <input type="text" id="aq-add-input" placeholder="Add @username to queue" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+    <input type="text" id="aq-add-input" placeholder="Add username, @handle, or instagram.com URL (paste multiple separated by commas / spaces / newlines)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
     <button id="aq-add-btn">Add</button>
   </div>
 
@@ -349,33 +349,56 @@
     async function doAdd() {
       const input = $("#aq-add-input");
       const btn = $("#aq-add-btn");
-      const raw = (input.value || "").trim().replace(/^@/, "");
-      if (!raw) return;
+      const raw = input.value || "";
+      // Split on commas, whitespace, and newlines so the user can
+      // paste a list of usernames or URLs at once. The server
+      // normalizes each entry (URL → username) and reports per-input
+      // results.
+      const candidates = raw
+        .split(/[\s,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (candidates.length === 0) return;
       btn.disabled = true;
-      btn.textContent = "Adding…";
+      btn.textContent = candidates.length > 1 ? `Adding ${candidates.length}…` : "Adding…";
       try {
-        // /api/archive-queue/add does need_archive + clear archive_skip
-        // + remove .archive_complete marker in one shot. Without the
-        // marker-clear, re-adding an already-archived account looks
-        // successful (the tag IS set) but the queue endpoint silently
-        // filters it back out and the user sees nothing happen.
         const r = await fetch("/api/archive-queue/add", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username: raw }),
+          body: JSON.stringify({ usernames: candidates }),
         });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
         input.value = "";
-        flash(j.cleared_archive_complete_marker
-          ? `Re-queued @${raw} (cleared archive marker)`
-          : `Added @${raw}`);
+        const added = j.added || 0;
+        const failed = j.failed || 0;
+        const cleared = j.cleared_markers || 0;
+        let msg;
+        if (added === 1 && failed === 0) {
+          const u = j.results.find((x) => x.ok)?.username || "";
+          msg = cleared
+            ? `Re-queued @${u} (cleared archive marker)`
+            : `Added @${u}`;
+        } else {
+          msg = `Added ${added}${failed ? ` · ${failed} invalid` : ""}${cleared ? ` · cleared ${cleared} archive marker${cleared === 1 ? "" : "s"}` : ""}`;
+        }
+        flash(msg, 4000);
+        // Surface per-entry errors so the user can see which inputs
+        // were rejected (e.g. malformed URL, restricted handle).
+        const errs = (j.results || []).filter((x) => !x.ok);
+        if (errs.length > 0) {
+          console.warn("[archive-queue] add failures:", errs);
+        }
         await refresh();
-        // Confirm the entry actually landed in the queue. If it
-        // didn't, the user-cleared rule (folder exists with 0 files)
-        // or another filter swallowed it — surface that explicitly.
-        if (!_currentQueue.includes(raw)) {
-          flash(`Tagged @${raw}, but it's not in the queue. The data/media/${raw}/ folder may exist with 0 files (your "I cleared this" signal). Delete the empty folder to enable re-archiving.`, 5000);
+        // Detect entries that succeeded the tag operation but didn't
+        // land in the queue (folder exists with 0 files = "cleared
+        // on purpose" signal). Tell the user how to fix.
+        const successfulUsernames = (j.results || [])
+          .filter((x) => x.ok)
+          .map((x) => x.username);
+        const stillMissing = successfulUsernames.filter((u) => !_currentQueue.includes(u));
+        if (stillMissing.length > 0) {
+          flash(`Tagged ${stillMissing.map((u) => "@" + u).join(", ")}, but not in queue. Their data/media/<u>/ folder exists with 0 files (your "I cleared this" signal). Delete those empty folders to re-enable archiving.`, 6000);
         }
       } catch (e) {
         flash(`Add failed: ${e.message}`);
