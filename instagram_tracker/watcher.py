@@ -45,14 +45,17 @@ _SCAN_LOCK = threading.Lock()
 # Successful imports remove the path from this set.
 _RECENT_ERROR_PATHS: set[str] = set()
 
+# Files that returned EDEADLK (Drive Desktop sync lock). Tracked so the
+# scan endpoint can report the count without us spamming audit_log every
+# minute with the same error rows.
+_DEFERRED_PATHS: set[str] = set()
+
 
 def clear_seen_cache() -> None:
-    """Reset the in-memory recent-error set. Called after a snapshot
-    reset so the next scan treats every file as fresh. The on-disk
-    fingerprint cache lives in the snapshots table itself, which is
-    wiped by the reset endpoint, so we only need to clear the in-memory
-    side here."""
+    """Reset the in-memory recent-error + deferred sets. Called after
+    a snapshot reset so the next scan treats every file as fresh."""
     _RECENT_ERROR_PATHS.clear()
+    _DEFERRED_PATHS.clear()
 
 # Filename patterns Meta uses for the artifacts we care about. Matched
 # case-insensitively against the basename. Two flavors:
@@ -413,12 +416,32 @@ def _scan_once_locked(force: bool = False) -> dict:
             # Successful, non-empty import → clear any prior error record.
             if had_real_import or run.skipped:
                 _RECENT_ERROR_PATHS.discard(str(p))
+        except OSError as e:
+            # Errno 11 (EDEADLK) on Drive-synced folders means Google Drive
+            # Desktop is holding a sync lock — file is materialized as a
+            # placeholder but contents haven't downloaded yet. Treat as
+            # 'deferred', not 'error': don't spam the audit log every
+            # minute with the same lock failure. Drive will eventually
+            # finish; we'll pick the file up on a later scan.
+            if getattr(e, "errno", None) == 11:
+                details.append({
+                    "file": p.name,
+                    "outcome": "deferred",
+                    "message": "Drive Desktop still syncing this folder (EDEADLK). Will retry on next scan.",
+                })
+                _DEFERRED_PATHS.add(str(p))
+                # Don't add to _RECENT_ERROR_PATHS — that triggers force-
+                # retry semantics meant for actual errors.
+            else:
+                details.append({"file": p.name, "outcome": "error", "message": str(e)})
+                _RECENT_ERROR_PATHS.add(str(p))
         except Exception as e:
             details.append({"file": p.name, "outcome": "error", "message": str(e)})
             _RECENT_ERROR_PATHS.add(str(p))
         finally:
             if conn is not None:
                 conn.close()
+    deferred_count = sum(1 for d in details if d.get("outcome") == "deferred")
     return {
         "ok": True,
         "watch_folder": str(root),
@@ -426,6 +449,7 @@ def _scan_once_locked(force: bool = False) -> dict:
         "already_seen": already,  # quick path-based dedup hits, no work done
         "imported": imported,
         "skipped": skipped,
+        "deferred": deferred_count,  # Drive-sync-locked files, will retry next scan
         "details": details,
     }
 

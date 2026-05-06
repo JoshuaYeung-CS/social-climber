@@ -172,6 +172,7 @@ def scan_now(force: bool = False, since_ms: int | None = None):
             skipped=result.get("skipped"),
             already_seen=result.get("already_seen"),
             errors=sum(1 for d in result.get("details", []) if d.get("outcome") == "error"),
+            deferred=result.get("deferred", 0),
         )
         for d in result.get("details", []) or []:
             if d.get("outcome") == "error":

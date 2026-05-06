@@ -643,7 +643,9 @@ async function runReset() {
     const errors = (scan.details || []).filter((d) => d.outcome === "error").length;
     const wipedSummary = Object.entries(result.wiped || {})
       .map(([t, n]) => `${t}: ${n}`).join(", ");
-    const summary = `<div class="ok">✓ Reset complete · wiped {${escapeHtml(wipedSummary)}} · ${scan.imported || 0} re-imported · ${scan.skipped || 0} skipped/backfilled${errors ? ` · <span class="err">${errors} errors</span>` : ""}</div>`;
+    const deferred = scan.deferred ?? (scan.details || []).filter((d) => d.outcome === "deferred").length;
+    const deferredHtml = deferred ? ` · <span class="muted">${deferred} waiting on Drive sync</span>` : "";
+    const summary = `<div class="ok">✓ Reset complete · wiped {${escapeHtml(wipedSummary)}} · ${scan.imported || 0} re-imported · ${scan.skipped || 0} skipped/backfilled${errors ? ` · <span class="err">${errors} errors</span>` : ""}${deferredHtml}</div>`;
     let detailHtml = "";
     if ((scan.details || []).length > 0) {
       const items = scan.details.map((d) => {
@@ -748,8 +750,10 @@ async function runScan({ force }) {
       const seen = result.already_seen ?? 0;
       const newCount = result.scanned - seen;
       const errors = (result.details || []).filter((d) => d.outcome === "error").length;
+      const deferred = (result.deferred ?? (result.details || []).filter((d) => d.outcome === "deferred").length);
       // Concise summary line; full per-file details collapsed under a toggle.
-      const summary = `<div class="ok">✓ ${result.imported} imported · ${result.skipped} skipped/backfilled · ${seen} already known${errors ? ` · <span class="err">${errors} errors</span>` : ""}</div>`;
+      const deferredHtml = deferred ? ` · <span class="muted">${deferred} waiting on Drive sync</span>` : "";
+      const summary = `<div class="ok">✓ ${result.imported} imported · ${result.skipped} skipped/backfilled · ${seen} already known${errors ? ` · <span class="err">${errors} errors</span>` : ""}${deferredHtml}</div>`;
       let detailHtml = "";
       if ((result.details || []).length > 0) {
         const items = result.details.map((d) => {
