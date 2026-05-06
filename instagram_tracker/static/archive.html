@@ -187,8 +187,8 @@
   <div class="archive-controls">
     <input type="search" id="search" placeholder="Search accounts…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
     <select id="sort">
+      <option value="recent" selected>Recently archived</option>
       <option value="count">Most items</option>
-      <option value="recent">Recently archived</option>
       <option value="oldest">Earliest archived</option>
       <option value="bytes">Largest size</option>
       <option value="groups">Most posts/albums</option>
@@ -315,7 +315,7 @@
         const filtered = q
           ? users.filter((u) => u.username.toLowerCase().includes(q))
           : users.slice();
-        filtered.sort(sortFn[sort.value] || sortFn.count);
+        filtered.sort(sortFn[sort.value] || sortFn.recent);
         if (q) {
           filteredCount.textContent = `${filtered.length} of ${users.length}`;
         } else {
