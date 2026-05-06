@@ -89,6 +89,33 @@ def _looks_like_ig_folder(name: str) -> bool:
     return any(p.match(name) for p in _FOLDER_PATTERNS)
 
 
+def _append_to_skiplist(p: Path) -> None:
+    """Append a path to data/import_skiplist.txt so subsequent scans
+    silently skip it. Used when a file that matched the IG-export
+    name pattern turns out not to actually be one (e.g., a Drive-
+    folder download that contains other content). Idempotent — won't
+    duplicate entries."""
+    try:
+        skip_path = Path(__file__).resolve().parent.parent / "data" / "import_skiplist.txt"
+        skip_path.parent.mkdir(parents=True, exist_ok=True)
+        resolved = str(p.resolve())
+        existing = set()
+        if skip_path.exists():
+            for line in skip_path.read_text().splitlines():
+                s = line.strip()
+                if s and not s.startswith("#"):
+                    try:
+                        existing.add(str(Path(s).expanduser().resolve()))
+                    except Exception:
+                        existing.add(s)
+        if resolved in existing:
+            return
+        with skip_path.open("a", encoding="utf-8") as f:
+            f.write(f"# auto-added (not an IG export)\n{resolved}\n")
+    except OSError as e:
+        log.warning("Couldn't append to skiplist: %s", e)
+
+
 def _load_skiplist() -> set[str]:
     """Read data/import_skiplist.txt — one absolute path per line, # comments
     allowed. Paths in the skiplist are silently ignored by _scan() so the
@@ -800,8 +827,26 @@ def _scan_once_locked(force: bool = False) -> dict:
                 details.append({"file": p.name, "outcome": "error", "message": str(e)})
                 _RECENT_ERROR_PATHS.add(str(p))
         except Exception as e:
-            details.append({"file": p.name, "outcome": "error", "message": str(e)})
-            _RECENT_ERROR_PATHS.add(str(p))
+            msg = str(e)
+            details.append({"file": p.name, "outcome": "error", "message": msg})
+            # Permanent-skip files that aren't actually IG exports
+            # (drive-download-*.zip from Drive sometimes match the
+            # naming pattern but contain unrelated stuff). Add the
+            # path to import_skiplist.txt so future scans don't
+            # keep retrying — content-based exclusion via filename
+            # alone isn't possible, so we let the first import
+            # attempt classify it.
+            if "Could not find an Instagram 'followers_and_following'" in msg:
+                _append_to_skiplist(p)
+                # Replace the error outcome with a clearer one for
+                # the user to read in the UI.
+                details[-1] = {
+                    "file": p.name,
+                    "outcome": "not_an_ig_export",
+                    "message": "Zip didn't contain a followers_and_following folder. Auto-skiplisted so it won't retry.",
+                }
+            else:
+                _RECENT_ERROR_PATHS.add(str(p))
         finally:
             if conn is not None:
                 conn.close()
