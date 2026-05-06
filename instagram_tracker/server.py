@@ -3465,8 +3465,12 @@ def media_summary():
         # `post_<id>/`, `highlight_<albumid>/`, etc. The previous
         # non-recursive scan missed all post-folder slides and
         # caused the home-page card to show "0 items" for users
-        # who only have the new-format archives.
-        files = [p for p in d.rglob("*") if p.is_file()]
+        # who only have the new-format archives. Skip dotfiles —
+        # `.archive_complete` is our completion marker (added by
+        # /api/archive-complete) and `.DS_Store` is macOS metadata;
+        # neither is real media but they were inflating counts and
+        # breaking the preview URL when they sorted to the top.
+        files = [p for p in d.rglob("*") if p.is_file() and not p.name.startswith(".")]
         if not files:
             continue
         stats = [p.stat() for p in files]
@@ -3503,7 +3507,11 @@ def media_overview():
     for d in sorted(_MEDIA_DIR.iterdir()):
         if not d.is_dir():
             continue
-        files = [p for p in d.rglob("*") if p.is_file()]
+        # Skip dotfiles (.archive_complete marker, .DS_Store) — see
+        # comment in media-summary above. Without the filter, every
+        # account showed an inflated count + a "📦 other 1" entry
+        # because the marker file matched no media-kind prefix.
+        files = [p for p in d.rglob("*") if p.is_file() and not p.name.startswith(".")]
         if not files:
             continue
         # Sort newest-first by mtime so the preview shows the most
