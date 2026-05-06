@@ -98,6 +98,72 @@ function fmtRelativeDate(iso) {
   }
 }
 
+// ---------- scroll persistence per route ----------
+//
+// Persist window.scrollY per URL hash to sessionStorage so reload (or
+// closing+reopening the tab in the same session) lands back at where
+// the user was. Browser default scrollRestoration would jump to top
+// after our SPA rebuild swaps in fresh DOM, so we manage it manually.
+// Tab-scoped (sessionStorage, not localStorage) so two tabs on
+// different routes don't fight each other.
+if ("scrollRestoration" in history) {
+  history.scrollRestoration = "manual";
+}
+const _SCROLL_KEY_PREFIX = "ig-tracker:scroll:";
+function _scrollRouteKey() {
+  return location.hash.replace(/^#/, "") || "home";
+}
+function _saveScrollNow() {
+  try {
+    const y = window.scrollY;
+    if (y <= 0) sessionStorage.removeItem(_SCROLL_KEY_PREFIX + _scrollRouteKey());
+    else sessionStorage.setItem(_SCROLL_KEY_PREFIX + _scrollRouteKey(), String(y));
+  } catch {}
+}
+let _scrollSaveTimer = null;
+window.addEventListener("scroll", () => {
+  if (_scrollSaveTimer) return;
+  _scrollSaveTimer = setTimeout(() => {
+    _scrollSaveTimer = null;
+    _saveScrollNow();
+  }, 150);
+}, { passive: true });
+window.addEventListener("beforeunload", _saveScrollNow);
+window.addEventListener("pagehide", _saveScrollNow);  // Safari/iOS
+
+// Pending Y to restore. Set during bootstrap (page reload) and during
+// popstate (back/forward), cleared once the page is tall enough to
+// reach the target OR the user starts scrolling on their own.
+let _pendingScrollRestoreY = null;
+function _markScrollRestorePending() {
+  try {
+    const v = sessionStorage.getItem(_SCROLL_KEY_PREFIX + _scrollRouteKey());
+    const y = Number(v);
+    if (Number.isFinite(y) && y > 0) _pendingScrollRestoreY = y;
+  } catch {}
+}
+function _tryRestoreScroll() {
+  if (_pendingScrollRestoreY == null) return;
+  const target = _pendingScrollRestoreY;
+  const max = document.documentElement.scrollHeight - window.innerHeight;
+  if (max <= 0) return;
+  window.scrollTo(0, Math.min(target, Math.max(0, max)));
+  // Once the document is tall enough to reach the saved position, the
+  // restore is complete — drop the pending flag so the user's own
+  // scrolls aren't fought by subsequent chunked-render paints.
+  if (max >= target) _pendingScrollRestoreY = null;
+}
+// User-initiated input cancels any pending restore so we don't yank
+// the page out from under them mid-scroll.
+const _cancelPendingScrollRestore = () => { _pendingScrollRestoreY = null; };
+window.addEventListener("wheel", _cancelPendingScrollRestore, { passive: true, once: false });
+window.addEventListener("touchstart", _cancelPendingScrollRestore, { passive: true });
+window.addEventListener("keydown", (e) => {
+  if (["PageDown", "PageUp", "ArrowDown", "ArrowUp", "Home", "End", " "].includes(e.key)) {
+    _cancelPendingScrollRestore();
+  }
+});
+
 // ---------- view switching ----------
 
 function showView(name, push = true) {
@@ -384,6 +450,10 @@ async function loadHome() {
 
     loadArchiveCard();
     loadArchiveQueueCard();
+    // Home page is shorter than lists but a long Notes / archive
+    // queue can still push it taller than the viewport — restore the
+    // saved scroll if we have one.
+    _tryRestoreScroll();
   } catch (e) {
     console.error("loadHome failed:", e);
     // Reset the pill so it doesn't sit stuck on the spinner. Show a
@@ -1413,6 +1483,9 @@ window.addEventListener("popstate", (e) => {
   }
 
   // Case 3: any actual view / list change — re-render appropriately.
+  // Arm scroll-restore for the destination route so back/forward
+  // returns the user to where they were on that route.
+  _markScrollRestorePending();
   if (!modal.hidden && !state.modal) modal.hidden = true;
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === goingToView));
   $$(".view").forEach((v) => v.classList.toggle("active", v.dataset.view === goingToView));
@@ -1433,6 +1506,12 @@ window.addEventListener("popstate", (e) => {
 // temporal dead zone if we run the bootstrap inline here. Called from
 // the boot section at the bottom of the file.
 function bootstrapHistory() {
+  // Page-reload restore: if the URL hash points at a list (or any
+  // view), check sessionStorage for a saved scroll position keyed by
+  // that hash and arm the restore. The actual scrollTo happens after
+  // the view's first paint (via _tryRestoreScroll calls in loadLists/
+  // loadHome/etc.) once the document is tall enough.
+  _markScrollRestorePending();
   if (!history.state) {
     const hash = location.hash.slice(1);
     if (hash) {
@@ -1517,7 +1596,7 @@ const LIST_DESCRIPTIONS = {
   pending:                      "Outbound follow requests you've sent that haven't been accepted yet, including extension-confirmed pending requests not yet visible in the IG export.",
   incoming_requests:            "Inbound follow requests you haven't approved or rejected yet. Pulled directly from the latest IG export.",
   renamed:                      "Accounts whose username changed across snapshots. Detected by sharing the same IG follow timestamp across non-overlapping snapshot ranges (IG preserves the timestamp through renames).",
-  ever_unfollowed_you:          "Every time someone left your followers list when you didn't also unfollow them. Event log — accounts that re-followed later still appear here (look at the 'current relation' label on each row to see if they're back). Excludes mutual breaks (those are in their own list).",
+  ever_unfollowed_you:          "Every account that ever unfollowed you. Includes pure inbound unfollows AND mutual breaks where they unfollowed first (you may have unfollowed back later). Excludes mutual breaks where you unfollowed first — those live in 'Mutual · you unfollowed first'. Event log: accounts that re-followed later still appear here; check the 'current relation' label on each row.",
   mutual_break_you_first:       "Mutual unfollows where you initiated: your unfollow timestamp is strictly before the last snapshot they appeared as a follower. They were still following you at the moment you unfollowed; they likely unfollowed back later.",
   mutual_break_they_first:      "Mutual unfollows where they likely initiated, OR the events fell within the same snapshot window and we can't distinguish precisely. Catch-all for everything that isn't clearly 'you-first'.",
   ever_removed_you_as_follower: "Accounts that left your following list without you actively unfollowing them. Most often: account blocked you, deactivated, or was made unreachable.",
@@ -1554,7 +1633,7 @@ const LIST_KINDS = [
   ["incoming_request_dropped", "Incoming Request Rejected"],
   ["ever_requested_outgoing", "Ever requested to follow"],
   ["request_dropped", "Follow Request Rejected"],
-  ["ever_unfollowed_you", "Ever unfollowed you (only)"],
+  ["ever_unfollowed_you", "Ever unfollowed you"],
   ["mutual_break_you_first", "Mutual · you unfollowed first"],
   ["mutual_break_they_first", "Mutual · they unfollowed first"],
   ["ever_removed_you_as_follower", "Ever removed you as a follower"],
@@ -2124,6 +2203,9 @@ function renderRowsChunked(out, items, renderFn) {
   const hasMore = items.length > _RENDER_FIRST;
   out.innerHTML = firstChunk +
     (hasMore ? `<div class="loading-more" id="list-loading-more"><span class="spinner"></span>Loading ${items.length - _RENDER_FIRST} more…</div>` : "");
+  // Try a scroll-restore as soon as the first chunk is in the DOM —
+  // for short lists the saved position may be reachable already.
+  _tryRestoreScroll();
   if (!hasMore) return;
 
   // Remaining chunks: append progressively. Yield to the browser between
@@ -2152,12 +2234,16 @@ function renderRowsChunked(out, items, renderFn) {
       out.appendChild(frag);
     }
     idx += _RENDER_CHUNK;
+    // Each chunk grows the page; retry the scroll-restore so a deep
+    // saved position eventually lands once enough rows are appended.
+    _tryRestoreScroll();
     if (idx < items.length) {
       requestAnimationFrame(paint);
     } else {
       // Final chunk done — remove the loading-more footer + re-run search.
       out.querySelector("#list-loading-more")?.remove();
       applyListSearch();
+      _tryRestoreScroll();
     }
   }
   requestAnimationFrame(paint);
@@ -2528,6 +2614,10 @@ async function loadLists() {
     // Re-apply any active search after rendering so a sort change (which
     // re-renders the rows) keeps the filter live.
     applyListSearch();
+    // Restore scroll position if a reload/back-forward set one. No-op
+    // if no pending restore, or if the document isn't yet tall enough
+    // (chunked renderer will retry on each chunk).
+    _tryRestoreScroll();
     // Restore select-mode visual state after a re-render.
     if (_selectMode) {
       out.classList.add("select-mode");

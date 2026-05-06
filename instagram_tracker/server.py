@@ -838,7 +838,13 @@ def _home_compute():
                 "pending": len(active_pending),
                 "incoming_requests": len(active_incoming),
                 # Cumulative (ever) counts:
-                "ever_unfollowed_you": len(ever_unfollowed_you_inbound),
+                # ever_unfollowed_you intentionally includes mb_they_first
+                # — anyone who unfollowed YOU first counts as having
+                # unfollowed you, even if you later reciprocated by
+                # unfollowing them back. mb_you_first stays out (you
+                # initiated). The mb_* lists below still expose the
+                # split for users who want the strict sub-categories.
+                "ever_unfollowed_you": len(ever_unfollowed_you_inbound | mb_they_first_home),
                 "mutual_break_you_first": len(mb_you_first_home),
                 "mutual_break_they_first": len(mb_they_first_home),
                 "ever_removed_you_as_follower": len(ever_removed),
@@ -1766,7 +1772,14 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # everything else, which conservatively includes same-window
         # cases the snapshot cadence can't disambiguate.
         mb_you_first, mb_they_first = q.split_mutual_breaks_by_initiator(conn, mutual_breaks)
-        sections["ever_unfollowed_you"] = sorted(ever_unfollowed_you_inbound)
+        # ever_unfollowed_you = pure inbound (they unfollowed, you
+        # didn't reciprocate) PLUS mutual breaks where they unfollowed
+        # first. The user's mental model is "everyone who unfollowed
+        # me," and a mutual break that they initiated still counts as
+        # them having unfollowed you. mb_you_first is intentionally
+        # omitted (you acted first there). The mb_* lists remain
+        # available as their own sections for the strict split.
+        sections["ever_unfollowed_you"] = sorted(ever_unfollowed_you_inbound | mb_they_first)
         sections["mutual_break_you_first"] = sorted(mb_you_first)
         sections["mutual_break_they_first"] = sorted(mb_they_first)
         sections["ever_removed_you_as_follower"] = sorted(ever_removed_you)
@@ -2592,6 +2605,19 @@ def _lists_apply_overlay(pure: dict) -> dict:
         u for u, t in flagged.items()
         if t.get("disabled") or t.get("unavailable") or t.get("random_request")
     }
+    # Cumulative event-log lists. Suppression (disabled/unavailable/
+    # random_request) MUST NOT apply here — historical events are facts
+    # about the past, and an account being tagged 'unavailable' BECAUSE
+    # they unfollowed and went private would otherwise hide the event
+    # from its own log. Matches the home dashboard counts which already
+    # skip suppression for these (see _home_compute).
+    _EVENT_HISTORY_KINDS = {
+        "ever_unfollowed_you",
+        "mutual_break_you_first",
+        "mutual_break_they_first",
+        "ever_removed_you_as_follower",
+        "you_unfollowed_ever",
+    }
     annotated: dict[str, list[dict]] = {}
     # Parallel "full" view that doesn't apply suppressed_set — used by the
     # frontend's cross-list intersection feature, where the user explicitly
@@ -2603,6 +2629,7 @@ def _lists_apply_overlay(pure: dict) -> dict:
         rows_for_kind = pure["non_bucket_rows"].get(kind, {})
         out = []
         out_full = []
+        skip_suppression = kind in _EVENT_HISTORY_KINDS
         for u in usernames:
             base = rows_for_kind.get(u)
             if base is None:
@@ -2616,7 +2643,7 @@ def _lists_apply_overlay(pure: dict) -> dict:
             if u in notes_map:
                 row["note"] = notes_map[u]
             out_full.append(row)
-            if u not in suppressed:
+            if skip_suppression or u not in suppressed:
                 out.append(row)
         annotated[kind] = out
         sections_full[kind] = out_full
