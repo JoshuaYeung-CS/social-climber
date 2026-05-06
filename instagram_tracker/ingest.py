@@ -48,6 +48,16 @@ def _clean_label_from_name(name: str) -> str | None:
         y, mo, d, hh, mm, ss = m.groups()
         return f"{y}-{mo}-{d}_{hh}-{mm}-{ss}"
 
+    # Date-only fallback for zip filenames like
+    # `instagram-handle-2026-05-04-XYZHASH.zip` where IG only encodes
+    # the request date (no time). Use 12:00:00 as a placeholder time
+    # so the snapshot lands at noon-of-that-day rather than 00:00 (which
+    # would tie with the previous day's last-second snapshot).
+    m = re.search(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)", n)
+    if m:
+        y, mo, d = m.groups()
+        return f"{y}-{mo}-{d}_12-00-00"
+
     return None
 
 from .db import (
@@ -448,6 +458,29 @@ def import_path(
             cleanup_dir = Path(tempfile.mkdtemp(prefix="ig_import_"))
             with zipfile.ZipFile(path) as zf:
                 zf.extractall(cleanup_dir)
+                # Preserve mtimes from the zip's internal date_time fields.
+                # zipfile.extractall does NOT set file mtimes by default —
+                # extracted files end up with mtime=now. _label_from_ff_mtime
+                # depends on reading the real export-generation time off
+                # the JSON files, so without this restoration zips appear
+                # 'taken' at upload time, not at the IG-side capture time.
+                # Result before fix: zip uploaded today with data from May 4
+                # was treated as a May 6 snapshot, beat real May 5 Drive
+                # exports as 'latest', and showed the wrong follower count.
+                import os as _os
+                from datetime import datetime as _dt
+                for info in zf.infolist():
+                    if info.is_dir():
+                        continue
+                    target = cleanup_dir / info.filename
+                    if not target.exists():
+                        continue
+                    try:
+                        ts = _dt(*info.date_time).timestamp()
+                        _os.utime(target, (ts, ts))
+                    except (OSError, ValueError):
+                        # Bad date_time in zip header — leave mtime as-is.
+                        continue
             search_root = cleanup_dir
         elif path.is_dir():
             search_root = path
