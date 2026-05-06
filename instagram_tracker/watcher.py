@@ -156,7 +156,42 @@ def _scan(root: Path) -> list[Path]:
             deduped.append(p)
     if skipped_count:
         log.info("Skipped %d export(s) listed in import_skiplist.txt", skipped_count)
+    # Sort by parsed export timestamp (from folder/zip name) so imports
+    # happen in chronological order. Ensures snapshot IDs increase
+    # alongside taken_at, which makes the timeline easier to reason
+    # about visually. Filesystem iterdir() returns paths in arbitrary
+    # order — for `meta-2026-May-X` and `meta-2026-Mar-X` it sorts
+    # alphabetically, which puts March AFTER May. The cumulative
+    # diff machinery already orders by taken_at independently, so this
+    # is purely cosmetic for IDs — but a useful cleanliness fix when
+    # browsing snapshot history. Files whose name doesn't parse get
+    # sorted by mtime as a fallback (oldest first).
+    deduped.sort(key=_export_sort_key)
     return deduped
+
+
+_MONTH_ABBRV = {
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+}
+
+def _export_sort_key(p: Path) -> tuple[int, str]:
+    """Sort key for export folders/zips: chronological by taken-at
+    parsed from the filename. `meta-2026-May-05-09-40-50` →
+    (1, '2026-05-05T09:40:50'). Falls back to file mtime for names
+    that don't match the convention. Tuple's first element groups
+    parseable names AHEAD of fallback names within the sort, so
+    well-named files dominate the order."""
+    import re as _re
+    m = _re.match(r"meta-(\d{4})-([A-Z][a-z]{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})", p.name)
+    if m:
+        year, month_abbr, day, hh, mm, ss = m.groups()
+        mn = _MONTH_ABBRV.get(month_abbr, 0)
+        return (0, f"{year}-{mn:02d}-{day}T{hh}:{mm}:{ss}")
+    try:
+        return (1, str(int(p.stat().st_mtime)))
+    except OSError:
+        return (1, p.name)
 
 
 def _file_key(p: Path) -> tuple[str, int, int]:
