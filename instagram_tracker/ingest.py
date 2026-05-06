@@ -411,12 +411,34 @@ def _label_from_export_dir(ff: Path) -> str | None:
     whose folder name encodes a snapshot timestamp. Drive-of-many-Metas zips
     contain multiple `meta-YYYY-Mon-DD-HH-MM-SS/.../followers_and_following`
     siblings; this is what distinguishes them. The immediate parent
-    (`connections/`) never has a date, so we have to walk further."""
+    (`connections/`) never has a date, so we have to walk further.
+
+    Prefer FULL-precision (HH-MM-SS) timestamps over date-only ones.
+    Newer Meta exports nest the data: `meta-2026-May-05-19-49-12/
+    instagram-joshuajyeung-2026-05-05-XYZ/connections/...`. Walking
+    up parents would stop at the inner `instagram-...-2026-05-05-XYZ`
+    folder (which has a parseable date-only label) before reaching
+    the outer `meta-...-19-49-12` (which has full HMS precision).
+    Without this, the import got a generic noon-of-May-5 label and
+    collided with other May-5 snapshots, dropping ~30 followers off
+    the actual count.
+    """
+    full_match: str | None = None
+    date_only_match: str | None = None
     for p in ff.parents:
         c = _clean_label_from_name(p.name)
-        if c:
-            return c
-    return None
+        if not c:
+            continue
+        # Full-precision labels end with explicit HH-MM-SS (not 12-00-00
+        # which is our fallback noon). Detect by checking if the trailing
+        # time is exactly the noon-fallback.
+        if c.endswith("_12-00-00"):
+            if date_only_match is None:
+                date_only_match = c
+        else:
+            full_match = c
+            break  # Found a precise label — stop walking
+    return full_match or date_only_match
 
 
 def _label_from_ff_mtime(ff: Path) -> str | None:
