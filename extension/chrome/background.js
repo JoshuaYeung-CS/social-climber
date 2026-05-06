@@ -691,6 +691,43 @@ chrome.runtime.onStartup.addListener(() => { refreshExportAlarm(); refreshArchiv
   }
 })();
 
+// Orphan-cleanup pass. If a previous SW lifetime had a runner tab
+// open when the extension reloaded (or Chrome crashed), the
+// minimized window stays around forever — it's a normal Chrome
+// window not owned by the extension. Find any tab whose URL matches
+// the inFlight username with our runner hash flag, and close it.
+// Also clear inFlight so the next runner cycle picks the right
+// account. Combined with the marker-file resume system, this means
+// dev-iteration reloads leave no stale windows AND the partial
+// archive resumes naturally.
+(async function _orphanRunnerCleanup() {
+  try {
+    const { archiveRunnerState } = await chrome.storage.local.get(["archiveRunnerState"]);
+    const inFlight = archiveRunnerState?.inFlight;
+    if (!inFlight) return;
+    const tabs = await chrome.tabs.query({ url: `*://www.instagram.com/${encodeURIComponent(inFlight)}/*` });
+    let closedCount = 0;
+    for (const t of tabs) {
+      if ((t.url || "").includes("igtracker-runner=archive")) {
+        try { await chrome.windows.remove(t.windowId); closedCount += 1; }
+        catch (_) { /* may have been closed already */ }
+      }
+    }
+    if (closedCount > 0) {
+      console.log(`[IG Tracker] Orphan cleanup: closed ${closedCount} zombie runner window(s) for @${inFlight}`);
+    }
+    // Clear inFlight regardless — even if the window was already
+    // closed manually, the state should be reset so the next fire
+    // picks a fresh account from the queue. The partial archive
+    // (if any) is preserved on disk; the queue's marker-file rule
+    // handles whether to re-queue.
+    archiveRunnerState.inFlight = null;
+    await chrome.storage.local.set({ archiveRunnerState });
+  } catch (e) {
+    console.warn("[IG Tracker] Orphan cleanup failed:", e?.message || e);
+  }
+})();
+
 // Re-arm runner whenever its config changes.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;

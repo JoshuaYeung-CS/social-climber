@@ -3099,6 +3099,26 @@ def get_profile_pic(username: str):
 _MEDIA_DIR = DB_PATH.parent / "media"
 
 
+@app.post("/api/archive-complete")
+def archive_complete(payload: dict = Body(...)):
+    """Content script signals that archiveAllVisiblePosts ran to
+    completion for this account. We write a `.archive_complete`
+    marker file inside data/media/<username>/. The queue endpoint
+    requires this marker to consider an account 'done' — partial
+    archives (folder has files but no marker, e.g. extension was
+    reloaded mid-run) get re-queued automatically."""
+    import re as _re
+    username = (payload.get("username") or "").strip()
+    if not _re.fullmatch(r"[A-Za-z0-9._]{1,30}", username):
+        raise HTTPException(status_code=400, detail="Invalid username.")
+    user_dir = _MEDIA_DIR / username
+    if not user_dir.exists():
+        raise HTTPException(status_code=400, detail="No archive folder for this username.")
+    marker = user_dir / ".archive_complete"
+    marker.write_text(str(__import__("time").time()), encoding="utf-8")
+    return {"ok": True, "marker": str(marker)}
+
+
 @app.get("/api/archive-queue")
 def archive_queue():
     """Usernames the auto-archive runner should process. Defined as:
@@ -3155,13 +3175,26 @@ def archive_queue():
         user_dir = _MEDIA_DIR / username
         if user_dir.exists():
             try:
-                file_count = sum(1 for _ in user_dir.rglob("*") if _.is_file())
+                file_count = sum(1 for f in user_dir.rglob("*") if f.is_file() and f.name != ".archive_complete")
             except OSError:
                 file_count = 0
-            if file_count > 0:
+            marker_exists = (user_dir / ".archive_complete").exists()
+            if file_count > 0 and marker_exists:
+                # Has files AND completion marker = fully archived. Skip.
                 skipped_already_archived += 1
                 continue
+            elif file_count > 0 and not marker_exists:
+                # Has files but no marker = partial archive (interrupted
+                # by extension reload, lid sleep, etc.). Re-queue so the
+                # runner finishes it. Idempotent media-bytes save means
+                # already-downloaded posts don't re-download.
+                queue.append(username)
+                if is_manual:
+                    queue_manual.append(username)
+                continue
             else:
+                # Folder exists with 0 files (excluding marker) =
+                # user wiped on purpose.
                 skipped_user_cleared += 1
                 continue
         queue.append(username)

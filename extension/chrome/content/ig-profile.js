@@ -1712,8 +1712,11 @@ async function archiveAllVisiblePosts(username, categories) {
   }
   _archiveAllInFlight = true;
   _installArchiveAudioFallback();
+  let completedSuccessfully = false;
   try {
-    return await _archiveAllVisiblePostsImpl(username, cats);
+    const result = await _archiveAllVisiblePostsImpl(username, cats);
+    completedSuccessfully = true;
+    return result;
   } finally {
     _archiveAllInFlight = false;
     // Belt-and-suspenders: even if _updateProgressPanel({done:true})
@@ -1721,6 +1724,25 @@ async function archiveAllVisiblePosts(username, categories) {
     // etc.), we shouldn't leave a silent AudioContext running on
     // the page. Idempotent — no-op if already disarmed.
     _archiveDisarmAudio();
+    // Ping server with completion marker only if we ran to natural
+    // end. If the script was killed mid-run (extension reload,
+    // window closed by runner budget timer, navigation away), we
+    // never reach this — the marker file isn't written, and the
+    // queue endpoint sees an unmarked partial archive and re-queues
+    // it. The marker is written via /api/archive-complete which
+    // creates data/media/<u>/.archive_complete.
+    if (completedSuccessfully) {
+      try {
+        await bgFetch(`${_settings.trackerUrl}/api/archive-complete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username }),
+        });
+        console.log(`[IG Tracker] archive-all: marked @${username} complete`);
+      } catch (e) {
+        console.warn(`[IG Tracker] archive-all: complete-ping failed for @${username}:`, e?.message || e);
+      }
+    }
   }
 }
 
