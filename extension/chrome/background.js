@@ -652,10 +652,44 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 // Set up the alarm on SW (re)start. MV3 service workers can be torn
 // down and restarted, so this also runs after an idle wake-up.
+// Re-arm alarms ONLY when:
+//   - extension installs / updates  (onInstalled)
+//   - browser starts                 (onStartup)
+//   - SW wakes AND the alarm has gone missing (the catch-all below)
+//
+// CRITICAL: do NOT call refreshExportAlarm unconditionally on every SW
+// wake. SW wakes constantly (archive-alarm fires, popup messages,
+// fetch handlers), and each refresh clears the existing alarm and
+// arms a fresh 15-20 min countdown. With frequent wakes, that timer
+// never reaches expiry — the export bot silently stops firing for
+// hours. This was the actual cause of the 3-hour silent gap the user
+// reported. The alarm itself is persistent across SW restarts; we
+// only need to repair it if it's missing.
 chrome.runtime.onInstalled.addListener(() => { refreshExportAlarm(); refreshArchiveRunnerAlarm(); });
 chrome.runtime.onStartup.addListener(() => { refreshExportAlarm(); refreshArchiveRunnerAlarm(); });
-refreshExportAlarm().catch(() => {});
-refreshArchiveRunnerAlarm().catch(() => {});
+
+(async function _ensureAlarmsArmed() {
+  try {
+    const [sched, runner] = await Promise.all([
+      chrome.alarms.get(SCHEDULE_ALARM),
+      chrome.alarms.get(ARCHIVE_RUNNER_ALARM),
+    ]);
+    if (!sched) {
+      console.log("[IG Tracker] Boot: SCHEDULE_ALARM missing, re-arming.");
+      await refreshExportAlarm();
+    }
+    if (!runner) {
+      console.log("[IG Tracker] Boot: ARCHIVE_RUNNER_ALARM missing, re-arming.");
+      await refreshArchiveRunnerAlarm();
+    }
+  } catch (e) {
+    // Defensive: if chrome.alarms.get errors, fall back to forcing
+    // a re-arm. Better than the alarm silently being absent.
+    console.warn("[IG Tracker] Boot alarm check failed:", e?.message || e);
+    refreshExportAlarm().catch(() => {});
+    refreshArchiveRunnerAlarm().catch(() => {});
+  }
+})();
 
 // Re-arm runner whenever its config changes.
 chrome.storage.onChanged.addListener((changes, area) => {
