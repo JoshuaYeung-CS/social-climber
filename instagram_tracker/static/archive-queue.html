@@ -96,7 +96,20 @@
       background: var(--bg-elev);
       border: 1px solid var(--border);
       border-radius: 8px;
+      cursor: grab;
+      transition: opacity 120ms ease, transform 120ms ease, border-color 120ms ease;
     }
+    .aq-list li:active { cursor: grabbing; }
+    .aq-list li.dragging { opacity: 0.4; }
+    .aq-list li.drop-target { border-color: var(--accent); }
+    .aq-list .qhandle {
+      color: var(--muted);
+      font-size: 14px;
+      cursor: grab;
+      user-select: none;
+      padding: 0 4px;
+    }
+    .aq-list li:active .qhandle { cursor: grabbing; }
     .aq-list .qbadge {
       font-size: 11px;
       padding: 2px 8px;
@@ -154,7 +167,7 @@
     <a href="/" class="back-link">← Back to tracker</a>
     <h1>📥 Archive queue</h1>
     <p class="stats" id="aq-stats">loading…</p>
-    <p class="muted small" style="margin:0">Accounts the auto-archive runner will visit. Manual entries (added here or from the popup) come first, then favorites by added-at. Removing a favorite from the queue tags it <code>archive_skip</code> so it stops re-appearing without un-favoriting it.</p>
+    <p class="muted small" style="margin:0">Accounts the auto-archive runner will visit. Only manually-added entries (the popup, the Add field below, or the <code>need_archive</code> tag) — favorites are not auto-included. Drag rows to reorder; the runner processes top-to-bottom.</p>
   </div>
 
   <div class="aq-add-row">
@@ -205,10 +218,25 @@
       return r.json();
     }
 
+    let _currentQueue = [];
+
+    async function saveOrder(usernames) {
+      const r = await fetch("/api/archive-queue/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ usernames }),
+      });
+      if (!r.ok) {
+        const txt = await r.text().catch(() => "");
+        throw new Error(`HTTP ${r.status}: ${txt}`);
+      }
+      return r.json();
+    }
+
     function render(data) {
-      const queue = data.queue || [];
+      _currentQueue = (data.queue || []).slice();
+      const queue = _currentQueue;
       const stats = data.stats || {};
-      const manualSet = new Set(data.manual_in_queue || []);
       const filterLower = _filter.toLowerCase().replace(/^@/, "");
       const filtered = filterLower
         ? queue.filter((u) => u.toLowerCase().includes(filterLower))
@@ -216,7 +244,6 @@
 
       $("#aq-stats").textContent = [
         `${queue.length} queued`,
-        stats.manual_in_queue ? `${stats.manual_in_queue} manual` : null,
         stats.skipped_already_archived ? `${stats.skipped_already_archived} already archived` : null,
         stats.skipped_user_cleared ? `${stats.skipped_user_cleared} you cleared` : null,
         stats.skipped_tagged ? `${stats.skipped_tagged} skipped (tagged)` : null,
@@ -225,7 +252,7 @@
 
       const content = $("#aq-content");
       if (queue.length === 0) {
-        content.innerHTML = `<div class="aq-empty">Queue is empty. Add a username above, or favorite an account to auto-include it.</div>`;
+        content.innerHTML = `<div class="aq-empty">Queue is empty. Add a username above to queue an account for auto-archiving.</div>`;
         return;
       }
       if (filtered.length === 0) {
@@ -233,45 +260,29 @@
         return;
       }
 
-      const manual = filtered.filter((u) => manualSet.has(u));
-      const fav = filtered.filter((u) => !manualSet.has(u));
-
       const renderRow = (u) => {
-        const isManual = manualSet.has(u);
         const safeU = escapeHtml(u);
-        return `<li>
-          <span class="qbadge${isManual ? " manual" : ""}">${isManual ? "manual" : "favorite"}</span>
+        return `<li draggable="true" data-username="${safeU}">
+          <span class="qhandle" title="Drag to reorder">⋮⋮</span>
+          <span class="qbadge manual">manual</span>
           <span class="qname"><a href="https://www.instagram.com/${encodeURIComponent(u)}/" target="_blank" rel="noopener">@${safeU}</a></span>
-          <button class="qremove" data-username="${safeU}" data-manual="${isManual ? "1" : "0"}">Remove</button>
+          <button class="qremove" data-username="${safeU}">Remove</button>
         </li>`;
       };
 
-      const parts = [];
-      if (manual.length) {
-        parts.push(`<div class="aq-section-head">Manual (${manual.length}) · processed first</div>`);
-        parts.push(`<ul class="aq-list">${manual.map(renderRow).join("")}</ul>`);
-      }
-      if (fav.length) {
-        parts.push(`<div class="aq-section-head">Favorites (${fav.length})</div>`);
-        parts.push(`<ul class="aq-list">${fav.map(renderRow).join("")}</ul>`);
-      }
-      content.innerHTML = parts.join("");
+      content.innerHTML = `<ul class="aq-list" id="aq-ul">${filtered.map(renderRow).join("")}</ul>`;
 
       content.querySelectorAll(".qremove").forEach((btn) => {
-        btn.addEventListener("click", async () => {
+        btn.addEventListener("click", async (e) => {
+          e.stopPropagation();
           const u = btn.dataset.username;
-          const isManual = btn.dataset.manual === "1";
           btn.disabled = true;
           btn.textContent = "…";
           try {
-            if (isManual) {
-              // Manual entries: untag need_archive.
-              await setTag(u, "need_archive", false);
-            } else {
-              // Favorite: set archive_skip so it stops re-queueing,
-              // without un-favoriting it.
-              await setTag(u, "archive_skip", true);
-            }
+            // Untag need_archive — favorites are no longer in the
+            // queue automatically, so the only path here is the
+            // manual flag.
+            await setTag(u, "need_archive", false);
             flash(`Removed @${u}`);
             await refresh();
           } catch (e) {
@@ -282,6 +293,48 @@
           }
         });
       });
+
+      // Drag-and-drop reordering. Live-reorders the DOM as you drag
+      // (so the drop target is obvious), then on drop persists the
+      // new order via /api/archive-queue/order. Disabled while a
+      // filter is active — reordering a filtered subset would lose
+      // the positions of the hidden entries.
+      const ul = $("#aq-ul");
+      if (ul && !filterLower) {
+        let draggedEl = null;
+        ul.querySelectorAll("li").forEach((li) => {
+          li.addEventListener("dragstart", (e) => {
+            draggedEl = li;
+            li.classList.add("dragging");
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", li.dataset.username);
+          });
+          li.addEventListener("dragend", () => {
+            li.classList.remove("dragging");
+            ul.querySelectorAll("li").forEach((x) => x.classList.remove("drop-target"));
+            draggedEl = null;
+          });
+          li.addEventListener("dragover", (e) => {
+            if (!draggedEl || draggedEl === li) return;
+            e.preventDefault();
+            const rect = li.getBoundingClientRect();
+            const before = (e.clientY - rect.top) < rect.height / 2;
+            ul.insertBefore(draggedEl, before ? li : li.nextSibling);
+          });
+        });
+        ul.addEventListener("drop", async (e) => {
+          e.preventDefault();
+          const order = [...ul.querySelectorAll("li")].map((li) => li.dataset.username);
+          try {
+            await saveOrder(order);
+            _currentQueue = order;
+            flash("Order saved");
+          } catch (err) {
+            flash(`Save failed: ${err.message}`);
+            await refresh();
+          }
+        });
+      }
     }
 
     async function refresh() {

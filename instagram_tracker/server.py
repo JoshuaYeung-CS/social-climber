@@ -3278,17 +3278,42 @@ def archive_complete(payload: dict = Body(...)):
     return {"ok": True, "marker": str(marker)}
 
 
+_ARCHIVE_QUEUE_ORDER_FILE = DB_PATH.parent / "archive_queue_order.json"
+
+
+def _load_archive_queue_order() -> list[str]:
+    """User-specified order for the archive queue (drag-drop). Returns the
+    saved list of usernames; entries that are no longer in the queue get
+    silently filtered when applied."""
+    try:
+        import json as _json
+        return list(_json.loads(_ARCHIVE_QUEUE_ORDER_FILE.read_text()))
+    except (FileNotFoundError, OSError, ValueError):
+        return []
+
+
+def _save_archive_queue_order(usernames: list[str]) -> None:
+    import json as _json
+    _ARCHIVE_QUEUE_ORDER_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _ARCHIVE_QUEUE_ORDER_FILE.write_text(_json.dumps(usernames))
+
+
 @app.get("/api/archive-queue")
 def archive_queue():
     """Usernames the auto-archive runner should process. Defined as:
 
-      (need_archive ∪ favorites) - {accounts with a non-empty media folder}
-                                 - {accounts tagged unavailable / disabled}
+      need_archive - {accounts with a non-empty media folder}
+                   - {accounts tagged unavailable / disabled / archive_skip}
 
-    `need_archive` is the manual-queue signal — user toggled this flag
-    via the overlay or the popup's "Add to queue" field, which overrides
-    the favorite-only default. Within the queue, manually-added accounts
-    come FIRST (higher priority), then favorites by added_at.
+    Favorites are NOT auto-included — the user explicitly opted out
+    of that behavior. If the user wants a favorite archived they
+    add it manually via the queue UI / popup, which sets
+    need_archive=True. Tagging an account as favorite has no effect
+    on archiving.
+
+    Order: user's saved drag-drop order from
+    data/archive_queue_order.json, with any entries not yet in the
+    saved order appended in added_at order at the bottom.
 
     The "non-empty media folder" rule lets the user skip an account by
     deleting its media/<u>/ directory but keeping the (empty) folder
@@ -3297,37 +3322,46 @@ def archive_queue():
     """
     with db_conn() as conn:
         manual = tags_mod.list_with_flag(conn, "need_archive")
-        favs = tags_mod.list_with_flag(conn, "favorite")
+        # We still count favorites for the stats card, but no longer
+        # auto-queue them.
+        fav_count = len(tags_mod.list_with_flag(conn, "favorite"))
         skip_tagged = (
             {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
             | {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
             | {r["username"] for r in tags_mod.list_with_flag(conn, "archive_skip")}
         )
 
-    seen = set()
-    combined: list[tuple[str, str | None, bool]] = []  # (username, added_at, is_manual)
+    # Build a username → added_at map so the saved-order applier and
+    # the added_at fallback can both lookup quickly.
+    added_at_by_user: dict[str, str | None] = {}
+    seen: set[str] = set()
     for r in manual:
         if r["username"] in seen:
             continue
         seen.add(r["username"])
-        combined.append((r["username"], r.get("need_archive_added_at"), True))
-    # Manual entries first (oldest add first), then favorites (oldest first).
-    combined.sort(key=lambda x: x[1] or "")
-    fav_entries = []
-    for r in favs:
-        if r["username"] in seen:
-            continue
-        seen.add(r["username"])
-        fav_entries.append((r["username"], r.get("favorite_added_at"), False))
-    fav_entries.sort(key=lambda x: x[1] or "")
-    combined.extend(fav_entries)
+        added_at_by_user[r["username"]] = r.get("need_archive_added_at")
+
+    # Apply user's drag-drop order, then append unranked entries by
+    # added_at (newest first so freshly-added items show up at the
+    # bottom but don't bump pinned items).
+    saved_order = _load_archive_queue_order()
+    ordered: list[str] = []
+    seen_in_order: set[str] = set()
+    for u in saved_order:
+        if u in added_at_by_user and u not in seen_in_order:
+            ordered.append(u)
+            seen_in_order.add(u)
+    leftovers = [
+        (u, added_at_by_user[u]) for u in added_at_by_user if u not in seen_in_order
+    ]
+    leftovers.sort(key=lambda x: x[1] or "")
+    ordered.extend(u for u, _ in leftovers)
 
     queue: list[str] = []
-    queue_manual: list[str] = []
     skipped_already_archived = 0
     skipped_user_cleared = 0
     skipped_tagged = 0
-    for username, _added_at, is_manual in combined:
+    for username in ordered:
         if username in skip_tagged:
             skipped_tagged += 1
             continue
@@ -3348,8 +3382,6 @@ def archive_queue():
                 # runner finishes it. Idempotent media-bytes save means
                 # already-downloaded posts don't re-download.
                 queue.append(username)
-                if is_manual:
-                    queue_manual.append(username)
                 continue
             else:
                 # Folder exists with 0 files (excluding marker) =
@@ -3357,22 +3389,39 @@ def archive_queue():
                 skipped_user_cleared += 1
                 continue
         queue.append(username)
-        if is_manual:
-            queue_manual.append(username)
 
     return {
         "queue": queue,
-        "manual_in_queue": queue_manual,
+        # Every queue entry is "manual" now (favorites no longer auto-
+        # queue), so manual_in_queue == queue. Kept for popup compat.
+        "manual_in_queue": list(queue),
         "stats": {
             "queue_size": len(queue),
-            "manual_in_queue": len(queue_manual),
+            "manual_in_queue": len(queue),
             "skipped_already_archived": skipped_already_archived,
             "skipped_user_cleared": skipped_user_cleared,
             "skipped_tagged": skipped_tagged,
-            "favorite_total": len(fav_entries),
+            "favorite_total": fav_count,
             "manual_total": len(manual),
         },
     }
+
+
+@app.post("/api/archive-queue/order")
+def set_archive_queue_order(payload: dict = Body(...)):
+    """Persist a user-specified order for the archive queue (drag-drop
+    save). Body: {usernames: [str]}. Entries not in current need_archive
+    are kept anyway — they'll just not affect output until they get
+    re-tagged. Position is preserved across server restarts."""
+    usernames = payload.get("usernames")
+    if not isinstance(usernames, list) or not all(isinstance(u, str) for u in usernames):
+        raise HTTPException(status_code=400, detail="Need 'usernames' as a list of strings.")
+    # Light validation — IG usernames are short and constrained.
+    import re as _re
+    cleaned = [u.strip().lstrip("@") for u in usernames if u.strip()]
+    cleaned = [u for u in cleaned if _re.fullmatch(r"[A-Za-z0-9._]{1,30}", u)]
+    _save_archive_queue_order(cleaned)
+    return {"ok": True, "saved": len(cleaned)}
 
 
 def _media_path(username: str, media_id: str, ext: str) -> Path:
