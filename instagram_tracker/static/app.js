@@ -223,6 +223,7 @@ async function loadHome() {
         ["Feeders", s.feeder_accounts, "feeder_accounts"],
         ["Pending", s.pending, "pending"],
         ["Ever unfollowed you", s.ever_unfollowed_you ?? 0, "ever_unfollowed_you"],
+        ["🐀 Rats", s.rats ?? 0, "rats"],
         ["Mutual · you unfollowed first", s.mutual_break_you_first ?? 0, "mutual_break_you_first"],
         ["Mutual · they unfollowed first", s.mutual_break_they_first ?? 0, "mutual_break_they_first"],
         ["Ever removed you as follower", s.ever_removed_you_as_follower ?? 0, "ever_removed_you_as_follower"],
@@ -1596,7 +1597,8 @@ const LIST_DESCRIPTIONS = {
   pending:                      "Outbound follow requests you've sent that haven't been accepted yet, including extension-confirmed pending requests not yet visible in the IG export.",
   incoming_requests:            "Inbound follow requests you haven't approved or rejected yet. Pulled directly from the latest IG export.",
   renamed:                      "Accounts whose username changed across snapshots. Detected by sharing the same IG follow timestamp across non-overlapping snapshot ranges (IG preserves the timestamp through renames).",
-  ever_unfollowed_you:          "Every account that ever unfollowed you. Includes pure inbound unfollows AND mutual breaks where they unfollowed first (you may have unfollowed back later). Excludes mutual breaks where you unfollowed first — those live in 'Mutual · you unfollowed first'. Event log: accounts that re-followed later still appear here; check the 'current relation' label on each row.",
+  ever_unfollowed_you:          "Broad event log: every account that has ever stopped following you, regardless of who initiated, whether you reciprocated, or any tags. Includes pure inbound unfollows + both halves of every mutual break, including spam-tagged accounts. The noise-filtered, opinionated version is 🐀 Rats below. Accounts that re-followed later still appear here — check the 'current relation' label on each row.",
+  rats:                         "🐀 The opinionated 'people who unfollowed me first' list. Includes pure inbound unfollows AND mutual breaks where THEY unfollowed first (you may or may not have unfollowed back later). Excludes accounts you've tagged 🎲 random_request, and excludes mutual breaks where you initiated. Doesn't filter on whether you currently follow them or not — the historical event is the point.",
   mutual_break_you_first:       "Mutual unfollows where you initiated: your unfollow timestamp is strictly before the last snapshot they appeared as a follower. They were still following you at the moment you unfollowed; they likely unfollowed back later.",
   mutual_break_they_first:      "Mutual unfollows where they likely initiated, OR the events fell within the same snapshot window and we can't distinguish precisely. Catch-all for everything that isn't clearly 'you-first'.",
   ever_removed_you_as_follower: "Accounts that left your following list without you actively unfollowing them. Most often: account blocked you, deactivated, or was made unreachable.",
@@ -1634,6 +1636,7 @@ const LIST_KINDS = [
   ["ever_requested_outgoing", "Ever requested to follow"],
   ["request_dropped", "Follow Request Rejected"],
   ["ever_unfollowed_you", "Ever unfollowed you"],
+  ["rats", "🐀 Rats"],
   ["mutual_break_you_first", "Mutual · you unfollowed first"],
   ["mutual_break_they_first", "Mutual · they unfollowed first"],
   ["ever_removed_you_as_follower", "Ever removed you as a follower"],
@@ -1667,7 +1670,7 @@ function buildListKindOptions() {
 // once loadLists has data.
 const LIST_GROUPS = [
   { label: "Current",  kinds: ["everyone", "all_followers", "all_following", "mutuals", "public_mutuals", "private_accepted_no_follow_back", "not_following_you_back", "feeder_accounts", "pending", "incoming_requests", "renamed"] },
-  { label: "History",  kinds: ["ever_unfollowed_you", "mutual_break_you_first", "mutual_break_they_first", "ever_removed_you_as_follower", "you_unfollowed_ever", "still_follow_after_drop"] },
+  { label: "History",  kinds: ["ever_unfollowed_you", "rats", "mutual_break_you_first", "mutual_break_they_first", "ever_removed_you_as_follower", "you_unfollowed_ever", "still_follow_after_drop"] },
   { label: "Requests", kinds: ["ever_incoming_requests", "real_requests", "incoming_request_dropped", "ever_requested_outgoing", "request_dropped"] },
   { label: "Tags",     kinds: ["favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public"] },
 ];
@@ -2114,6 +2117,7 @@ function rowDateKey(r) {
 // so the "actually gone" rows aren't visually buried underneath them.
 const EVENT_HISTORY_KINDS = new Set([
   "ever_unfollowed_you",
+  "rats",
   "mutual_break_you_first",
   "mutual_break_they_first",
   "ever_removed_you_as_follower",
@@ -2126,6 +2130,7 @@ const SORT_DATE_HINT = {
   mutuals:                      "by when you became mutual",
   not_following_you_back:       "by when they last followed you",
   ever_unfollowed_you:          "by when they last followed you",
+  rats:                         "by when they last followed you",
   mutual_break_you_first:       "by when they last followed you",
   mutual_break_they_first:      "by when they last followed you",
   ever_removed_you_as_follower: "by when they last appeared in your following",

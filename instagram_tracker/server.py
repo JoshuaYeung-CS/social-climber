@@ -848,18 +848,19 @@ def _home_compute():
                 "pending": len(active_pending),
                 "incoming_requests": len(active_incoming),
                 # Cumulative (ever) counts:
-                # ever_unfollowed_you intentionally includes mb_they_first
-                # — anyone who unfollowed YOU first counts as having
-                # unfollowed you, even if you later reciprocated by
-                # unfollowing them back. mb_you_first stays out (you
-                # initiated). The mb_* lists below still expose the
-                # split for users who want the strict sub-categories.
-                # All event-history counts subtract random_request_tagged
-                # (the user's "this was spam, not a real interaction"
-                # flag); see note above for why disabled/unavailable
-                # stay un-subtracted while random_request is the
-                # exception.
-                "ever_unfollowed_you": len((ever_unfollowed_you_inbound | mb_they_first_home) - random_tagged_home),
+                # ever_unfollowed_you = the broad event log. Includes
+                # pure inbound + BOTH halves of every mutual break
+                # (mb_they_first and mb_you_first), with no random_
+                # request filter. The noise-filtered, "they unfollowed
+                # first" view is `rats` below.
+                "ever_unfollowed_you": len(ever_unfollowed_you_inbound | mutual_breaks),
+                # rats = strict subset: pure inbound + mb_they_first,
+                # minus random_request-tagged. The user's mental
+                # "people who actually unfollowed me first, that I
+                # care about" list. mb_you_first omitted because the
+                # user initiated those, regardless of who eventually
+                # broke the mutual.
+                "rats": len((ever_unfollowed_you_inbound | mb_they_first_home) - random_tagged_home),
                 "mutual_break_you_first": len(mb_you_first_home - random_tagged_home),
                 "mutual_break_they_first": len(mb_they_first_home - random_tagged_home),
                 "ever_removed_you_as_follower": len(ever_removed - random_tagged_home),
@@ -1787,14 +1788,28 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # everything else, which conservatively includes same-window
         # cases the snapshot cadence can't disambiguate.
         mb_you_first, mb_they_first = q.split_mutual_breaks_by_initiator(conn, mutual_breaks)
-        # ever_unfollowed_you = pure inbound (they unfollowed, you
-        # didn't reciprocate) PLUS mutual breaks where they unfollowed
-        # first. The user's mental model is "everyone who unfollowed
-        # me," and a mutual break that they initiated still counts as
-        # them having unfollowed you. mb_you_first is intentionally
-        # omitted (you acted first there). The mb_* lists remain
-        # available as their own sections for the strict split.
-        sections["ever_unfollowed_you"] = sorted(ever_unfollowed_you_inbound | mb_they_first)
+        # ever_unfollowed_you = the broad event log: ANYONE who was
+        # ever in your followers and stopped, regardless of whether
+        # you reciprocated, who initiated, or whether they're tagged
+        # as random_request. Includes both halves of every mutual
+        # break (mb_they_first AND mb_you_first) plus pure inbound.
+        # If the user wants the noise-filtered "they unfollowed me
+        # first, ignoring random spam" view, that's the `rats` list
+        # below.
+        sections["ever_unfollowed_you"] = sorted(ever_unfollowed_you_inbound | mutual_breaks)
+        # rats = the strict, noise-free version of ever_unfollowed_you:
+        # only counts when THEY unfollowed first (pure inbound, where
+        # you never reciprocated, OR mutual breaks where they
+        # initiated), and excludes accounts the user has tagged as
+        # random_request. mb_you_first is intentionally omitted (you
+        # initiated). Whether the user still follows them or not
+        # doesn't matter — historical event, not current state.
+        random_request_tagged_lists = {
+            r["username"] for r in tags_mod.list_with_flag(conn, "random_request")
+        }
+        sections["rats"] = sorted(
+            (ever_unfollowed_you_inbound | mb_they_first) - random_request_tagged_lists
+        )
         sections["mutual_break_you_first"] = sorted(mb_you_first)
         sections["mutual_break_they_first"] = sorted(mb_they_first)
         sections["ever_removed_you_as_follower"] = sorted(ever_removed_you)
@@ -2119,6 +2134,7 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
             "not_following_you_back",
             "they_unfollowed_you",
             "ever_unfollowed_you",
+            "rats",
             "mutual_break_you_first",
             "mutual_break_they_first",
             "unfollowers_you_still_follow",
@@ -2631,14 +2647,22 @@ def _lists_apply_overlay(pure: dict) -> dict:
     # random_request) MUST NOT apply here — see comment above. We only
     # apply random_only to keep these lists noise-free without hiding
     # the disabled/unavailable accounts whose tag is itself a
-    # consequence of the historical event.
+    # consequence of the historical event. Note that `ever_unfollowed_you`
+    # is intentionally NOT in this set: it's the broad event log, no
+    # filtering at all (`rats` is the noise-filtered counterpart).
     _EVENT_HISTORY_KINDS = {
-        "ever_unfollowed_you",
+        "rats",
         "mutual_break_you_first",
         "mutual_break_they_first",
         "ever_removed_you_as_follower",
         "you_unfollowed_ever",
     }
+    # `ever_unfollowed_you` is the unfiltered event log — bypasses
+    # all suppression (including random_request). The user explicitly
+    # wants this list to show "anyone who's ever unfollowed me, even
+    # if I tagged them as random spam" so they can audit the full
+    # set; `rats` is the curated view.
+    _NO_SUPPRESSION_KINDS = {"ever_unfollowed_you"}
     annotated: dict[str, list[dict]] = {}
     # Parallel "full" view that doesn't apply suppressed_set — used by the
     # frontend's cross-list intersection feature, where the user explicitly
@@ -2650,8 +2674,12 @@ def _lists_apply_overlay(pure: dict) -> dict:
         rows_for_kind = pure["non_bucket_rows"].get(kind, {})
         out = []
         out_full = []
-        is_event_history = kind in _EVENT_HISTORY_KINDS
-        suppressed_for_kind = random_only if is_event_history else suppressed
+        if kind in _NO_SUPPRESSION_KINDS:
+            suppressed_for_kind: set[str] = set()
+        elif kind in _EVENT_HISTORY_KINDS:
+            suppressed_for_kind = random_only
+        else:
+            suppressed_for_kind = suppressed
         for u in usernames:
             base = rows_for_kind.get(u)
             if base is None:
