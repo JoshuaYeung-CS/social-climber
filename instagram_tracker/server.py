@@ -114,9 +114,29 @@ def _start_background_watcher():
 @app.get("/api/scan-status")
 def scan_status():
     """Tells the frontend whether a watch folder is configured, so the
-    'Scan Drive folder' button can disable itself if not."""
+    'Scan Drive folder' button can disable itself if not. Also reports
+    whether the user has toggled auto-import OFF (drag-drop-only mode)."""
     p = watcher_mod.get_watch_folder()
-    return {"watch_folder": str(p) if p else None}
+    return {
+        "watch_folder": str(p) if p else None,
+        "auto_import_enabled": watcher_mod.is_watcher_enabled(),
+    }
+
+
+@app.post("/api/watcher")
+def set_watcher(payload: dict = Body(...)):
+    """Toggle the auto-import scanner on/off. When OFF, /api/scan
+    returns a disabled-shape no-op without writing audit rows so the
+    minute-by-minute extension polling doesn't fill the log. The user
+    falls back to drag-drop / 'Pick zip file' on the home page —
+    that path is unaffected and 100% reliable since it doesn't touch
+    Drive Desktop's File Provider."""
+    enabled = bool(payload.get("enabled"))
+    watcher_mod.set_watcher_enabled(enabled)
+    return {
+        "ok": True,
+        "auto_import_enabled": watcher_mod.is_watcher_enabled(),
+    }
 
 
 @app.post("/api/scan")
@@ -158,6 +178,13 @@ def scan_now(force: bool = False, since_ms: int | None = None):
             result["new_files_since"] = 0
     if result.get("imported") or result.get("skipped"):
         _bump_snapshot_version()
+    # When auto-import is disabled, skip the audit log entirely —
+    # otherwise every minute's extension-driven scan poll would stamp
+    # a no-op row, drowning the genuine import history. The response
+    # still tells the caller `disabled: True` so any UI can reflect
+    # state.
+    if result.get("disabled"):
+        return result
     # Audit summary + each error file's reason. Successful imports /
     # backfills are summarised in counts; only error rows get a per-
     # file audit entry so the log doesn't balloon on every scan.

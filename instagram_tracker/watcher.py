@@ -500,6 +500,30 @@ def get_watch_folder() -> Path | None:
     return p
 
 
+# Disable flag: when this file exists, the auto-import scan short-
+# circuits and returns a quick no-op. The user toggles this via
+# /api/watcher when Drive Desktop's File Provider is too unreliable
+# (placeholder ghosts, EDEADLK on copies) and they prefer to drag-
+# drop zips manually instead. Manual /api/import + the home page's
+# "Pick zip file" button stay fully functional regardless of state.
+_WATCHER_DISABLED_FILE = Path("data/watcher_disabled")
+
+
+def is_watcher_enabled() -> bool:
+    return not _WATCHER_DISABLED_FILE.exists()
+
+
+def set_watcher_enabled(enabled: bool) -> None:
+    _WATCHER_DISABLED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if enabled:
+        try:
+            _WATCHER_DISABLED_FILE.unlink()
+        except FileNotFoundError:
+            pass
+    else:
+        _WATCHER_DISABLED_FILE.touch()
+
+
 def scan_once(force: bool = False) -> dict:
     """Run a single scan-and-import pass synchronously. Used by the manual
     'Scan Drive folder' button on the home page so the user can trigger an
@@ -511,6 +535,26 @@ def scan_once(force: bool = False) -> dict:
     but catches files that the fingerprint check incorrectly skipped
     (e.g. Drive returned cached bytes that didn't actually match the
     current on-disk file)."""
+    if not is_watcher_enabled():
+        # Auto-import disabled by user (manual drag-drop mode). Return
+        # a quick no-op shape that mirrors the success response so
+        # callers (extension's scheduled poll, the home page's Scan
+        # button) don't trip on missing keys. Skip the audit log
+        # write at the call site by setting `disabled: True` — keeps
+        # the activity log clean instead of stamping a "scan" row
+        # every minute that the polling extension fires.
+        return {
+            "ok": True,
+            "disabled": True,
+            "watch_folder": str(get_watch_folder()) if get_watch_folder() else None,
+            "message": "Auto-import is off. Drag-drop zips into the home page or use /api/import.",
+            "scanned": 0,
+            "imported": 0,
+            "skipped": 0,
+            "already_seen": 0,
+            "deferred": 0,
+            "details": [],
+        }
     if not _SCAN_LOCK.acquire(blocking=False):
         return {
             "ok": False,

@@ -691,21 +691,46 @@ async function refreshScanButton() {
     const forceBtn = $("#scan-drive-force-btn");
     const resetBtn = $("#reset-snapshots-btn");
     const hint = $("#scan-folder-hint");
+    const toggleRow = $("#auto-import-toggle-row");
+    const toggleEl = $("#auto-import-toggle");
     if (data.watch_folder) {
-      btn.hidden = false;
-      if (forceBtn) forceBtn.hidden = false;
-      if (resetBtn) resetBtn.hidden = false;
+      const enabled = data.auto_import_enabled !== false;
+      btn.hidden = !enabled;
+      if (forceBtn) forceBtn.hidden = !enabled;
+      if (resetBtn) resetBtn.hidden = !enabled;
       hint.hidden = false;
-      hint.textContent = `Watching: ${data.watch_folder}`;
+      hint.textContent = enabled
+        ? `Watching: ${data.watch_folder}`
+        : `Watching paused — drag-drop zips below to import. (Configured folder: ${data.watch_folder})`;
+      if (toggleRow) toggleRow.hidden = false;
+      if (toggleEl) toggleEl.checked = enabled;
     } else {
       btn.hidden = true;
       if (forceBtn) forceBtn.hidden = true;
       if (resetBtn) resetBtn.hidden = true;
       hint.hidden = true;
+      if (toggleRow) toggleRow.hidden = true;
     }
   } catch (e) { /* server not ready, ignore */ }
 }
 refreshScanButton();
+
+// Auto-import on/off toggle. Disabling stops the minute-by-minute
+// extension scan from spamming the audit log AND silences the
+// Drive-Desktop EDEADLK / ghost-rglob noise that comes from a
+// flaky File Provider. The home page's file picker / drag-drop
+// remains the manual escape hatch and is unaffected.
+$("#auto-import-toggle")?.addEventListener("change", async (e) => {
+  const enabled = e.target.checked;
+  try {
+    await api.post("/api/watcher", { enabled });
+  } catch (err) {
+    toast(`Couldn't toggle auto-import: ${err.message}`);
+    e.target.checked = !enabled;  // revert on failure
+    return;
+  }
+  await refreshScanButton();
+});
 
 // Reset snapshots + auto re-import. Confirms first since this wipes
 // all derived snapshot tables. Tags, notes, and archived media are

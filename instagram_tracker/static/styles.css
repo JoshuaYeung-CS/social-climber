@@ -191,6 +191,29 @@ main {
   transition: color 120ms ease, background 120ms ease;
 }
 .card-open-link:hover { color: var(--accent); background: var(--bg-elev-2); }
+
+.auto-import-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elev-2);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.auto-import-toggle input[type="checkbox"] {
+  margin: 2px 0 0 0;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+.auto-import-toggle b { color: var(--text); }
 .muted { color: var(--muted); font-size: 14px; margin: 4px 0 12px; }
 code {
   background: var(--bg-elev-2);

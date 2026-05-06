@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/static/icon.svg" />
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/static/styles.css?v=15" />
+  <link rel="stylesheet" href="/static/styles.css?v=16" />
   <title>Instagram Tracker</title>
 </head>
 <body>
@@ -44,6 +44,10 @@
           <button class="ghost-btn" id="scan-drive-force-btn" hidden title="Re-extract every file regardless of fingerprint cache. Slower but catches files the fast scan incorrectly skipped.">Force re-scan all</button>
           <button class="ghost-btn danger" id="reset-snapshots-btn" hidden title="Wipe all snapshot data and re-import every export from Drive. Tags, notes, and archived media are preserved.">Reset snapshots &amp; re-import</button>
         </div>
+        <label class="auto-import-toggle hint" id="auto-import-toggle-row" hidden>
+          <input type="checkbox" id="auto-import-toggle" />
+          <span><b>Auto-import from Drive folder</b> — when off, scan polls and the watcher are silent. Use the file picker / drag-drop above to import zips manually. Recommended when Drive Desktop's sync is misbehaving (placeholder ghosts, EDEADLK errors).</span>
+        </label>
         <div id="scan-folder-hint" class="hint" hidden></div>
         <div id="scan-status" class="status"></div>
         <details class="audit-details" style="margin-top:14px;">
@@ -260,6 +264,6 @@
   <div id="toast" class="toast" hidden></div>
 
   <script src="/static/archive-gallery.js"></script>
-  <script src="/static/app.js?v=17"></script>
+  <script src="/static/app.js?v=18"></script>
 </body>
 </html>
