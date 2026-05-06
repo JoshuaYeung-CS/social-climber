@@ -218,6 +218,34 @@ def _is_drive_placeholder(p: Path) -> bool:
         return True
 
 
+def _find_ff_dir_via_subprocess(p: Path, timeout_s: int = 30) -> Path | None:
+    """Locate the followers_and_following dir using `/usr/bin/find` rather
+    than Python's rglob. Drive Desktop's File Provider sometimes ghosts
+    rglob results in the long-running server process — even on a
+    freshly-copied /tmp tree the rglob can return empty when the
+    canonical filesystem clearly contains the directory. find walks
+    via standard syscalls and reliably locates it."""
+    try:
+        r = subprocess.run(
+            ["/usr/bin/find", str(p), "-type", "d", "-name", "followers_and_following"],
+            capture_output=True,
+            timeout=timeout_s,
+            text=True,
+        )
+        if r.returncode != 0:
+            return None
+        lines = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+        if not lines:
+            return None
+        # Prefer the deepest match (matches the May 2026+ nested layout
+        # under instagram-USER-DATE/connections/) over any shallow
+        # ghost the OS might surface.
+        lines.sort(key=lambda s: s.count("/"), reverse=True)
+        return Path(lines[0])
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+
 def _ingest_via_subprocess(meta_dir: Path, timeout_s: int = 180) -> dict | None:
     """Last-resort import path when the in-process attempt hit EDEADLK.
 
@@ -262,23 +290,48 @@ def _ingest_via_subprocess(meta_dir: Path, timeout_s: int = 180) -> dict | None:
             return None
         if not local_copy.is_dir():
             return None
-        # Run import on the local copy. We can do this in-process —
-        # the local /tmp copy isn't on Drive's File Provider, so the
-        # cached-state issue doesn't apply.
-        from .ingest import import_path
+        # Locate followers_and_following in the local copy WITHOUT
+        # using Python's rglob — that's the operation that ghosts in
+        # this long-running server process, even when the directory
+        # plainly exists on disk. /usr/bin/find walks via the standard
+        # syscalls and finds the canonical path. We then pass that
+        # ff_dir directly to _ingest_one, which only uses glob (works)
+        # and named-file reads (work) — no rglob anywhere.
+        ff = _find_ff_dir_via_subprocess(local_copy, timeout_s=30)
+        if ff is None or not ff.is_dir():
+            print(f"[watcher] /tmp-copy: subprocess find didn't locate ff_dir under {local_copy}", flush=True)
+            return None
+        from .ingest import _ingest_one, _label_from_export_dir, _label_from_ff_mtime, _label_from_path, SkippedImport
         from .db import connect
         from .config import DB_PATH
+        label = (
+            _label_from_export_dir(ff)
+            or _label_from_ff_mtime(ff)
+            or _label_from_path(meta_dir)
+            or "snapshot"
+        )
         conn = connect(DB_PATH)
         try:
-            run = import_path(conn, local_copy)
-            return {
-                "imports": [{"snapshot_id": r.snapshot_id, "label": r.label, "counts": r.counts} for r in run.imports],
-                "skipped": [{"reason": s.reason, "label": s.label, "message": s.message} for s in run.skipped],
-            }
+            res = _ingest_one(conn, ff, label, str(meta_dir))
+            if isinstance(res, SkippedImport):
+                return {"imports": [], "skipped": [
+                    {"reason": res.reason, "label": res.label, "message": res.message}
+                ]}
+            return {"imports": [
+                {"snapshot_id": res.snapshot_id, "label": res.label, "counts": res.counts}
+            ], "skipped": []}
         finally:
             conn.close()
     except OSError as e:
         print(f"[watcher] /tmp-copy ingest failed for {meta_dir.name}: errno={e.errno} {e}", flush=True)
+        return None
+    except ValueError as e:
+        # import_path raises ValueError when rglob can't locate
+        # followers_and_following inside the local copy (same Drive
+        # Desktop ghosting can persist into the in-process rglob even
+        # though /bin/cp got the bytes onto local disk). Catch and
+        # return None so the caller defers rather than crashes.
+        print(f"[watcher] /tmp-copy import_path failed for {meta_dir.name}: {e}", flush=True)
         return None
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
@@ -590,10 +643,25 @@ def _scan_once_locked(force: bool = False) -> dict:
                 if getattr(e0, "errno", None) != 11 or not p.is_dir():
                     raise
                 last_oserr = e0
-                print(f"[watcher] EDEADLK on {p.name} — retrying via subprocess find + child _ingest_one", flush=True)
+                print(f"[watcher] EDEADLK on {p.name} — retrying via /tmp copy", flush=True)
                 child_result = _ingest_via_subprocess(p)
                 if child_result is None:
-                    print(f"[watcher] {p.name}: child process import didn't produce a result — deferring", flush=True)
+                    print(f"[watcher] {p.name}: /tmp-copy retry didn't produce a result — deferring", flush=True)
+            except ValueError as e0:
+                # rglob inside import_path can ghost on Drive Desktop
+                # placeholders even after they've nominally materialized:
+                # the actual followers_and_following directory exists on
+                # disk (subprocess `find` finds it) but Python's rglob
+                # in this long-running process returns an empty result.
+                # Same root cause as EDEADLK above; same escape hatch.
+                msg = str(e0)
+                if "followers_and_following" not in msg or not p.is_dir():
+                    raise
+                last_oserr = OSError(11, msg)  # synthesise so outer handler defers it
+                print(f"[watcher] {p.name}: rglob ghosted ff_dir — retrying via /tmp copy", flush=True)
+                child_result = _ingest_via_subprocess(p)
+                if child_result is None:
+                    print(f"[watcher] {p.name}: /tmp-copy retry didn't produce a result — deferring", flush=True)
             if run is None and child_result is not None:
                 # Translate the child's JSON status into the same
                 # bookkeeping path the in-process flow uses below.
