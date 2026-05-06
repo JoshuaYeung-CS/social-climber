@@ -2635,7 +2635,27 @@ async function loadLists() {
     }
 
     if (items.length === 0) {
-      out.innerHTML = `<div class="muted">(none — 0 in intersection)</div>`;
+      // Distinguish "no intersection match" from "empty list" — the
+      // old hardcoded message was misleading for plain single-list
+      // views where there's no intersection in play. Helps the user
+      // see whether they triggered an unintended intersection vs the
+      // list is genuinely empty.
+      const isIntersection = _intersectKinds.size > 0;
+      const baseLen = (sections[kind] || []).length;
+      const fullLen = (fullSections[kind] || []).length;
+      let msg;
+      if (isIntersection) {
+        msg = `(none — 0 in intersection)`;
+      } else if (baseLen === 0 && fullLen === 0) {
+        msg = `(none — list is empty)`;
+      } else {
+        // Server returned rows but client filtered them out — this
+        // usually means a stale app.js cache. Surface the diagnostic
+        // counts so the user can see what's going on.
+        msg = `(empty render but server has ${baseLen} item(s) — try Cmd+Shift+R to clear cache)`;
+        console.warn(`[IGT] lists: kind=${kind} sections=${baseLen} sections_full=${fullLen} _intersectKinds=`, [..._intersectKinds]);
+      }
+      out.innerHTML = `<div class="muted">${msg}</div>`;
       searchCount.hidden = true;
       return;
     }
