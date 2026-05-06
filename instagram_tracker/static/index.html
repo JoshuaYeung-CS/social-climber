@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/static/icon.svg" />
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/static/styles.css?v=16" />
+  <link rel="stylesheet" href="/static/styles.css?v=17" />
   <title>Instagram Tracker</title>
 </head>
 <body>
@@ -46,8 +46,14 @@
         </div>
         <label class="auto-import-toggle hint" id="auto-import-toggle-row" hidden>
           <input type="checkbox" id="auto-import-toggle" />
-          <span><b>Auto-import from Drive folder</b> — when off, scan polls and the watcher are silent. Use the file picker / drag-drop above to import zips manually. Recommended when Drive Desktop's sync is misbehaving (placeholder ghosts, EDEADLK errors).</span>
+          <span><b>Auto-import from watch folder</b> — when off, scan polls and the watcher are silent. Use the file picker / drag-drop above to import zips manually. Recommended when Drive Desktop's sync is misbehaving (placeholder ghosts, EDEADLK errors).</span>
         </label>
+        <div class="watch-folder-row hint" id="watch-folder-row" hidden>
+          <span class="muted small">Watch folder:</span>
+          <input type="text" id="watch-folder-input" placeholder="/Users/you/Downloads" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+          <button class="ghost-btn" id="watch-folder-save">Save</button>
+          <button class="ghost-btn" id="watch-folder-downloads" title="Quick-set to ~/Downloads — recommended for the manual flow (download from drive.google.com → save to Downloads → tracker auto-imports)">Use ~/Downloads</button>
+        </div>
         <div id="scan-folder-hint" class="hint" hidden></div>
         <div id="scan-status" class="status"></div>
         <details class="audit-details" style="margin-top:14px;">
@@ -264,6 +270,6 @@
   <div id="toast" class="toast" hidden></div>
 
   <script src="/static/archive-gallery.js"></script>
-  <script src="/static/app.js?v=18"></script>
+  <script src="/static/app.js?v=19"></script>
 </body>
 </html>

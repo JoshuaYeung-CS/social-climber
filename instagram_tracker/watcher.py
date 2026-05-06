@@ -488,10 +488,37 @@ def _watcher_loop(root: Path) -> None:
         time.sleep(_POLL_INTERVAL_S)
 
 
+_WATCH_FOLDER_OVERRIDE_FILE = Path("data/watcher_folder_override.txt")
+
+
+def _read_watch_folder_override() -> str:
+    try:
+        return _WATCH_FOLDER_OVERRIDE_FILE.read_text().strip()
+    except (FileNotFoundError, OSError):
+        return ""
+
+
+def set_watch_folder_override(path: str) -> None:
+    """Persist a runtime override for the watch folder. Empty string clears
+    the override (falls back to IG_WATCH_FOLDER env var)."""
+    _WATCH_FOLDER_OVERRIDE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if not path.strip():
+        try:
+            _WATCH_FOLDER_OVERRIDE_FILE.unlink()
+        except FileNotFoundError:
+            pass
+    else:
+        _WATCH_FOLDER_OVERRIDE_FILE.write_text(path.strip())
+
+
 def get_watch_folder() -> Path | None:
-    """Resolve IG_WATCH_FOLDER from the env into an absolute path. Returns
-    None if unset, missing, or not a directory."""
-    raw = os.environ.get("IG_WATCH_FOLDER", "").strip()
+    """Resolve the watch folder. Precedence:
+      1. Runtime override (data/watcher_folder_override.txt) — set via
+         the home page's watch-folder field. Lets the user retarget at
+         e.g. ~/Downloads without touching the launchd plist.
+      2. IG_WATCH_FOLDER env var (the legacy plist-driven path).
+    Returns None if neither resolves to an existing directory."""
+    raw = _read_watch_folder_override() or os.environ.get("IG_WATCH_FOLDER", "").strip()
     if not raw:
         return None
     p = Path(raw).expanduser().resolve()

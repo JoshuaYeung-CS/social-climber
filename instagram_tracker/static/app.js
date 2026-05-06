@@ -693,6 +693,8 @@ async function refreshScanButton() {
     const hint = $("#scan-folder-hint");
     const toggleRow = $("#auto-import-toggle-row");
     const toggleEl = $("#auto-import-toggle");
+    const folderRow = $("#watch-folder-row");
+    const folderInput = $("#watch-folder-input");
     if (data.watch_folder) {
       const enabled = data.auto_import_enabled !== false;
       btn.hidden = !enabled;
@@ -704,12 +706,15 @@ async function refreshScanButton() {
         : `Watching paused — drag-drop zips below to import. (Configured folder: ${data.watch_folder})`;
       if (toggleRow) toggleRow.hidden = false;
       if (toggleEl) toggleEl.checked = enabled;
+      if (folderRow) folderRow.hidden = false;
+      if (folderInput && document.activeElement !== folderInput) folderInput.value = data.watch_folder;
     } else {
       btn.hidden = true;
       if (forceBtn) forceBtn.hidden = true;
       if (resetBtn) resetBtn.hidden = true;
       hint.hidden = true;
       if (toggleRow) toggleRow.hidden = true;
+      if (folderRow) folderRow.hidden = false;  // keep visible so user can SET one
     }
   } catch (e) { /* server not ready, ignore */ }
 }
@@ -730,6 +735,37 @@ $("#auto-import-toggle")?.addEventListener("change", async (e) => {
     return;
   }
   await refreshScanButton();
+});
+
+async function _saveWatchFolder(folder) {
+  const btn = $("#watch-folder-save");
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  try {
+    const result = await api.post("/api/watcher", { watch_folder: folder });
+    if (!result.watch_folder && folder) {
+      toast(`Path doesn't exist or isn't a directory: ${folder}`);
+    } else {
+      toast(folder ? `Watching: ${result.watch_folder}` : "Cleared override — using IG_WATCH_FOLDER env var");
+    }
+  } catch (err) {
+    toast(`Couldn't update watch folder: ${err.message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Save"; }
+    await refreshScanButton();
+  }
+}
+
+$("#watch-folder-save")?.addEventListener("click", async () => {
+  const v = ($("#watch-folder-input")?.value || "").trim();
+  await _saveWatchFolder(v);
+});
+
+$("#watch-folder-downloads")?.addEventListener("click", async () => {
+  // Resolve to user's actual Downloads via the server (it expands ~).
+  const path = "~/Downloads";
+  const input = $("#watch-folder-input");
+  if (input) input.value = path;
+  await _saveWatchFolder(path);
 });
 
 // Reset snapshots + auto re-import. Confirms first since this wipes

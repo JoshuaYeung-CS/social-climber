@@ -125,17 +125,29 @@ def scan_status():
 
 @app.post("/api/watcher")
 def set_watcher(payload: dict = Body(...)):
-    """Toggle the auto-import scanner on/off. When OFF, /api/scan
-    returns a disabled-shape no-op without writing audit rows so the
-    minute-by-minute extension polling doesn't fill the log. The user
-    falls back to drag-drop / 'Pick zip file' on the home page —
-    that path is unaffected and 100% reliable since it doesn't touch
-    Drive Desktop's File Provider."""
-    enabled = bool(payload.get("enabled"))
-    watcher_mod.set_watcher_enabled(enabled)
+    """Toggle the auto-import scanner on/off and/or change the watch
+    folder at runtime.
+
+    - `enabled` (bool, optional): when False, /api/scan returns a
+      disabled-shape no-op without writing audit rows so the
+      minute-by-minute extension polling doesn't fill the log. The
+      user falls back to drag-drop / 'Pick zip file' on the home
+      page — that path is unaffected and 100% reliable since it
+      doesn't touch Drive Desktop's File Provider.
+    - `watch_folder` (str, optional): override the IG_WATCH_FOLDER env
+      var. Persists in data/watcher_folder_override.txt. Set to empty
+      string to clear and fall back to env. Useful for moving off
+      Drive's CloudStorage path (where File Provider is flaky) onto
+      a regular Mac folder like ~/Downloads."""
+    if "enabled" in payload:
+        watcher_mod.set_watcher_enabled(bool(payload["enabled"]))
+    if "watch_folder" in payload:
+        watcher_mod.set_watch_folder_override(str(payload.get("watch_folder") or ""))
+    p = watcher_mod.get_watch_folder()
     return {
         "ok": True,
         "auto_import_enabled": watcher_mod.is_watcher_enabled(),
+        "watch_folder": str(p) if p else None,
     }
 
 

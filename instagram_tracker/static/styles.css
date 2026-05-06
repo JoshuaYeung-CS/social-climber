@@ -214,6 +214,27 @@ main {
   flex-shrink: 0;
 }
 .auto-import-toggle b { color: var(--text); }
+
+.watch-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.watch-folder-row input[type="text"] {
+  flex: 1;
+  min-width: 200px;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.watch-folder-row input[type="text"]:focus { outline: none; border-color: var(--accent); }
+.watch-folder-row .ghost-btn { padding: 6px 10px; font-size: 12px; }
 .muted { color: var(--muted); font-size: 14px; margin: 4px 0 12px; }
 code {
   background: var(--bg-elev-2);
