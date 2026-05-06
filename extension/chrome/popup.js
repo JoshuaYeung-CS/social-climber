@@ -129,10 +129,16 @@ async function renderExportStats() {
     pendingText += ")";
     summaryParts.push(pendingText);
   }
-  if (resp.nextFireAt && !resp.pending) {
+  // Next-fire time is independent of whether a current run is in flight —
+  // the alarm fires whenever its scheduled time arrives. Show it always
+  // so the user can see when to expect the next scheduled run, even
+  // mid-run.
+  if (resp.nextFireAt) {
     const minsUntil = Math.max(0, Math.round((resp.nextFireAt - Date.now()) / 60000));
     const clock = new Date(resp.nextFireAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     summaryParts.push(`next auto-run at ${clock} (in ${minsUntil} min)`);
+  } else if (!resp.pending) {
+    summaryParts.push(`next auto-run: not scheduled (toggle schedule off→on to arm)`);
   }
   el("export-stats-summary").textContent = summaryParts.join(" · ");
 
