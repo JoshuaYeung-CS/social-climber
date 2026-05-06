@@ -3163,6 +3163,34 @@ if (_IS_RUNNER_TAB) {
   };
   window.addEventListener("popstate", () => setTimeout(onLocationMaybeChanged, 50));
 
+  // Story-page defensive URL poll. IG cycles between story slides
+  // by pushing `/stories/<user>/<id1>/` → `/stories/<user>/<id2>/`
+  // → ... but the pushState/replaceState hook above doesn't always
+  // fire on these transitions (IG sometimes mutates history without
+  // going through the patched method, observed in DevTools as
+  // history.length increments without our hook seeing it). The poll
+  // catches every story id change with sub-second latency so the
+  // auto-archive saves each slide. Server-side dedup makes re-fires
+  // free for already-archived ids.
+  //
+  // The _archiveInFlight guard inside maybeArchiveCurrentMedia would
+  // otherwise drop story-N if story-(N-1)'s save is still running
+  // (CDN fetch ~500-1000ms, story duration ~5-15s, so possible if
+  // user taps fast). We avoid setting _lastPolledStoryPath while a
+  // previous archive is in flight — next tick (same path) the
+  // condition fires again and onLocationMaybeChanged retries.
+  let _lastPolledStoryPath = "";
+  setInterval(() => {
+    const path = window.location.pathname;
+    if (!/^\/stories\/[^/]+\/[^/]+\/?$/.test(path)) {
+      _lastPolledStoryPath = "";
+      return;
+    }
+    if (path === _lastPolledStoryPath) return;
+    if (!_archiveInFlight) _lastPolledStoryPath = path;
+    onLocationMaybeChanged();
+  }, 500);
+
   // Initial pass.
   setTimeout(onLocationMaybeChanged, 200);
 
