@@ -299,6 +299,13 @@ code {
 }
 .alert-diff-new { color: var(--accent); font-weight: 600; }
 .alert-diff-cleared { color: var(--good, #34d399); }
+.alert-ack-link {
+  color: var(--muted);
+  text-decoration: underline;
+  cursor: pointer;
+  font-weight: 400;
+}
+.alert-ack-link:hover { color: var(--accent); }
 .alerts li .open-btn {
   background: transparent;
   border: 1px solid var(--border);

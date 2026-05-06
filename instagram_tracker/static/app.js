@@ -218,9 +218,26 @@ async function loadHome() {
       if (summary) {
         const parts = [];
         if (newCount > 0)     parts.push(`<span class="alert-diff-new">🆕 ${newCount} new</span>`);
-        if (clearedCount > 0) parts.push(`<span class="alert-diff-cleared">✓ ${clearedCount} resolved since last export</span>`);
+        if (clearedCount > 0) parts.push(`<span class="alert-diff-cleared">✓ ${clearedCount} resolved since last ack</span>`);
+        if (parts.length) {
+          parts.push(`<a href="#" class="alert-ack-link" id="alert-ack-link">mark read</a>`);
+        }
         summary.innerHTML = parts.join(" · ");
         summary.hidden = parts.length === 0;
+        const ackLink = $("#alert-ack-link");
+        if (ackLink) {
+          ackLink.addEventListener("click", async (ev) => {
+            ev.preventDefault();
+            ackLink.textContent = "marking…";
+            try {
+              await api.post("/api/alerts/ack", {});
+              await loadHome();
+            } catch (e) {
+              ackLink.textContent = "failed";
+              setTimeout(() => { ackLink.textContent = "mark read"; }, 1500);
+            }
+          });
+        }
       }
       for (const a of all) {
         const li = document.createElement("li");

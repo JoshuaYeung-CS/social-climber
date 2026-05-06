@@ -575,6 +575,30 @@ def home():
     return _cached("home", _home_compute)
 
 
+@app.post("/api/alerts/ack")
+def alerts_ack():
+    """Acknowledge the current alert set — copies the latest computed
+    `keys` into `baseline_keys`. Subsequent /api/home calls will then
+    treat all currently-listed alerts as not-new. Anything new that
+    appears in a future snapshot will be flagged is_new=true and stay
+    flagged until the user acks again. Idempotent."""
+    import json as _json
+    from pathlib import Path as _Path
+    cache_path = _Path("data/alerts_cache.json")
+    if not cache_path.exists():
+        return {"ok": True, "acknowledged_count": 0, "note": "no cache yet"}
+    try:
+        cache = _json.loads(cache_path.read_text())
+    except Exception:
+        return {"ok": False, "error": "couldn't parse cache"}
+    keys = sorted(set(cache.get("keys") or []))
+    cache["baseline_keys"] = keys
+    cache_path.write_text(_json.dumps(cache))
+    # Bust the home cache so the next /api/home reflects the new ack.
+    _bump_snapshot_version()
+    return {"ok": True, "acknowledged_count": len(keys)}
+
+
 def _home_compute():
     with db_conn() as conn:
         snaps = q.list_snapshots(conn)
@@ -977,15 +1001,23 @@ def _home_compute():
             for r in noted_rows
         ]
 
-        # Alert diff: compare current alert set to the set we cached
-        # last time we saw a different snapshot. Anything new gets
-        # is_new=True. Keys cleared since last time are returned as
-        # `cleared` so the UI can show "X resolved since last export".
-        # Cache stored as a JSON file at data/alerts_cache.json:
-        # { snapshot_id: int, keys: [...this snapshot...], prev_keys: [...last snapshot...] }
-        # Re-rendering the SAME snapshot reuses cached prev_keys (stable
-        # diff). Importing a new snapshot rotates: current → prev_keys,
-        # newly-computed → keys.
+        # Alert diff: compare current alert set against the user's
+        # acknowledged baseline. An alert is "new" if its key isn't in
+        # the baseline — and it STAYS new across multiple snapshot
+        # imports until the user explicitly clicks "Mark read"
+        # (POST /api/alerts/ack).
+        #
+        # Cache shape (data/alerts_cache.json):
+        #   {
+        #     "baseline_keys": [...],   # the set the user last ack'd
+        #     "keys": [...],            # current snapshot's alert set
+        #     "snapshot_id": int,       # which snapshot `keys` is from
+        #   }
+        #
+        # Previously this auto-rotated baseline on every new snapshot,
+        # which hid alerts that became new mid-window. User feedback:
+        # if 3 exports land between visits, alerts from all 3 should
+        # stay flagged until acknowledged.
         alerts = alerts_mod.compute_alerts(conn)
         try:
             import json as _json
@@ -999,27 +1031,26 @@ def _home_compute():
             for a in (alerts.get("stateful") or []) + (alerts.get("diff") or []):
                 k = f"{a.get('kind')}:{a.get('username')}"
                 curr_keys.add(k)
-            if cache.get("snapshot_id") == latest:
-                # Same snapshot re-render — stable diff against the
-                # baseline captured when this snapshot first appeared.
-                prev_keys = set(cache.get("prev_keys") or [])
-            else:
-                # New snapshot. The old `keys` becomes prev_keys; new
-                # curr_keys becomes `keys`.
-                prev_keys = set(cache.get("keys") or [])
-                cache = {
-                    "snapshot_id": latest,
-                    "keys": sorted(curr_keys),
-                    "prev_keys": sorted(prev_keys),
-                }
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                cache_path.write_text(_json.dumps(cache))
-            # Annotate each current alert with is_new
+            # Migration: old caches had `prev_keys` not `baseline_keys`.
+            # Treat the legacy prev_keys as the initial baseline.
+            baseline_keys = set(
+                cache.get("baseline_keys")
+                if cache.get("baseline_keys") is not None
+                else cache.get("prev_keys") or []
+            )
+            # Persist current keys + baseline (baseline only mutates on ack).
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(_json.dumps({
+                "snapshot_id": latest,
+                "keys": sorted(curr_keys),
+                "baseline_keys": sorted(baseline_keys),
+            }))
+            # Annotate each current alert with is_new.
             for a in (alerts.get("stateful") or []) + (alerts.get("diff") or []):
                 k = f"{a.get('kind')}:{a.get('username')}"
-                a["is_new"] = (k not in prev_keys)
-            # Cleared count + sample
-            cleared = prev_keys - curr_keys
+                a["is_new"] = (k not in baseline_keys)
+            # Cleared count + sample (in baseline but no longer present).
+            cleared = baseline_keys - curr_keys
             alerts["cleared_count"] = len(cleared)
             alerts["cleared_sample"] = sorted(cleared)[:10]
         except Exception as e:
