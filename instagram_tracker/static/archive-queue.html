@@ -354,13 +354,29 @@
       btn.disabled = true;
       btn.textContent = "Adding…";
       try {
-        await setTag(raw, "need_archive", true);
-        // Also clear any prior archive_skip on this user so a re-add
-        // actually reinstates them in the queue.
-        try { await setTag(raw, "archive_skip", false); } catch {}
+        // /api/archive-queue/add does need_archive + clear archive_skip
+        // + remove .archive_complete marker in one shot. Without the
+        // marker-clear, re-adding an already-archived account looks
+        // successful (the tag IS set) but the queue endpoint silently
+        // filters it back out and the user sees nothing happen.
+        const r = await fetch("/api/archive-queue/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: raw }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
         input.value = "";
-        flash(`Added @${raw}`);
+        flash(j.cleared_archive_complete_marker
+          ? `Re-queued @${raw} (cleared archive marker)`
+          : `Added @${raw}`);
         await refresh();
+        // Confirm the entry actually landed in the queue. If it
+        // didn't, the user-cleared rule (folder exists with 0 files)
+        // or another filter swallowed it — surface that explicitly.
+        if (!_currentQueue.includes(raw)) {
+          flash(`Tagged @${raw}, but it's not in the queue. The data/media/${raw}/ folder may exist with 0 files (your "I cleared this" signal). Delete the empty folder to enable re-archiving.`, 5000);
+        }
       } catch (e) {
         flash(`Add failed: ${e.message}`);
       } finally {

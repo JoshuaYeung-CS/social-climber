@@ -3413,6 +3413,45 @@ def archive_queue():
     }
 
 
+@app.post("/api/archive-queue/add")
+def archive_queue_add(payload: dict = Body(...)):
+    """Force-queue an account: tag need_archive, clear archive_skip,
+    AND remove the .archive_complete marker if present. This is what
+    the home page / archive-queue page Add field calls — without the
+    marker-clear, re-adding an already-archived account silently
+    'works' (need_archive is set) but the entry never appears in the
+    queue because the file_count + marker check filters it out.
+    Removing the marker forces the runner to redo the account."""
+    import re as _re
+    raw = (payload.get("username") or payload.get("account") or "").strip().lstrip("@")
+    if not _re.fullmatch(r"[A-Za-z0-9._]{1,30}", raw):
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{raw[:60]}' isn't a valid Instagram username (must be 1–30 chars of letters, digits, '.' or '_').",
+        )
+    username, profile_url = normalize_account_input(raw)
+    with db_conn() as conn:
+        tags_mod.set_flag(conn, username, "need_archive", True, profile_url)
+        tags_mod.set_flag(conn, username, "archive_skip", False, profile_url)
+    _bump_tag_version()
+    # Remove the completion marker so the queue endpoint stops
+    # treating this account as "already archived". Idempotent — if
+    # the marker doesn't exist (account never archived before), we
+    # just continue.
+    marker = _MEDIA_DIR / username / ".archive_complete"
+    cleared_marker = False
+    try:
+        marker.unlink()
+        cleared_marker = True
+    except (FileNotFoundError, OSError):
+        pass
+    return {
+        "ok": True,
+        "username": username,
+        "cleared_archive_complete_marker": cleared_marker,
+    }
+
+
 @app.post("/api/archive-queue/order")
 def set_archive_queue_order(payload: dict = Body(...)):
     """Persist a user-specified order for the archive queue (drag-drop
