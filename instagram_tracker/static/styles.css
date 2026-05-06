@@ -1363,6 +1363,14 @@ textarea#queue-input::-webkit-scrollbar { display: none; }
 .row-tag[data-row-flag="want_remove"].on { background: var(--bad); border-color: var(--bad); color: white; }
 .row-tag[data-row-flag="watchlist"].on { background: var(--accent); border-color: var(--accent); color: white; }
 .row-tag[data-row-flag="disabled"].on { background: #6b6b73; border-color: #6b6b73; color: white; }
+/* Read-only virtual pill: account has at least one file in data/media/. */
+.row-tag.has-archive {
+  background: rgba(255, 165, 70, 0.18);
+  border-color: rgba(255, 165, 70, 0.4);
+  color: #ffa946;
+  cursor: default;
+}
+.row-tag.has-archive:hover { border-color: rgba(255, 165, 70, 0.7); }
 .result-list .item.clickable-name {
   cursor: pointer;
   border-radius: 4px;

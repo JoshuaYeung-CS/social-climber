@@ -1974,6 +1974,24 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # overlay attaches the real values per request.
         flagged = {} if _pure_only else tags_mod.all_flagged_usernames(conn)
 
+        # Set of usernames with at least one archived media file. Computed
+        # once via a cheap directory scan rather than re-statting per row.
+        # Used as a virtual tag (📦) on each row so the user can see at a
+        # glance which accounts have local archive content.
+        archived_users: set[str] = set()
+        try:
+            for d in _MEDIA_DIR.iterdir():
+                if not d.is_dir():
+                    continue
+                # Cheap "any file?" check — break on first hit. Faster than
+                # rglob+sum for accounts with hundreds of files.
+                for f in d.rglob("*"):
+                    if f.is_file():
+                        archived_users.add(d.name)
+                        break
+        except OSError:
+            pass
+
         reengaged = q.detect_reengagements(conn)
 
         # Privacy inference: union of every username that will appear in any section,
@@ -2153,6 +2171,9 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
                 "unavailable": flagged.get(u, {}).get("unavailable", False),
                 "random_request": flagged.get(u, {}).get("random_request", False),
                 "need_archive": flagged.get(u, {}).get("need_archive", False),
+                # Virtual flag computed from filesystem (data/media/<u>/).
+                # Surfaced as a 📦 pill on the row.
+                "has_archive": u in archived_users,
                 "currently_following": u in sd.following,
                 "currently_follower": u in sd.followers,
                 "currently_pending": u in sd.pending,
@@ -2313,6 +2334,7 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
                     "sd_following": frozenset(sd.following),
                     "sd_pending": frozenset(sd.pending),
                     "sd_incoming_requests": frozenset(sd.incoming_requests),
+                    "archived_users": frozenset(archived_users),
                     "reengaged": frozenset(reengaged),
                     "privacy_map": privacy_map,
                     "alias_map": alias_map,
@@ -2443,6 +2465,7 @@ def _build_bucket_row(ctx: dict, flagged: dict, u: str, kind: str) -> dict:
         "relationship_kind": rel_kind,
         "bucket_status": bs[0],
         "bucket_status_kind": bs[1],
+        "has_archive": u in ctx["archived_users"],
     }
     # Tag flags from current state.
     for f in _TAG_FLAGS:

@@ -2225,7 +2225,15 @@ function renderListRow(item) {
 
   const tagBtn = (flag, sym, on) =>
     `<button class="row-tag${on ? " on" : ""}" data-row-flag="${flag}" title="${flag}">${sym}</button>`;
+  // 📦 = virtual flag computed server-side from data/media/<u>/. Read-only —
+  // can't toggle it from the row (clicking just opens the IG profile to view
+  // archived media). Has its own CSS class so it's visually distinct from
+  // togglable tags.
+  const archivePill = item.has_archive
+    ? `<span class="row-tag has-archive on" title="has archived media — open the gallery from the modal">📦</span>`
+    : "";
   const tagButtons = `
+    ${archivePill}
     ${tagBtn("favorite", "★", item.favorite)}
     ${tagBtn("want_remove", "✦", item.want_remove)}
     ${tagBtn("watchlist", "↺", item.watchlist)}
