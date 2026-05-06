@@ -23,9 +23,25 @@ async function _fetchWithTimeout(path, init = {}, timeoutMs = API_TIMEOUT_MS) {
   }
 }
 
+// Long-timeout endpoints. Reset wipes + re-imports every Drive folder
+// (can take 5+ minutes for hundreds of imports). Force-rescan likewise.
+// Scheduled poll-scans hit /api/scan but those use the SW with its own
+// timeout, so this only matters for user-triggered reset/rescan from
+// the home page.
+const _LONG_TIMEOUT_PATHS = new Set([
+  "/api/reset-snapshots",
+  "/api/scan",
+]);
+function _timeoutFor(path) {
+  for (const p of _LONG_TIMEOUT_PATHS) {
+    if (path.startsWith(p)) return 10 * 60_000;  // 10 min
+  }
+  return API_TIMEOUT_MS;
+}
+
 const api = {
   async get(path) {
-    const r = await _fetchWithTimeout(path);
+    const r = await _fetchWithTimeout(path, undefined, _timeoutFor(path));
     if (!r.ok) {
       let msg = r.statusText;
       try { msg = (await r.json()).detail || msg; } catch (_) { /* non-JSON */ }
@@ -38,7 +54,7 @@ const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    });
+    }, _timeoutFor(path));
     if (!r.ok) {
       let msg = r.statusText;
       try { msg = (await r.json()).detail || msg; } catch (_) { /* non-JSON */ }
