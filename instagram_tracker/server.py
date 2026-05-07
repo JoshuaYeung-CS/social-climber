@@ -85,10 +85,36 @@ def _bump_tag_version():
 # Static map of cache-key → deps. Set when an endpoint registers itself.
 _CACHE_DEPS: dict[str, tuple[str, ...]] = {}
 
+# Per-key locks for cache-stampede protection. Without these, concurrent
+# requests on a cold key all run compute() in parallel, each pegging a
+# CPU and producing the same result. With them, the first request runs
+# compute, the rest wait at the lock and pick up the cached value.
+import threading as _threading
+_cache_locks: dict[str, _threading.Lock] = {}
+_cache_locks_meta_lock = _threading.Lock()
+
+
+def _get_cache_lock(key: str) -> _threading.Lock:
+    lock = _cache_locks.get(key)
+    if lock is not None:
+        return lock
+    with _cache_locks_meta_lock:
+        lock = _cache_locks.get(key)
+        if lock is None:
+            lock = _threading.Lock()
+            _cache_locks[key] = lock
+        return lock
+
 
 def _cached(key: str, compute, deps: tuple[str, ...] = _DEPS_BOTH):
     """Return the cached response for `key` if its stored version still
-    matches the relevant counters, else compute, store, return."""
+    matches the relevant counters, else compute, store, return.
+
+    Cache-stampede protection: concurrent callers on the same cold key
+    queue at a per-key lock so only one runs the (expensive) compute.
+    The rest re-check the cache after the lock releases and almost
+    always hit. Massive win for cold-cache scenarios where the prewarm
+    thread and the user's first click race for the same key."""
     _CACHE_DEPS[key] = deps
     entry = _cache.get(key)
     if entry is not None:
@@ -97,9 +123,20 @@ def _cached(key: str, compute, deps: tuple[str, ...] = _DEPS_BOTH):
         tag_match = "tag" not in deps or cached_versions[1] == _tag_version
         if snap_match and tag_match:
             return entry[1]
-    result = compute()
-    _cache[key] = ((_snapshot_version, _tag_version), result)
-    return result
+    lock = _get_cache_lock(key)
+    with lock:
+        # Re-check inside the lock — another thread may have populated
+        # while we were waiting.
+        entry = _cache.get(key)
+        if entry is not None:
+            cached_versions = entry[0]
+            snap_match = "snapshot" not in deps or cached_versions[0] == _snapshot_version
+            tag_match = "tag" not in deps or cached_versions[1] == _tag_version
+            if snap_match and tag_match:
+                return entry[1]
+        result = compute()
+        _cache[key] = ((_snapshot_version, _tag_version), result)
+        return result
 
 
 @app.on_event("startup")
@@ -109,6 +146,47 @@ def _start_background_watcher():
     triggered /api/scan endpoint is cheaper and almost always the right
     choice when watching a large folder like the Drive root."""
     watcher_mod.start_watcher_thread()
+
+
+@app.on_event("startup")
+def _prewarm_caches():
+    """Fire the heavy cumulative computes in a background thread right
+    after server startup so the user's first page load doesn't have to
+    pay the cold-cache cost. Runs in a thread (not the event loop) so
+    uvicorn finishes binding the port immediately. Without this, the
+    first /api/home / /api/lists hit after every restart took 9-45s;
+    pre-warming makes it sub-second.
+
+    Runs after every server boot, including memory-watchdog-triggered
+    recycles — so those recycles become effectively invisible to the
+    user (10s of background work, 0s of foreground waiting)."""
+    import threading
+
+    def _do_warm():
+        # Tiny stagger so uvicorn's "startup complete" log lands first
+        # in stdout — keeps the boot sequence readable.
+        import time as _t
+        _t.sleep(0.5)
+        warmed: list[str] = []
+        try:
+            _cached("home", _home_compute)
+            warmed.append("home")
+        except Exception as e:
+            print(f"[prewarm] home failed: {e}", flush=True)
+        try:
+            _cached("lists_pure", _lists_pure_compute_default, deps=_DEPS_SNAPSHOT_ONLY)
+            warmed.append("lists")
+        except Exception as e:
+            print(f"[prewarm] lists failed: {e}", flush=True)
+        try:
+            _cached("activity_log", _activity_log_compute, deps=_DEPS_BOTH)
+            warmed.append("activity_log")
+        except Exception as e:
+            print(f"[prewarm] activity_log failed: {e}", flush=True)
+        if warmed:
+            print(f"[prewarm] warmed caches: {', '.join(warmed)}", flush=True)
+
+    threading.Thread(target=_do_warm, daemon=True, name="igt-prewarm").start()
 
 
 @app.get("/api/scan-status")
