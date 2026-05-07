@@ -55,7 +55,8 @@ const ARCHIVE_RUNNER_DEFAULT_INTERVAL_MIN = 10;
 // At 10-min pacing we still leave 6 min idle between accounts. If you
 // have power-users with thousands of posts, raise this; the alarm
 // won't fire the next account until this expires anyway.
-const ARCHIVE_RUNNER_TAB_BUDGET_MS = 4 * 60_000;
+// (Budget tab-close moved to chrome.alarms — see ARCHIVE_RUNNER_TAB_BUDGET_MIN
+// further down.)
 // Drive-arrival polling: when we have historical timings, we start
 // polling a few minutes before the EARLIEST typical arrival (so we
 // catch the fast cases) and keep going to a few minutes after the
@@ -410,6 +411,13 @@ async function _onArrivalPollFire() {
 // the schedule and respawns the SW to fire it.
 const CLOSE_WIZARD_TAB_PREFIX = "close-wizard-tab-";
 const CLOSE_RUNNER_WIN_PREFIX = "close-runner-window-";
+// Per-fire fallback alarm: closes the runner window after the budget
+// elapses even if the content script never signals completion (e.g.
+// IG redirected, the script crashed mid-scroll, or the SW was
+// dormant when the message arrived). chrome.alarms are MV3-safe
+// where the previous setTimeout(ARCHIVE_RUNNER_TAB_BUDGET_MS) wasn't.
+const RUNNER_BUDGET_PREFIX = "runner-budget-";
+const ARCHIVE_RUNNER_TAB_BUDGET_MIN = 4;
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === SCHEDULE_ALARM) {
@@ -439,7 +447,36 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (Number.isFinite(winId)) {
       try { await chrome.windows.remove(winId); }
       catch (_) { /* already gone */ }
+      // Cancel any still-pending budget alarm for this window — once
+      // we've fired the post-completion close, the budget fallback
+      // would just be a no-op (window already gone) but it would
+      // ALSO trigger budget-fallback's _scheduleNextRunnerFireFromCompletion
+      // call, double-advancing the runner. Clear it.
+      try { await chrome.alarms.clear(`${RUNNER_BUDGET_PREFIX}${winId}`); } catch (_) {}
       console.log(`[IG Tracker] Archive runner: closed window ${winId} (post-completion alarm)`);
+    }
+  } else if (alarm.name.startsWith(RUNNER_BUDGET_PREFIX)) {
+    // Budget fallback: completion message never arrived (content
+    // script crashed, page never loaded, SW slept through it). Close
+    // the window AND advance the runner the same way the regular
+    // completion path would have.
+    const winId = parseInt(alarm.name.slice(RUNNER_BUDGET_PREFIX.length), 10);
+    if (Number.isFinite(winId)) {
+      try { await chrome.windows.remove(winId); }
+      catch (_) { /* already gone */ }
+      console.log(`[IG Tracker] Archive runner: closed window ${winId} (budget fallback alarm)`);
+      const state = await _loadArchiveState();
+      // Only history-log if this budget alarm corresponds to a still-
+      // tracked in-flight account. Otherwise we'd log a spurious
+      // 'closed' entry for an account whose run already completed.
+      if (state.inFlightWindowId === winId && state.inFlight) {
+        await _appendArchiveRunnerHistory({
+          ts: Date.now(),
+          username: state.inFlight,
+          status: "closed",
+        });
+      }
+      await _scheduleNextRunnerFireFromCompletion("budget-fallback");
     }
   }
 });
@@ -680,27 +717,17 @@ async function _onArchiveRunnerFire() {
     attempt: (state.attemptCounts[pick] || 0) + 1,
   });
 
-  setTimeout(async () => {
-    try {
-      if (windowId != null) await chrome.windows.remove(windowId);
-    } catch (_) { /* already gone */ }
-    await _appendArchiveRunnerHistory({
-      ts: Date.now(),
-      username: pick,
-      status: "closed",
-    });
-    // Verification happens at the START of the NEXT fire (so the
-    // server has had time to register newly-saved files). No need
-    // to verify here.
-    //
-    // In completion mode the next fire is normally triggered by the
-    // content script's "archive-runner-complete" message. This budget
-    // timer is the safety net: if the content script crashed, the
-    // page never finished loading, or the SW was asleep when the
-    // message landed, we still advance to the next account after the
-    // tab budget elapses.
-    await _scheduleNextRunnerFireFromCompletion("budget-fallback");
-  }, ARCHIVE_RUNNER_TAB_BUDGET_MS);
+  // Budget-fallback close: previously a setTimeout(4 min). MV3 service
+  // workers can shut down within ~30s of inactivity, killing pending
+  // setTimeouts. chrome.alarms persist and respawn the SW to fire,
+  // so this is reliable even when the SW has been dormant the whole
+  // budget window. Alarm name embeds the windowId so concurrent
+  // budgets for different fires don't collide. The handler down at
+  // chrome.alarms.onAlarm closes the window AND advances the runner
+  // via _scheduleNextRunnerFireFromCompletion('budget-fallback').
+  await chrome.alarms.create(`${RUNNER_BUDGET_PREFIX}${windowId}`, {
+    delayInMinutes: ARCHIVE_RUNNER_TAB_BUDGET_MIN,
+  });
 }
 
 async function _appendArchiveRunnerHistory(entry) {
