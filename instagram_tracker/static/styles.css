@@ -758,6 +758,48 @@ code {
 .al-kind-pill.al-muted { color: var(--muted); }
 .al-more { width: 100%; margin-top: 8px; }
 
+/* Unique-accounts summary block. Renders above the chronological feed
+ * when exactly one kind chip is selected, giving a deduped "who" view
+ * (e.g. "30 unique accounts that unfollowed me") instead of forcing
+ * the user to scroll through every event row. */
+.al-unique-block {
+  margin: 12px 0 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elev-2);
+  overflow: hidden;
+}
+.al-unique-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.al-unique-list {
+  max-height: 360px;
+  overflow-y: auto;
+}
+.al-unique-row {
+  display: grid;
+  grid-template-columns: 1fr auto 24px;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.al-unique-row:last-child { border-bottom: 0; }
+.al-unique-row.clickable { cursor: pointer; transition: background 100ms ease; }
+.al-unique-row.clickable:hover { background: rgba(255, 255, 255, 0.04); }
+.al-unique-row .al-name { font-weight: 500; }
+.al-unique-row .al-open {
+  text-decoration: none;
+  color: var(--muted);
+  font-size: 14px;
+}
+.al-unique-row .al-open:hover { color: var(--accent); }
+
 /* Older details-style activity log rules (kept until a future cleanup) */
 .al-event {
   background: var(--bg-elev-2);

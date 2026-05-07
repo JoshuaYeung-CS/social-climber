@@ -2996,11 +2996,54 @@ function renderActivityLog() {
     ? `<button type="button" class="ghost-btn al-more">Show ${filtered.length - limit} more</button>`
     : "";
 
+  // Unique-accounts list: when exactly one kind is selected, show a
+  // deduplicated summary above the chronological feed so the user can
+  // see "the 30 distinct people who unfollowed me" at a glance instead
+  // of scrolling through every per-event row. Hidden for All / multi-
+  // selects / Significant preset (where the per-event view is the
+  // natural primary view).
+  const isExactlyOneKind = kindFilter.size === 1 && !significantActive;
+  let uniqueListHtml = "";
+  if (isExactlyOneKind) {
+    const onlyKind = [...kindFilter][0];
+    const onlyMeta = ACTIVITY_KIND_META[onlyKind] || { label: onlyKind, cls: "muted" };
+    // Collapse to one row per username, keeping the newest event's
+    // timestamp (events are already newest-first in _activityData).
+    const seenUsers = new Set();
+    const unique = [];
+    for (const e of filtered) {
+      if (seenUsers.has(e.username)) continue;
+      seenUsers.add(e.username);
+      unique.push(e);
+    }
+    const uniqueRows = unique.map((e) => {
+      const t = (e.timestamp || "").slice(0, 16).replace("T", " ");
+      return `
+        <div class="al-unique-row clickable" data-username="${escapeAttr(e.username)}" title="Click for full account history">
+          <span class="al-name">${escapeHtml(e.username)}</span>
+          <span class="muted small">${escapeHtml(t)}</span>
+          <a class="al-open" href="https://www.instagram.com/${encodeURIComponent(e.username)}/" target="_blank" rel="noopener" title="Open on Instagram" onclick="event.stopPropagation()">↗</a>
+        </div>
+      `;
+    }).join("");
+    uniqueListHtml = `
+      <div class="al-unique-block">
+        <div class="al-unique-head">
+          <span class="al-kind-pill al-${onlyMeta.cls}">${escapeHtml(onlyMeta.label)}</span>
+          <span>${unique.length} unique account${unique.length === 1 ? "" : "s"}</span>
+          <span class="muted small">·  ${filtered.length} event${filtered.length === 1 ? "" : "s"} total</span>
+        </div>
+        <div class="al-unique-list">${uniqueRows || `<div class="muted">No matches.</div>`}</div>
+      </div>
+    `;
+  }
+
   out.innerHTML = `
     <div class="al-toolbar">${chips}</div>
     <div class="muted small al-meta">${filtered.length === totalAll
       ? `${totalAll} events`
       : `${filtered.length} of ${totalAll} events`}</div>
+    ${uniqueListHtml}
     ${rowHtml || `<div class="muted">No events match.</div>`}
     ${more}
   `;
@@ -3030,7 +3073,7 @@ function renderActivityLog() {
   // Whole row is clickable to open the account-detail modal — gives the
   // user "what happened with this account" context without having to
   // aim at the small username text.
-  $$(".al-row.clickable", out).forEach((el) =>
+  $$(".al-row.clickable, .al-unique-row.clickable", out).forEach((el) =>
     el.addEventListener("click", (e) => {
       // Don't fire when the user clicked the ↗ Open-on-Instagram link.
       if (e.target.closest(".al-open")) return;
