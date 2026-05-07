@@ -2335,6 +2335,13 @@ function renderListRow(item) {
   if (item.relationship === "requesting to follow back") {
     rowClass += (rowClass ? " " : "") + "is-requesting-back";
   }
+  // Visual flag for "already unfollowed ✓" rows on bucket lists like
+  // ✦ Want to remove. The action is done; the row is just history,
+  // so dim with a transparent red tint and float to the bottom so the
+  // user focuses on the still-following entries that need action.
+  if (item.bucket_status === "already unfollowed ✓") {
+    rowClass += (rowClass ? " " : "") + "is-already-unfollowed";
+  }
 
   // Build sub-line: chronological story of the relationship. Prefer the
   // exact unix-second timestamp (*_ts) IG provides; fall back to the
@@ -2704,14 +2711,30 @@ async function loadLists() {
       }
       out.innerHTML = html.join("");
     } else {
-      // "They are requesting to follow you back" rows go LAST and get
-      // a transparent-purple tint (CSS .is-requesting-back). User asked
-      // for this so they don't accidentally unfollow someone with a
-      // pending follow-back request. Preserves the user's chosen sort
-      // within each group.
-      const requesting = items.filter((i) => i.relationship === "requesting to follow back");
-      const rest = items.filter((i) => i.relationship !== "requesting to follow back");
-      const reordered = requesting.length ? rest.concat(requesting) : items;
+      // Two visual-priority demotions, both move rows to the bottom of
+      // the list while preserving the user's chosen sort within each
+      // group:
+      //
+      // - "requesting to follow back" → transparent purple, the user
+      //   doesn't want to unfollow someone with a pending request to
+      //   them (CSS .is-requesting-back).
+      // - "already unfollowed ✓" → transparent red, the action is done
+      //   so the row is just history; the user wants to focus on the
+      //   entries that still need action (CSS .is-already-unfollowed).
+      //
+      // Order: active rows → requesting-back → already-unfollowed.
+      // Already-unfollowed sinks lowest because there's nothing to do
+      // with those rows; requesting-back sits above them so the
+      // pending-mutual cases stay visible without scrolling all the
+      // way to the bottom.
+      const isRequesting = (i) => i.relationship === "requesting to follow back";
+      const isDone = (i) => i.bucket_status === "already unfollowed ✓";
+      const active = items.filter((i) => !isRequesting(i) && !isDone(i));
+      const requesting = items.filter((i) => isRequesting(i) && !isDone(i));
+      const done = items.filter(isDone);
+      const reordered = (requesting.length || done.length)
+        ? active.concat(requesting, done)
+        : items;
       // Chunked render: paint first ~120 rows synchronously so the user
       // sees something immediately, then append the rest in 300-row
       // batches via requestAnimationFrame so the browser can layout +

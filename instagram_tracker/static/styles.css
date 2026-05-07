@@ -970,6 +970,24 @@ code {
 .list-row.is-requesting-back .username {
   color: rgba(220, 195, 245, 0.95);
 }
+
+/* "Already unfollowed ✓" rows on bucket lists (e.g. ✦ Want to remove).
+ * Action is done — the row is informational. Transparent red tint
+ * + dimmed opacity to push them to the visual background. Floated
+ * to the bottom of the list (below requesting-back) so the user
+ * focuses on entries that still need action. */
+.list-row.is-already-unfollowed {
+  background: rgba(255, 94, 122, 0.08);
+  border-left: 3px solid rgba(255, 94, 122, 0.45);
+  opacity: 0.6;
+}
+.list-row.is-already-unfollowed:hover {
+  background: rgba(255, 94, 122, 0.15);
+  opacity: 1;
+}
+.list-row.is-already-unfollowed .username {
+  color: rgba(255, 180, 195, 0.9);
+}
 .list-section.came-back-section {
   margin-top: 14px;
   padding: 6px 10px;
