@@ -402,6 +402,15 @@ async function _onArrivalPollFire() {
   }
 }
 
+// Prefixes for the auto-close alarms we arm 1 minute after (a) the
+// export wizard reaches its submit step, (b) the auto-archive runner
+// receives a completion signal. setTimeout doesn't survive an MV3
+// service-worker shutdown — Chrome can tear the SW down within ~30s
+// of inactivity, killing any pending timer. chrome.alarms persists
+// the schedule and respawns the SW to fire it.
+const CLOSE_WIZARD_TAB_PREFIX = "close-wizard-tab-";
+const CLOSE_RUNNER_WIN_PREFIX = "close-runner-window-";
+
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === SCHEDULE_ALARM) {
     await _onScheduledExportFire();
@@ -418,6 +427,20 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     await _onArrivalPollFire();
   } else if (alarm.name === ARCHIVE_RUNNER_ALARM) {
     await _onArchiveRunnerFire();
+  } else if (alarm.name.startsWith(CLOSE_WIZARD_TAB_PREFIX)) {
+    const tabId = parseInt(alarm.name.slice(CLOSE_WIZARD_TAB_PREFIX.length), 10);
+    if (Number.isFinite(tabId)) {
+      try { await chrome.tabs.remove(tabId); }
+      catch (_) { /* tab already closed by user */ }
+      console.log(`[IG Tracker] Wizard tab ${tabId} closed (post-submit alarm)`);
+    }
+  } else if (alarm.name.startsWith(CLOSE_RUNNER_WIN_PREFIX)) {
+    const winId = parseInt(alarm.name.slice(CLOSE_RUNNER_WIN_PREFIX.length), 10);
+    if (Number.isFinite(winId)) {
+      try { await chrome.windows.remove(winId); }
+      catch (_) { /* already gone */ }
+      console.log(`[IG Tracker] Archive runner: closed window ${winId} (post-completion alarm)`);
+    }
   }
 });
 
@@ -936,16 +959,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // don't close immediately because Meta sometimes fires the password
   // prompt seconds after the submit click; the password watchdog
   // (also in meta-export.js) needs the tab alive to fill it.
+  // Uses chrome.alarms instead of setTimeout — MV3 service workers
+  // can shut down in ~30s of idle, which kills setTimeout but
+  // alarms persist and respawn the SW to fire.
   if (msg.type === "wizard-finished") {
     (async () => {
       const tabId = sender?.tab?.id;
       if (tabId != null) {
-        console.log(`[IG Tracker] Wizard finished, closing tab ${tabId} in 1 min`);
-        setTimeout(async () => {
-          try { await chrome.tabs.remove(tabId); }
-          catch (_) { /* tab already closed by user */ }
-          console.log(`[IG Tracker] Wizard tab ${tabId} closed (1 min after submit)`);
-        }, 60_000);
+        await chrome.alarms.create(`${CLOSE_WIZARD_TAB_PREFIX}${tabId}`, {
+          delayInMinutes: 1,
+        });
+        console.log(`[IG Tracker] Wizard finished, closing tab ${tabId} in 1 min (alarm)`);
       }
       sendResponse({ ok: true });
     })();
@@ -1097,14 +1121,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           // content script may have queued without forcing the user
           // to wait the full 4-minute budget. Captures the window id
           // by value so a subsequent fire setting a new inFlight
-          // doesn't shift the close target.
+          // doesn't shift the close target. Uses chrome.alarms so
+          // the close survives an MV3 service-worker shutdown
+          // during the 1-minute wait.
           const winToClose = state.inFlightWindowId;
           if (winToClose != null) {
-            setTimeout(async () => {
-              try { await chrome.windows.remove(winToClose); }
-              catch (_) { /* already gone */ }
-              console.log(`[IG Tracker] Archive runner: closed @${msg.username} window 1 min after completion`);
-            }, 60_000);
+            await chrome.alarms.create(`${CLOSE_RUNNER_WIN_PREFIX}${winToClose}`, {
+              delayInMinutes: 1,
+            });
+            console.log(`[IG Tracker] Archive runner: scheduled @${msg.username} window close in 1 min (alarm)`);
           }
         } else {
           console.log(`[IG Tracker] archive-runner-complete: ignored (inFlight=${state.inFlight}, msg=${msg.username})`);
