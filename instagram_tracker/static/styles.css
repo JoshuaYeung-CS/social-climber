@@ -912,6 +912,22 @@ code {
 .list-row.is-came-back .username {
   color: rgba(170, 230, 190, 0.9);
 }
+
+/* "They have a pending follow-back request to you" guard. Tinted
+ * transparent purple so the user notices and avoids accidentally
+ * unfollowing someone whose follow request is still pending — that
+ * would cancel a budding mutual. Floated to the bottom of every
+ * list (see loadLists default branch) for the same reason. */
+.list-row.is-requesting-back {
+  background: rgba(170, 110, 230, 0.10);
+  border-left: 3px solid rgba(170, 110, 230, 0.55);
+}
+.list-row.is-requesting-back:hover {
+  background: rgba(170, 110, 230, 0.18);
+}
+.list-row.is-requesting-back .username {
+  color: rgba(220, 195, 245, 0.95);
+}
 .list-section.came-back-section {
   margin-top: 14px;
   padding: 6px 10px;

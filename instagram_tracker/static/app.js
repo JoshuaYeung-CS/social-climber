@@ -2327,6 +2327,14 @@ function renderListRow(item) {
   let chip = "";
   let chipClass = "timing";
   let rowClass = "";
+  // Visual flag for "they have a pending request to follow you back".
+  // Unfollowing one of these would cancel a budding mutual, so we tint
+  // the row purple and float it to the bottom of any list it appears
+  // in (see the loadLists default branch — it splits items into
+  // non-requesting + requesting groups before chunked-rendering).
+  if (item.relationship === "requesting to follow back") {
+    rowClass += (rowClass ? " " : "") + "is-requesting-back";
+  }
 
   // Build sub-line: chronological story of the relationship. Prefer the
   // exact unix-second timestamp (*_ts) IG provides; fall back to the
@@ -2696,12 +2704,20 @@ async function loadLists() {
       }
       out.innerHTML = html.join("");
     } else {
+      // "They are requesting to follow you back" rows go LAST and get
+      // a transparent-purple tint (CSS .is-requesting-back). User asked
+      // for this so they don't accidentally unfollow someone with a
+      // pending follow-back request. Preserves the user's chosen sort
+      // within each group.
+      const requesting = items.filter((i) => i.relationship === "requesting to follow back");
+      const rest = items.filter((i) => i.relationship !== "requesting to follow back");
+      const reordered = requesting.length ? rest.concat(requesting) : items;
       // Chunked render: paint first ~120 rows synchronously so the user
       // sees something immediately, then append the rest in 300-row
       // batches via requestAnimationFrame so the browser can layout +
       // paint between chunks. For short lists this is identical to the
       // single-pass render; only kicks in past the threshold.
-      renderRowsChunked(out, items, renderListRow);
+      renderRowsChunked(out, reordered, renderListRow);
     }
     // Re-apply any active search after rendering so a sort change (which
     // re-renders the rows) keeps the filter live.
