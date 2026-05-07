@@ -72,6 +72,46 @@ def main():
     print("  Stop with Ctrl-C")
     print()
 
+    # Memory watchdog: long-running Python services don't return memory
+    # back to the OS after GC, so cumulative-compute caches and
+    # transient working sets pile up indefinitely. After ~5 hours of
+    # bot-driven traffic the live process was at 3.2 GB and /api/home
+    # cold-cache had blown past 3 minutes. The pragmatic fix is a
+    # periodic recycle: check RSS every 10 min, if > IG_MEMORY_LIMIT_MB
+    # exit so launchd's KeepAlive respawns a fresh process. Default
+    # 1500 MB; user can override via IG_MEMORY_LIMIT_MB env var.
+    # IG_MEMORY_LIMIT_MB=0 disables the watchdog entirely.
+    import subprocess as _subprocess
+    import threading as _threading
+    import time as _time
+    _mem_limit_mb = int(os.environ.get("IG_MEMORY_LIMIT_MB", "1500"))
+    _mem_check_interval_s = 600  # 10 min
+    if _mem_limit_mb > 0:
+        def _memory_watchdog():
+            pid = os.getpid()
+            while True:
+                _time.sleep(_mem_check_interval_s)
+                try:
+                    r = _subprocess.run(
+                        ["ps", "-o", "rss=", "-p", str(pid)],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    rss_mb = int(r.stdout.strip()) / 1024  # ps reports KB
+                    if rss_mb > _mem_limit_mb:
+                        print(
+                            f"[memory-watchdog] RSS {rss_mb:.0f} MB > "
+                            f"{_mem_limit_mb} MB threshold — exiting for "
+                            f"launchd respawn",
+                            flush=True,
+                        )
+                        os._exit(0)
+                except Exception as e:
+                    print(f"[memory-watchdog] check failed: {e}", flush=True)
+        _threading.Thread(target=_memory_watchdog, daemon=True).start()
+        print(f"  Memory watchdog: limit {_mem_limit_mb} MB, "
+              f"check every {_mem_check_interval_s // 60} min")
+        print()
+
     uvicorn.run(
         "instagram_tracker.server:app",
         host=DEFAULT_HOST,
