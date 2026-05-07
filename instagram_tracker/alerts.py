@@ -8,7 +8,11 @@ Two flavors:
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from .config import WAITBACK_ALERT_DAYS, WANT_REMOVE_ALERT_DAYS
+from .config import (
+    RECENT_UNFOLLOW_ALERT_DAYS,
+    WAITBACK_ALERT_DAYS,
+    WANT_REMOVE_ALERT_DAYS,
+)
 from .queries import (
     latest_id,
     previous_id,
@@ -298,6 +302,63 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "privacy": status,
                 "ts": int(followed_at.timestamp()),
             })
+
+    # Stateful: recent unfollows. Surfaces every account whose last
+    # appearance in your followers was within the past
+    # RECENT_UNFOLLOW_ALERT_DAYS days but who isn't a follower now and
+    # isn't in pending/incoming (the IG-bounce filter — they may have
+    # just flickered through pending). Persists across snapshots until
+    # the window expires or they re-follow, so the user has a week to
+    # see and act on each event instead of having to catch the single-
+    # diff transient alert. The diff alerts above (they_unfollowed_you,
+    # favorite_unfollowed_you) still fire per-import; the stateful one
+    # is the durable companion view.
+    cutoff_unfollow = datetime.now(timezone.utc) - timedelta(days=RECENT_UNFOLLOW_ALERT_DAYS)
+    cutoff_unfollow_ts = int(cutoff_unfollow.timestamp())
+    bounced_now = curr.pending | curr.incoming_requests
+    # MAX(export_timestamp) per username in followers — that's the most
+    # recent moment IG saw them following us. ever_self_unfollowed isn't
+    # relevant here (this alert is for "they unfollowed", not "you did").
+    last_followed_ts: dict[str, int] = {}
+    for r in conn.execute(
+        "SELECT username, MAX(export_timestamp) AS ts FROM followers "
+        "WHERE export_timestamp IS NOT NULL "
+        "AND export_timestamp >= ? "
+        "GROUP BY username",
+        (cutoff_unfollow_ts,),
+    ).fetchall():
+        ts = r["ts"]
+        if ts is None:
+            continue
+        last_followed_ts[r["username"]] = int(ts)
+
+    recent_unfollow_users = [
+        u for u in last_followed_ts
+        if u not in curr.followers
+        and u not in suppressed
+        and u not in bounced_now
+    ]
+    ru_priv, ru_np = _privacy_for(recent_unfollow_users)
+    for u in sorted(recent_unfollow_users, key=lambda x: -last_followed_ts[x]):
+        ts = last_followed_ts[u]
+        followed_at = datetime.fromtimestamp(ts, tz=timezone.utc)
+        days_ago = (datetime.now(timezone.utc) - followed_at).days
+        is_fav = u in favorites
+        priv_label = _privacy_label(ru_priv.get(u, "unknown"), u in ru_np)
+        prefix = "★⤴" if is_fav else "⤴"
+        fav_label = "★ Favorite " if is_fav else ""
+        when_text = "today" if days_ago == 0 else (
+            f"{days_ago} day{'s' if days_ago != 1 else ''} ago"
+        )
+        stateful.append({
+            "kind": "recent_unfollow" if not is_fav else "favorite_recent_unfollow",
+            "username": u,
+            "severity": "high" if is_fav else "normal",
+            "message": f"{prefix} {fav_label}{u} ({priv_label}) unfollowed you {when_text}.",
+            "days": days_ago,
+            "privacy": ru_priv.get(u, "unknown"),
+            "ts": ts,
+        })
 
     # Stateful: tagged-as-disabled or tagged-as-unavailable accounts that show
     # real proof-of-life. The only reliable signal is them appearing in YOUR
