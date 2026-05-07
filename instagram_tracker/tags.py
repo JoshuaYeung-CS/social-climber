@@ -8,7 +8,7 @@ import sqlite3
 
 from .db import utc_now_iso
 
-VALID_FLAGS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive", "archive_skip"}
+VALID_FLAGS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive", "archive_skip", "to_follow"}
 
 
 def _added_at_col(flag: str) -> str:
@@ -30,6 +30,7 @@ def get_tags(conn: sqlite3.Connection, username: str) -> dict:
             "random_request": False,
             "now_public": False,
             "need_archive": False,
+            "to_follow": False,
             "favorite_added_at": None,
             "want_remove_added_at": None,
             "watchlist_added_at": None,
@@ -38,6 +39,7 @@ def get_tags(conn: sqlite3.Connection, username: str) -> dict:
             "random_request_added_at": None,
             "now_public_added_at": None,
             "need_archive_added_at": None,
+            "to_follow_added_at": None,
             "profile_url": None,
             "notes": None,
         }
@@ -52,6 +54,7 @@ def get_tags(conn: sqlite3.Connection, username: str) -> dict:
         "random_request": bool(row["random_request"]) if "random_request" in keys else False,
         "now_public": bool(row["now_public"]) if "now_public" in keys else False,
         "need_archive": bool(row["need_archive"]) if "need_archive" in keys else False,
+        "to_follow": bool(row["to_follow"]) if "to_follow" in keys else False,
         "favorite_added_at": row["favorite_added_at"],
         "want_remove_added_at": row["want_remove_added_at"],
         "watchlist_added_at": row["watchlist_added_at"],
@@ -60,6 +63,7 @@ def get_tags(conn: sqlite3.Connection, username: str) -> dict:
         "random_request_added_at": row["random_request_added_at"] if "random_request_added_at" in keys else None,
         "now_public_added_at": row["now_public_added_at"] if "now_public_added_at" in keys else None,
         "need_archive_added_at": row["need_archive_added_at"] if "need_archive_added_at" in keys else None,
+        "to_follow_added_at": row["to_follow_added_at"] if "to_follow_added_at" in keys else None,
         "profile_url": row["profile_url"],
         "notes": row["notes"],
     }
@@ -98,8 +102,9 @@ def set_flag(
                 now_public, now_public_added_at,
                 need_archive, need_archive_added_at,
                 archive_skip, archive_skip_added_at,
+                to_follow, to_follow_added_at,
                 profile_url, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 username,
@@ -112,6 +117,7 @@ def set_flag(
                 cols["now_public"], added["now_public_added_at"],
                 cols["need_archive"], added["need_archive_added_at"],
                 cols["archive_skip"], added["archive_skip_added_at"],
+                cols["to_follow"], added["to_follow_added_at"],
                 profile_url, now,
             ),
         )
@@ -156,9 +162,9 @@ def list_with_flag(conn: sqlite3.Connection, flag: str) -> list[dict]:
 
 def all_flagged_usernames(conn: sqlite3.Connection) -> dict[str, dict[str, bool]]:
     rows = conn.execute(
-        "SELECT username, favorite, want_remove, watchlist, disabled, unavailable, random_request, now_public "
+        "SELECT username, favorite, want_remove, watchlist, disabled, unavailable, random_request, now_public, to_follow "
         "FROM profile_tags "
-        "WHERE favorite = 1 OR want_remove = 1 OR watchlist = 1 OR disabled = 1 OR unavailable = 1 OR random_request = 1 OR now_public = 1"
+        "WHERE favorite = 1 OR want_remove = 1 OR watchlist = 1 OR disabled = 1 OR unavailable = 1 OR random_request = 1 OR now_public = 1 OR to_follow = 1"
     ).fetchall()
     return {
         r["username"]: {
@@ -169,6 +175,7 @@ def all_flagged_usernames(conn: sqlite3.Connection) -> dict[str, dict[str, bool]
             "unavailable": bool(r["unavailable"]),
             "random_request": bool(r["random_request"]),
             "now_public": bool(r["now_public"]),
+            "to_follow": bool(r["to_follow"]),
         }
         for r in rows
     }

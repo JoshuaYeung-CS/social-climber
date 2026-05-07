@@ -221,6 +221,15 @@ def connect(db_path: Path) -> sqlite3.Connection:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN archive_skip INTEGER NOT NULL DEFAULT 0")
     if "archive_skip_added_at" not in cols:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN archive_skip_added_at TEXT")
+    # to_follow: user-set "I want to follow this account" bookmark. The
+    # extension overlay's 👤 button toggles this. Surfaced on the home
+    # page as its own bucket card so the user can scan their queue of
+    # accounts to follow when they're ready (private accounts may need
+    # explicit timing for whatever reason).
+    if "to_follow" not in cols:
+        conn.execute("ALTER TABLE profile_tags ADD COLUMN to_follow INTEGER NOT NULL DEFAULT 0")
+    if "to_follow_added_at" not in cols:
+        conn.execute("ALTER TABLE profile_tags ADD COLUMN to_follow_added_at TEXT")
     # Free-form per-account notes — the user can jot down a VSCO link,
     # who introduced them, why they're tagged, etc. One row per username
     # max; an empty/whitespace string is treated as no note.
