@@ -8,6 +8,7 @@
 
 const TAG_SYMS = {
   favorite: "★",
+  star: "⭐",
   want_remove: "✦",
   watchlist: "↺",
   to_follow: "👤",
@@ -18,7 +19,8 @@ const TAG_SYMS = {
   need_archive: "📦",
 };
 const TAG_LABELS = {
-  favorite: "Favorite",
+  favorite: "Favorite (people you know)",
+  star: "Star (creator / celebrity / model)",
   want_remove: "Want to remove",
   watchlist: "Wait-back",
   to_follow: "To follow",

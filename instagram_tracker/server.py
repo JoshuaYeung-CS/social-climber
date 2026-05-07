@@ -919,6 +919,7 @@ def _home_compute():
                 "unavailable_tagged": len(tags_mod.list_with_flag(conn, "unavailable")),
                 "random_request_tagged": len(tags_mod.list_with_flag(conn, "random_request")),
                 "to_follow_tagged": len(tags_mod.list_with_flag(conn, "to_follow")),
+                "star_tagged": len(tags_mod.list_with_flag(conn, "star")),
             }
 
         bucket_counts = {
@@ -1732,7 +1733,7 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # Bucket lists. Skipped in pure mode — overlay rebuilds them from
         # current tags so a tag toggle doesn't invalidate the snapshot cache.
         if not _pure_only:
-            for flag in ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive", "to_follow"):
+            for flag in ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive", "to_follow", "star"):
                 sections[flag] = sorted(r["username"] for r in tags_mod.list_with_flag(conn, flag))
 
         # ---- Cumulative / historical lists across ALL snapshots ----
@@ -2088,7 +2089,7 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
             "all_followers",
             "feeder_accounts",
         }
-        BUCKET_KINDS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive", "to_follow"}
+        BUCKET_KINDS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive", "to_follow", "star"}
 
         # Tag state — empty in pure mode so pre-built rows have tag fields = False;
         # overlay attaches the real values per request.
@@ -2280,6 +2281,18 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
                 if in_pend:
                     return ("request sent ✓", "good")
                 return ("haven't followed yet", "action")
+            if kind == "star":
+                # ⭐ creator/celebrity/model bucket — parallel to ★
+                # favorite (which is for everyday people the user
+                # actually knows). Surface current relation so the
+                # user can see at a glance who they follow vs not.
+                if in_fol and in_back:
+                    return ("mutual", "good")
+                if in_fol:
+                    return ("you follow", "info")
+                if in_pend:
+                    return ("request pending", "pending")
+                return ("not following", "muted")
             return ("", "")
 
         def parse_label_date(label: str | None) -> datetime | None:
@@ -2526,8 +2539,8 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         return {"snapshot_id": sid, "previous_snapshot_id": prev_id, "sections": annotated}
 
 
-_TAG_FLAGS = ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive", "to_follow")
-_BUCKET_KINDS_SET = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive", "to_follow"}
+_TAG_FLAGS = ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive", "to_follow", "star")
+_BUCKET_KINDS_SET = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive", "to_follow", "star"}
 _BUCKET_PRIORITY = {"action": 0, "warn": 1, "pending": 2, "stopped": 3, "good": 4, "": 5}
 
 
@@ -2590,6 +2603,15 @@ def _build_bucket_row(ctx: dict, flagged: dict, u: str, kind: str) -> dict:
             bs = ("request sent ✓", "good")
         else:
             bs = ("haven't followed yet", "action")
+    elif kind == "star":
+        if in_fol and in_back:
+            bs = ("mutual", "good")
+        elif in_fol:
+            bs = ("you follow", "info")
+        elif in_pend:
+            bs = ("request pending", "pending")
+        else:
+            bs = ("not following", "muted")
     else:
         bs = ("", "")
 

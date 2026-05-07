@@ -244,6 +244,7 @@ async function loadHome() {
         ["✕ Tagged unavailable", s.unavailable_tagged ?? 0, "unavailable"],
         ["🎲 Tagged random requests", s.random_request_tagged ?? 0, "random_request"],
         ["👤 To follow", s.to_follow_tagged ?? 0, "to_follow"],
+        ["⭐ Stars", s.star_tagged ?? 0, "star"],
       ];
       for (const [label, value, listKind] of stats) {
         // Render as an <a> with a real hash href so cmd/ctrl/shift-
@@ -1681,6 +1682,7 @@ const LIST_DESCRIPTIONS = {
   want_remove:                  "Accounts you've manually flagged for unfollowing later. Manual labels.",
   watchlist:                    "Accounts you're waiting on for a follow-back. Each row shows one of: 'request pending' (you sent a follow request, they haven't accepted), 'no follow back yet' (they accepted or it's public, but haven't followed you back), 'now follows back ✓' (mutual), or 'you've unfollowed' (you withdrew). Alerts fire after 7 days of waiting; favorites get higher priority.",
   to_follow:                    "👤 Accounts you've bookmarked to follow later. Use this for profiles you want to revisit before sending a request — e.g. private accounts you want to wait to follow strategically, or new finds you want to confirm before requesting. Auto-marks 'now following ✓' or 'request sent ✓' when the bookmark is fulfilled, so the list trims itself as you act on it.",
+  star:                         "⭐ Stars — models, celebrities, creators, public figures. Distinct from ★ Favorite (which is for everyday people you actually know). Lets you bucket the two populations separately so 'favorite unfollowed you' alerts and similar don't conflate someone you met with a creator you fan-follow.",
   disabled:                     "Accounts you've manually marked as gone (deactivated, deleted, blocked you). Auto-clears if they reappear in your followers (proof of life). Excluded from non-bucket lists.",
   unavailable:                  "Accounts where the extension landed on Instagram's 'Sorry, this page isn't available' state. Auto-clears if they reappear in your followers. Excluded from non-bucket lists.",
   random_request:               "Manual flag for incoming requests that look like spam / bots / random users. Excluded from 'real_requests' and other non-bucket lists.",
@@ -1713,6 +1715,7 @@ const LIST_KINDS = [
   ["still_follow_after_drop", "You still follow people who unfollowed you"],
   ["renamed", "Renamed accounts"],
   ["favorite", "★ Favorites"],
+  ["star", "⭐ Stars (creators/celebs)"],
   ["want_remove", "✦ Want to remove"],
   ["watchlist", "↺ Wait-back"],
   ["to_follow", "👤 To follow"],
@@ -1742,7 +1745,7 @@ const LIST_GROUPS = [
   { label: "Current",  kinds: ["everyone", "all_followers", "all_following", "mutuals", "public_mutuals", "private_accepted_no_follow_back", "not_following_you_back", "feeder_accounts", "pending", "incoming_requests", "renamed"] },
   { label: "History",  kinds: ["ever_unfollowed_you", "rats", "mutual_break_you_first", "mutual_break_they_first", "ever_removed_you_as_follower", "you_unfollowed_ever", "still_follow_after_drop"] },
   { label: "Requests", kinds: ["ever_incoming_requests", "real_requests", "incoming_request_dropped", "ever_requested_outgoing", "request_dropped"] },
-  { label: "Tags",     kinds: ["favorite", "want_remove", "watchlist", "to_follow", "disabled", "unavailable", "random_request", "now_public"] },
+  { label: "Tags",     kinds: ["favorite", "star", "want_remove", "watchlist", "to_follow", "disabled", "unavailable", "random_request", "now_public"] },
 ];
 
 // Cross-list intersection: cmd/ctrl+click (or long-press on touch) a pill

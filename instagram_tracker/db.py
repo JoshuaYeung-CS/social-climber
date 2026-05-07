@@ -230,6 +230,15 @@ def connect(db_path: Path) -> sqlite3.Connection:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN to_follow INTEGER NOT NULL DEFAULT 0")
     if "to_follow_added_at" not in cols:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN to_follow_added_at TEXT")
+    # star: parallel to ★ favorite but for models / celebrities /
+    # creators / public figures. ★ favorite stays for everyday
+    # people the user actually knows; ⭐ star is for accounts they
+    # follow as fans. Lets the user filter / bucket these
+    # populations separately on home and list views.
+    if "star" not in cols:
+        conn.execute("ALTER TABLE profile_tags ADD COLUMN star INTEGER NOT NULL DEFAULT 0")
+    if "star_added_at" not in cols:
+        conn.execute("ALTER TABLE profile_tags ADD COLUMN star_added_at TEXT")
     # Free-form per-account notes — the user can jot down a VSCO link,
     # who introduced them, why they're tagged, etc. One row per username
     # max; an empty/whitespace string is treated as no note.
