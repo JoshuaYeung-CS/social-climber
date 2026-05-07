@@ -110,12 +110,28 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
         they_removed_you = left_following - curr.recently_unfollowed - bounced
         # (left_following & curr.recently_unfollowed) = you unfollowed them; not surfaced as an alert.
 
+        # Outbound follow request disappeared without becoming a follow:
+        # they declined, expired, or the user cancelled. We can't tell
+        # which from snapshot data alone — frame as "request rejected/
+        # withdrawn" in the alert message.
+        request_rejected_outbound = (
+            (prev.pending - curr.pending) - curr.following - suppressed
+        )
+        # Inbound follow request disappeared without becoming a follow:
+        # they withdrew, the user rejected, or it was auto-handled.
+        # Same ambiguity, framed as "withdrew their request".
+        request_withdrawn_inbound = (
+            (prev.incoming_requests - curr.incoming_requests) - curr.followers - suppressed
+        )
+
         # Single privacy lookup covering every account that could end up
         # in a diff alert. Includes all new mutuals so we can fire the
         # public_now_follows_back alert for non-favorite public accounts.
         diff_users = sorted(
             lost_followers
             | they_removed_you
+            | request_rejected_outbound
+            | request_withdrawn_inbound
             | ((curr.followers - prev.followers) & curr.following)
         )
         diff_priv, diff_np = _privacy_for(diff_users)
@@ -156,6 +172,48 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "username": u,
                 "severity": "normal",
                 "message": f"{u} ({_badge(u)}) removed you as a follower.",
+                "ts": latest_ts,
+            })
+
+        # Outbound request was rejected / withdrew — your pending dropped
+        # without becoming a follow. Favorites get high severity since
+        # the user explicitly cared about getting that follow.
+        for u in sorted(request_rejected_outbound & favorites):
+            diff_alerts.append({
+                "kind": "favorite_my_request_rejected",
+                "username": u,
+                "severity": "high",
+                "message": f"★ Favorite {u} ({_badge(u)}) — your follow request was rejected/withdrew.",
+                "ts": latest_ts,
+            })
+
+        for u in sorted(request_rejected_outbound - favorites):
+            diff_alerts.append({
+                "kind": "my_request_rejected",
+                "username": u,
+                "severity": "normal",
+                "message": f"✕ {u} ({_badge(u)}) — your follow request was rejected/withdrew.",
+                "ts": latest_ts,
+            })
+
+        # Inbound request disappeared — they withdrew, you rejected, or
+        # it was auto-handled. Framed as "removed their request" since
+        # that's the most user-relevant interpretation.
+        for u in sorted(request_withdrawn_inbound & favorites):
+            diff_alerts.append({
+                "kind": "favorite_removed_their_request",
+                "username": u,
+                "severity": "high",
+                "message": f"★ Favorite {u} ({_badge(u)}) removed their follow request to you.",
+                "ts": latest_ts,
+            })
+
+        for u in sorted(request_withdrawn_inbound - favorites):
+            diff_alerts.append({
+                "kind": "removed_their_request",
+                "username": u,
+                "severity": "normal",
+                "message": f"✕ {u} ({_badge(u)}) removed their follow request to you.",
                 "ts": latest_ts,
             })
 
