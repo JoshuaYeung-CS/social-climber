@@ -1467,8 +1467,10 @@ function renderTagToggles(tags) {
   return `
     <div class="tag-toggles">
       <button class="tag-toggle ${tags.favorite ? "active" : ""}" data-flag="favorite">★ Favorite</button>
+      <button class="tag-toggle ${tags.star ? "active" : ""}" data-flag="star">⭐ Star</button>
       <button class="tag-toggle ${tags.want_remove ? "active" : ""}" data-flag="want_remove">✦ Want-remove</button>
       <button class="tag-toggle ${tags.watchlist ? "active" : ""}" data-flag="watchlist">↺ Wait-back</button>
+      <button class="tag-toggle ${tags.to_follow ? "active" : ""}" data-flag="to_follow">👤 To follow</button>
       <button class="tag-toggle ${tags.disabled ? "active" : ""}" data-flag="disabled">⚠ Disabled</button>
       <button class="tag-toggle ${tags.unavailable ? "active" : ""}" data-flag="unavailable">✕ Unavailable</button>
       <button class="tag-toggle ${tags.random_request ? "active" : ""}" data-flag="random_request">🎲 Random request</button>
