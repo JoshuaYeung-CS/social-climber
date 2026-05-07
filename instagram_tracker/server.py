@@ -2099,17 +2099,32 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # once via a cheap directory scan rather than re-statting per row.
         # Used as a virtual tag (📦) on each row so the user can see at a
         # glance which accounts have local archive content.
+        # Also captures the MOST RECENT mtime per username (the latest
+        # archive event) so list rows can display 'last archived 2h ago'.
+        # We sample the first non-dotfile we hit per dir for a cheap
+        # has_archive bool, then iterate the rest only to find the max
+        # mtime — bounded scan, no full rglob over thousands of files.
         archived_users: set[str] = set()
+        archived_mtimes: dict[str, float] = {}
         try:
             for d in _MEDIA_DIR.iterdir():
                 if not d.is_dir():
                     continue
-                # Cheap "any file?" check — break on first hit. Faster than
-                # rglob+sum for accounts with hundreds of files.
+                latest = 0.0
                 for f in d.rglob("*"):
-                    if f.is_file():
-                        archived_users.add(d.name)
-                        break
+                    if not f.is_file():
+                        continue
+                    if f.name.startswith("."):  # skip .archive_complete, .DS_Store
+                        continue
+                    try:
+                        m = f.stat().st_mtime
+                    except OSError:
+                        continue
+                    if m > latest:
+                        latest = m
+                if latest > 0:
+                    archived_users.add(d.name)
+                    archived_mtimes[d.name] = latest
         except OSError:
             pass
 
@@ -2317,6 +2332,7 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
                 # Virtual flag computed from filesystem (data/media/<u>/).
                 # Surfaced as a 📦 pill on the row.
                 "has_archive": u in archived_users,
+                "last_archived_ts": archived_mtimes.get(u),
                 "currently_following": u in sd.following,
                 "currently_follower": u in sd.followers,
                 "currently_pending": u in sd.pending,
@@ -2478,6 +2494,7 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
                     "sd_pending": frozenset(sd.pending),
                     "sd_incoming_requests": frozenset(sd.incoming_requests),
                     "archived_users": frozenset(archived_users),
+                    "archived_mtimes": dict(archived_mtimes),
                     "reengaged": frozenset(reengaged),
                     "privacy_map": privacy_map,
                     "alias_map": alias_map,
@@ -2625,6 +2642,7 @@ def _build_bucket_row(ctx: dict, flagged: dict, u: str, kind: str) -> dict:
         "bucket_status": bs[0],
         "bucket_status_kind": bs[1],
         "has_archive": u in ctx["archived_users"],
+        "last_archived_ts": ctx.get("archived_mtimes", {}).get(u),
     }
     # Tag flags from current state.
     for f in _TAG_FLAGS:

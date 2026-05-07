@@ -37,6 +37,14 @@ const _LONG_TIMEOUT_PATHS = new Set([
   // long timeout only matters on the first request after a server
   // restart or a snapshot import.
   "/api/lists",
+  // /api/home shares the same cumulative compute machinery and the
+  // archive-mtime scan over data/media/* — both grow with archive
+  // size. Snapshot counts in the thousands push cold-cache compute
+  // past 20s. Hot cache is sub-second.
+  "/api/home",
+  // /api/activity-log iterates every snapshot transition to build
+  // per-event rows; same cold-cache shape.
+  "/api/activity-log",
 ]);
 function _timeoutFor(path) {
   for (const p of _LONG_TIMEOUT_PATHS) {
@@ -92,6 +100,21 @@ function toast(msg, ms = 2400) {
 
 function instagramUrl(username) {
   return `https://www.instagram.com/${encodeURIComponent(username)}/`;
+}
+
+// Compact relative-time formatter: "5m ago", "3h ago", "2d ago".
+// Input is unix-seconds (server gives mtimes as floats). Returns
+// empty string for invalid / zero input so callers can chain into a
+// truthy check.
+function _fmtRelativeFromUnix(unixSec) {
+  if (!unixSec || !Number.isFinite(unixSec)) return "";
+  const sec = Math.max(0, Math.floor(Date.now() / 1000 - unixSec));
+  if (sec < 60) return "just now";
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  if (sec < 86400 * 14) return `${Math.floor(sec / 86400)}d ago`;
+  if (sec < 86400 * 60) return `${Math.floor(sec / (86400 * 7))}w ago`;
+  return `${Math.floor(sec / (86400 * 30))}mo ago`;
 }
 
 function fmtRelativeDate(iso) {
@@ -2444,10 +2467,25 @@ function renderListRow(item) {
   // 📦 = virtual flag computed server-side from data/media/<u>/. Read-only —
   // can't toggle it from the row (clicking just opens the IG profile to view
   // archived media). Has its own CSS class so it's visually distinct from
-  // togglable tags.
+  // togglable tags. Tooltip includes the last-archived relative time so
+  // the user can see at a glance when this account was last touched.
+  let archiveTitle = "has archived media — open the gallery from the modal";
+  if (item.last_archived_ts) {
+    const ago = _fmtRelativeFromUnix(item.last_archived_ts);
+    if (ago) archiveTitle = `last archived ${ago} — open the gallery from the modal`;
+  }
   const archivePill = item.has_archive
-    ? `<span class="row-tag has-archive on" title="has archived media — open the gallery from the modal">📦</span>`
+    ? `<span class="row-tag has-archive on" title="${escapeAttr(archiveTitle)}">📦</span>`
     : "";
+  // Sub-line caption: "📦 last archived 2h ago". Only shown when there
+  // IS archived media (item.last_archived_ts present). Distinct from
+  // the per-row 📦 pill on the right edge — that pill is a tap target,
+  // this caption is informational so the timestamp is visible without
+  // having to hover.
+  if (item.last_archived_ts) {
+    const ago = _fmtRelativeFromUnix(item.last_archived_ts);
+    if (ago) parts.push(`📦 last archived ${ago}`);
+  }
   const tagButtons = `
     ${archivePill}
     ${tagBtn("favorite", "★", item.favorite)}
