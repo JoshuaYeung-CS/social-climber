@@ -1374,6 +1374,11 @@ def _activity_log_compute():
         ts_following = ts_index("following")
         ts_pending   = ts_index("pending_follow_requests")
         ts_incoming  = ts_index("incoming_follow_requests")
+        # Precise per-event time for YOU-unfollowed events. IG records
+        # the exact second you tapped Unfollow into recently_unfollowed.
+        # Lets the you_unfollowed event display a precise time instead
+        # of a bounded "between snap N and snap N+1" range.
+        ts_recently_unfollowed = ts_index("recently_unfollowed")
 
         # Latest-snapshot state used as a "ground truth" check for the
         # accept/withdraw split. IG's export sometimes shows a request
@@ -1443,6 +1448,11 @@ def _activity_log_compute():
         for s in snaps:
             curr_sd = q.snapshot_data(conn, s.id)
             curr_ts = taken_at_by_id.get(s.id) or s.created_at
+            # Lower bound for disappearance events. Used by every
+            # emit() that bounds an event between (prev_ts, curr_ts):
+            # they were observed in prev, gone in curr, so the actual
+            # transition happened sometime in that window.
+            prev_ts = taken_at_by_id.get(prev_id) if prev_id is not None else None
 
             if prev_sd is not None:
                 left_followers = prev_sd.followers - curr_sd.followers
@@ -1485,7 +1495,12 @@ def _activity_log_compute():
                                   or (ts_following.get(latest, {}).get(u) if latest is not None else None))
                         emit(events, "they_accepted", u, s.id, curr_ts, accept_ts)
                     else:
-                        emit(events, "pending_withdrawn", u, s.id, curr_ts)
+                        # No precise IG timestamp for "request didn't
+                        # become a follow" — IG just removes the row.
+                        # Bound between prev and curr snapshot times.
+                        emit(events, "pending_withdrawn", u, s.id, curr_ts,
+                             time_lower_bound=prev_ts,
+                             time_upper_bound=curr_ts)
 
                 # ---------- incoming events: only if both sides have data ----------
                 # Suppresses the phantom 'every request resolved' flood that
@@ -1506,7 +1521,12 @@ def _activity_log_compute():
                                       or (ts_followers.get(latest, {}).get(u) if latest is not None else None))
                             emit(events, "you_accepted", u, s.id, curr_ts, accept_ts)
                         else:
-                            emit(events, "incoming_withdrawn", u, s.id, curr_ts)
+                            # No precise IG timestamp — they
+                            # withdrew, you rejected, or it expired.
+                            # Bound between prev and curr.
+                            emit(events, "incoming_withdrawn", u, s.id, curr_ts,
+                                 time_lower_bound=prev_ts,
+                                 time_upper_bound=curr_ts)
 
                 # ---------- follower-side disappearances ----------
                 # No bounce filter on the event log. The activity log is
@@ -1527,7 +1547,6 @@ def _activity_log_compute():
                 # The you_unfollowed / removed_you split still uses
                 # recently_unfollowed (the ground truth for
                 # user-initiated unfollows).
-                prev_ts = taken_at_by_id.get(prev_id) if prev_id is not None else None
                 for u in sorted(left_followers):
                     emit(
                         events,
@@ -1539,9 +1558,26 @@ def _activity_log_compute():
                         time_upper_bound=curr_ts,
                     )
                 for u in sorted(left_following & curr_sd.recently_unfollowed):
-                    emit(events, "you_unfollowed", u, s.id, curr_ts)
+                    # IG records the exact moment YOU tapped Unfollow
+                    # in the recently_unfollowed table. Use that
+                    # precise time when available; otherwise bound.
+                    unfollow_ts = (
+                        ts_recently_unfollowed.get(s.id, {}).get(u)
+                        or (ts_recently_unfollowed.get(latest, {}).get(u) if latest is not None else None)
+                    )
+                    if unfollow_ts is not None:
+                        emit(events, "you_unfollowed", u, s.id, curr_ts, unfollow_ts)
+                    else:
+                        emit(events, "you_unfollowed", u, s.id, curr_ts,
+                             time_lower_bound=prev_ts,
+                             time_upper_bound=curr_ts)
                 for u in sorted(left_following - curr_sd.recently_unfollowed):
-                    emit(events, "removed_you", u, s.id, curr_ts)
+                    # No precise IG timestamp — typical reasons are
+                    # account deactivation, block, or other forced
+                    # removal. Bound between prev and curr.
+                    emit(events, "removed_you", u, s.id, curr_ts,
+                         time_lower_bound=prev_ts,
+                         time_upper_bound=curr_ts)
 
             prev_sd = curr_sd
             prev_id = s.id
