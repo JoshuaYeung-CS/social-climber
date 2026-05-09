@@ -3426,6 +3426,14 @@ function buildSeriesCheckboxes() {
       const s = HISTORY_SERIES.find((x) => x.key === el.dataset.series);
       if (s) s.on = el.checked;
       renderHistory();
+      // If a snapshot detail is currently shown, re-render it so the
+      // visible-series filter for blocks/counts updates immediately.
+      // Without this, toggling "Followers" off would shrink the chart
+      // but leave the New-followers / They-unfollowed-you blocks
+      // stranded below until the user re-clicked the same point.
+      if (_lastHistoryDetail) {
+        showHistoryDetail(_lastHistoryDetail.idx, _lastHistoryDetail.snaps);
+      }
     })
   );
 }
@@ -3701,7 +3709,57 @@ function shortDate(s) {
   return `${months[parseInt(mo, 10) - 1]} ${parseInt(d, 10)}`;
 }
 
+// Map each detail-panel block to the chart series it relates to. The
+// detail panel filters its blocks based on which series are currently
+// visible in the chart legend, so checking only "Followers" hides the
+// following / pending / mutuals blocks. Picking one box shows only
+// that box; picking multiple shows all matching blocks. If no series
+// are visible (rare — chart shows a "pick at least one" message in
+// that case), the detail panel falls back to showing everything.
+const HISTORY_DETAIL_BLOCK_TO_SERIES = {
+  new_followers:               ["followers", "mutuals", "new_followers"],
+  they_unfollowed_you:         ["followers", "mutuals", "cumulative_unfollowers"],
+  you_removed_as_follower:     ["followers", "mutuals"],
+  new_following:               ["following", "mutuals", "new_follows"],
+  you_unfollowed:              ["following", "mutuals"],
+  they_removed_you_as_follower: ["following", "mutuals"],
+  new_pending:                 ["pending", "new_outgoing_requests"],
+  resolved_pending:            ["pending", "new_follows"],
+};
+// Same idea for the four count cards at the top of the detail panel.
+const HISTORY_DETAIL_COUNT_TO_SERIES = {
+  followers: ["followers", "new_followers"],
+  following: ["following", "new_follows"],
+  mutuals:   ["mutuals"],
+  pending:   ["pending", "new_outgoing_requests"],
+};
+
+function _historyVisibleSeriesKeys() {
+  const visible = HISTORY_SERIES.filter((s) => s.on).map((s) => s.key);
+  // If somehow nothing is visible, treat as "show everything" — better
+  // than blanking the detail panel after a click.
+  return visible.length ? new Set(visible) : null;
+}
+function _detailBlockShouldShow(blockKey, visible) {
+  if (!visible) return true;
+  const mapped = HISTORY_DETAIL_BLOCK_TO_SERIES[blockKey];
+  if (!mapped) return true;
+  return mapped.some((s) => visible.has(s));
+}
+function _detailCountShouldShow(countKey, visible) {
+  if (!visible) return true;
+  const mapped = HISTORY_DETAIL_COUNT_TO_SERIES[countKey];
+  if (!mapped) return true;
+  return mapped.some((s) => visible.has(s));
+}
+
+// Tracks the most-recently-rendered detail panel so a series-checkbox
+// toggle can re-render it in place without the user having to re-click
+// the same snapshot point.
+let _lastHistoryDetail = null;
+
 async function showHistoryDetail(idx, snaps) {
+  _lastHistoryDetail = { idx, snaps };
   const curr = snaps[idx];
   const prev = idx > 0 ? snaps[idx - 1] : null;
   const dF = prev ? curr.followers - prev.followers : 0;
@@ -3710,27 +3768,33 @@ async function showHistoryDetail(idx, snaps) {
   const dP = prev ? curr.pending  - prev.pending  : 0;
   const arrow = (n) => n > 0 ? `<span class="up">+${n}</span>` : n < 0 ? `<span class="down">${n}</span>` : `<span class="muted">±0</span>`;
 
+  const visibleSeries = _historyVisibleSeriesKeys();
+
   let diffHtml = "";
   if (prev) {
     try {
       const d = await api.get(`/api/diff?old=${prev.snapshot_id}&new=${curr.snapshot_id}`);
       const sec = d.sections || {};
-      const block = (title, list, max = 8) => {
+      const block = (blockKey, title, list, max = 8) => {
+        if (!_detailBlockShouldShow(blockKey, visibleSeries)) return "";
         if (!list || !list.length) return "";
         const shown = list.slice(0, max);
         const more = list.length > max ? ` <span class="muted">+${list.length - max} more</span>` : "";
         return `<div class="diff-block"><strong>${title}</strong> (${list.length})<div>${shown.map((u) => `<span class="diff-name" data-username="${escapeAttr(u)}">${escapeHtml(u)}<a class="diff-link" href="https://www.instagram.com/${encodeURIComponent(u)}/" target="_blank" rel="noopener" title="Open on Instagram">↗</a></span>`).join(" ")}${more}</div></div>`;
       };
       diffHtml = `
-        ${block("New followers", sec.new_followers)}
-        ${block("They unfollowed you", sec.they_unfollowed_you)}
-        ${block("You removed them as a follower", sec.you_removed_as_follower)}
-        ${block("New following (you followed)", sec.new_following)}
-        ${block("You unfollowed", sec.you_unfollowed)}
-        ${block("They removed you as a follower", sec.they_removed_you_as_follower)}
-        ${block("New pending requests", sec.new_pending)}
-        ${block("Resolved pending", sec.resolved_pending)}
+        ${block("new_followers", "New followers", sec.new_followers)}
+        ${block("they_unfollowed_you", "They unfollowed you", sec.they_unfollowed_you)}
+        ${block("you_removed_as_follower", "You removed them as a follower", sec.you_removed_as_follower)}
+        ${block("new_following", "New following (you followed)", sec.new_following)}
+        ${block("you_unfollowed", "You unfollowed", sec.you_unfollowed)}
+        ${block("they_removed_you_as_follower", "They removed you as a follower", sec.they_removed_you_as_follower)}
+        ${block("new_pending", "New pending requests", sec.new_pending)}
+        ${block("resolved_pending", "Resolved pending", sec.resolved_pending)}
       `;
+      if (!diffHtml.trim()) {
+        diffHtml = `<div class="muted">No matching changes for the visible series. Tick more series above to see other categories.</div>`;
+      }
     } catch (e) {
       diffHtml = `<div class="muted">Diff unavailable: ${escapeHtml(e.message)}</div>`;
     }
@@ -3738,15 +3802,25 @@ async function showHistoryDetail(idx, snaps) {
     diffHtml = `<div class="muted">First snapshot in range — nothing to diff against.</div>`;
   }
 
+  // Count cards mirror the same series-filtering rule. Hide cards
+  // whose series isn't visible so a single-series view stays focused
+  // (e.g. only "Followers" checked → only the followers count + the
+  // followers-related diff blocks render).
+  const countCard = (key, label, value, delta) => {
+    if (!_detailCountShouldShow(key, visibleSeries)) return "";
+    return `<div>${label} <strong>${value}</strong> ${prev ? arrow(delta) : ""}</div>`;
+  };
+  const countsHtml = `
+    ${countCard("followers", "Followers", curr.followers, dF)}
+    ${countCard("following", "Following", curr.following, dG)}
+    ${countCard("mutuals", "Mutuals", curr.mutuals, dM)}
+    ${countCard("pending", "Pending", curr.pending, dP)}
+  `;
+
   $("#history-detail").innerHTML = `
     <div class="history-snapshot">
       <h3>#${curr.snapshot_id} · ${escapeHtml(cleanLabel(curr.label) || curr.created_at)}</h3>
-      <div class="history-counts">
-        <div>Followers <strong>${curr.followers}</strong> ${prev ? arrow(dF) : ""}</div>
-        <div>Following <strong>${curr.following}</strong> ${prev ? arrow(dG) : ""}</div>
-        <div>Mutuals <strong>${curr.mutuals}</strong> ${prev ? arrow(dM) : ""}</div>
-        <div>Pending <strong>${curr.pending}</strong> ${prev ? arrow(dP) : ""}</div>
-      </div>
+      <div class="history-counts">${countsHtml}</div>
       ${diffHtml}
     </div>
   `;
