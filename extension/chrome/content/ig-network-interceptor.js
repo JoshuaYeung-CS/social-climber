@@ -251,6 +251,12 @@
           postItems.length === 0 && profileInfos.length === 0) return;
       // Strip down to just what the archiver needs — a stable per-item
       // shape with the highest-quality URL extracted up front.
+      // Carry user.username and user.pk along: the entry-URL fallback
+      // path in the archiver (when IG sits on `/stories/<user>/` and
+      // never navigates to a specific story id) needs to scan the
+      // cached manifests for items belonging to the visited user.
+      // Without these fields, the manifest is only addressable by
+      // the URL-derived id we don't have in the entry-URL case.
       const shape = (it) => {
         const candidates = it.image_versions2?.candidates || [];
         const sortedImg = [...candidates].sort((a, b) =>
@@ -268,6 +274,8 @@
           taken_at: it.taken_at,
           image_url: bestImage,
           video_url: bestVideo,
+          user_username: it.user?.username || it.owner?.username || null,
+          user_pk: it.user?.pk ? String(it.user.pk) : (it.owner?.id ? String(it.owner.id) : null),
         };
       };
       const message = {

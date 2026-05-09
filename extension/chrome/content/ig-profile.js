@@ -2485,6 +2485,26 @@ async function _waitForStoryManifest(albumId, timeoutMs = 4000) {
   return null;
 }
 
+// Used by the stories-entry fallback: when the URL is just
+// `/stories/<user>/` (no story id), scan every cached manifest for
+// items whose user.username matches `username`. Returns {items, userPk}
+// or null. Polls briefly to give the interceptor time to capture
+// responses on cold tab loads.
+async function _findStoryItemsByUsername(username, timeoutMs = 4000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    for (const items of _storyManifest.values()) {
+      if (!items || !items.length) continue;
+      const sample = items[0];
+      if (sample && sample.user_username === username) {
+        return { items, userPk: sample.user_pk || null };
+      }
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return null;
+}
+
 async function _waitForPostManifest(shortcode, timeoutMs = 4000) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
@@ -2651,6 +2671,35 @@ async function _maybeArchiveCurrentMediaImpl({ manual = false, fallbackUsername 
     // quietly — the user may have hit a profile with no active story.
     const storyEntryMatch = path.match(/^\/stories\/([^/]+)\/?$/);
     if (storyEntryMatch && storyEntryMatch[1] !== "highlights") {
+      const storyUser = storyEntryMatch[1];
+      // Fast path: if the network interceptor already captured this
+      // user's story manifest, archive every item directly. IG will
+      // sometimes display stories at `/stories/<user>/` without ever
+      // pushing a `<storyId>` segment — we can't wait for a navigation
+      // that's never coming. Manifest carries real CDN URLs so we
+      // bypass the DOM walk entirely (real MP4s, not blob:).
+      const found = await _findStoryItemsByUsername(storyUser, 2000);
+      if (found && found.items.length) {
+        const groupId = `story_${found.userPk || storyUser}`;
+        console.log(`[IG Tracker] manifest-archive (entry-url): ${found.items.length} item(s) cached for @${storyUser}, kind=story, group=${groupId}`);
+        let savedCount = 0;
+        let failed = 0;
+        for (const item of found.items) {
+          const r = await _archiveManifestItem(storyUser, groupId, item);
+          if (r.ok) savedCount += 1; else { failed += 1; console.warn(`[IG Tracker] manifest-archive (entry-url): failed pk=${item.pk}: ${r.error}`); }
+        }
+        if (savedCount > 0) {
+          return {
+            ok: true,
+            username: storyUser,
+            media_id: groupId,
+            slides: found.items.length,
+            saved: savedCount,
+            summary: `${savedCount}/${found.items.length} slides (manifest, entry-url)`,
+          };
+        }
+        // 0 saved despite manifest existing — fall through to retry.
+      }
       console.log(`[IG Tracker] archive defer: '${path}' is stories entry — watching for IG to navigate to a specific story`);
       _scheduleStoryEntryRetry(path);
       return { ok: false, error: "stories entry; deferring" };
