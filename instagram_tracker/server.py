@@ -21,6 +21,7 @@ from . import filtering as filtering_mod
 from . import followup as followup_mod
 from . import ingest as ingest_mod
 from . import queries as q
+from . import routes_followup
 from . import tags as tags_mod
 from . import watcher as watcher_mod
 from .config import DB_PATH, STATIC_DIR
@@ -45,6 +46,15 @@ app.add_middleware(
 # uncompressed, compresses to ~1-2MB). minimum_size=1000 means small
 # responses pass through uncompressed (CPU not worth it).
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+# Route modules. Registered here AFTER middleware setup but BEFORE the
+# `app.mount("/static", ...)` static mount, so middleware applies to
+# them and they don't get shadowed by the static prefix. Each route
+# module owns a small, related slice of the API surface; cache state
+# stays in this file (server.py) and route modules import the helpers
+# rather than recreate them. See routes_*.py module docstrings.
+app.include_router(routes_followup.router)
 
 
 # In-process cache for the heavy read endpoints. Two version counters
