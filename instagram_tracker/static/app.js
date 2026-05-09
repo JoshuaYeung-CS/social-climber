@@ -3173,7 +3173,9 @@ const ACTIVITY_PSEUDO_LABELS = {
 // is the implicit catch-all). Otherwise show only events whose kind is in
 // the set.
 let _activityKindFilter = new Set();
-let _activityVisibleCap = 500;  // soft cap for initial paint; "show more" expands it
+let _activityVisibleCap = 500;  // soft cap for initial paint; auto-extended on scroll
+const _ACTIVITY_PAGE_SIZE = 500;
+let _activityScrollObserver = null;
 
 function parseActivityIso(iso) {
   if (!iso) return null;
@@ -3210,10 +3212,27 @@ function activityTimeDetail(e) {
   }
   const lo = parseActivityIso(e.time_lower_bound);
   const hi = parseActivityIso(e.time_upper_bound);
-  const sameDay = lo && hi && lo.toDateString() === hi.toDateString();
-  const lower = fmtActivityDateTime(e.time_lower_bound);
-  const upper = fmtActivityDateTime(e.time_upper_bound, { timeOnly: sameDay });
-  return `between ${lower} and ${upper}`;
+  if (!lo || !hi) {
+    return `between ${fmtActivityDateTime(e.time_lower_bound)} and ${fmtActivityDateTime(e.time_upper_bound)}`;
+  }
+  const tFmt = (d) => d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const sameDay = lo.toDateString() === hi.toDateString();
+  if (sameDay) {
+    const today = new Date();
+    const yest = new Date(today.getTime() - 86400 * 1000);
+    if (lo.toDateString() === today.toDateString()) {
+      return `between ${tFmt(lo)} and ${tFmt(hi)} today`;
+    }
+    if (lo.toDateString() === yest.toDateString()) {
+      return `between ${tFmt(lo)} and ${tFmt(hi)} yesterday`;
+    }
+    const dayStr = lo.toLocaleDateString("en-US",
+      lo.getFullYear() === today.getFullYear()
+        ? { month: "short", day: "numeric" }
+        : { month: "short", day: "numeric", year: "numeric" });
+    return `between ${tFmt(lo)} and ${tFmt(hi)} on ${dayStr}`;
+  }
+  return `between ${fmtActivityDateTime(e.time_lower_bound)} and ${fmtActivityDateTime(e.time_upper_bound)}`;
 }
 
 function renderActivityLog() {
@@ -3291,8 +3310,12 @@ function renderActivityLog() {
     `;
   }).join("");
 
+  // Sentinel for auto-loading: when this element scrolls into view, we
+  // bump the cap by another page. The button is still clickable as a
+  // manual fallback for users who scroll past it before the observer
+  // fires (or for whom IntersectionObserver is unavailable).
   const more = filtered.length > limit
-    ? `<button type="button" class="ghost-btn al-more">Show ${filtered.length - limit} more</button>`
+    ? `<button type="button" class="ghost-btn al-more">Show ${Math.min(_ACTIVITY_PAGE_SIZE, filtered.length - limit)} more (${filtered.length - limit} remaining)</button>`
     : "";
 
   // Unique-accounts list: when exactly one kind is selected, show a
@@ -3379,19 +3402,54 @@ function renderActivityLog() {
       openAccountModal(el.dataset.username);
     })
   );
+  // Disconnect any prior observer before rewiring — `out.innerHTML = ...`
+  // above replaced the sentinel node, so the old observer is targeting a
+  // detached element and would never fire again anyway, but explicit
+  // cleanup avoids leaks.
+  if (_activityScrollObserver) {
+    _activityScrollObserver.disconnect();
+    _activityScrollObserver = null;
+  }
   const moreBtn = out.querySelector(".al-more");
   if (moreBtn) {
-    moreBtn.addEventListener("click", () => {
-      _activityVisibleCap += 500;
+    const extend = () => {
+      _activityVisibleCap += _ACTIVITY_PAGE_SIZE;
       renderActivityLog();
-    });
+    };
+    moreBtn.addEventListener("click", extend);
+    // Auto-load when the sentinel is ~200px from entering the viewport.
+    // Scroll-driven instead of click-driven means a user can keep scrolling
+    // through 9k events without ever tapping the button. The 200px margin
+    // gives the next chunk time to render before they hit the bottom.
+    if (typeof IntersectionObserver !== "undefined") {
+      _activityScrollObserver = new IntersectionObserver((entries) => {
+        for (const en of entries) {
+          if (en.isIntersecting) {
+            _activityScrollObserver.disconnect();
+            _activityScrollObserver = null;
+            extend();
+            break;
+          }
+        }
+      }, { rootMargin: "200px 0px" });
+      _activityScrollObserver.observe(moreBtn);
+    }
   }
 }
 
-// Reset the cap whenever filters change so we don't leak a huge render.
-$("#activity-filter")?.addEventListener("input", () => { _activityVisibleCap = 500; });
-
-$("#activity-filter")?.addEventListener("input", renderActivityLog);
+// Username filter typeahead. Debounced so each keystroke doesn't trigger
+// a full re-render of ~9k events; 120ms feels live but coalesces fast
+// typing into one render. Cap reset belongs in the same handler — when
+// the filter narrows, the previous cap is meaningless.
+let _activityFilterTimer = null;
+$("#activity-filter")?.addEventListener("input", () => {
+  if (_activityFilterTimer) clearTimeout(_activityFilterTimer);
+  _activityFilterTimer = setTimeout(() => {
+    _activityFilterTimer = null;
+    _activityVisibleCap = 500;
+    renderActivityLog();
+  }, 120);
+});
 
 // Series available in the chart. Sticky checkbox state persists across renders.
 const HISTORY_SERIES = [

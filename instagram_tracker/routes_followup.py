@@ -15,24 +15,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, HTTPException
 
 from . import followup as followup_mod
-from .db import connect
-from .config import DB_PATH
-
-
-# Local db_conn helper — mirrors server.py's pattern of opening a fresh
-# connection per request. Avoids importing from server.py to keep the
-# module self-contained (server.py imports go the OTHER way; this module
-# is imported BY server.py during app assembly).
-from contextlib import contextmanager
-
-
-@contextmanager
-def _db():
-    conn = connect(DB_PATH)
-    try:
-        yield conn
-    finally:
-        conn.close()
+from .deps import db_conn as _db
 
 
 router = APIRouter()

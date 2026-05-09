@@ -5,7 +5,6 @@ from __future__ import annotations
 import shutil
 import sqlite3
 import tempfile
-from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -22,10 +21,11 @@ from . import followup as followup_mod
 from . import ingest as ingest_mod
 from . import queries as q
 from . import routes_followup
+from . import routes_profiles
 from . import tags as tags_mod
 from . import watcher as watcher_mod
 from .config import DB_PATH, STATIC_DIR
-from .db import connect
+from .deps import db_conn
 from .parsers import normalize_account_input
 
 app = FastAPI(title="Instagram Tracker", version="1.0.0")
@@ -55,6 +55,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 # stays in this file (server.py) and route modules import the helpers
 # rather than recreate them. See routes_*.py module docstrings.
 app.include_router(routes_followup.router)
+app.include_router(routes_profiles.router)
 
 
 # In-process cache for the heavy read endpoints. Two version counters
@@ -686,15 +687,6 @@ def bot_health():
         "events": events[:20],
         "now": __import__("datetime").datetime.utcnow().isoformat() + "Z",
     }
-
-
-@contextmanager
-def db_conn():
-    conn = connect(DB_PATH)
-    try:
-        yield conn
-    finally:
-        conn.close()
 
 
 def _per_user_sid_chrono(
@@ -3605,60 +3597,8 @@ def profile_observation(payload: dict = Body(...)):
     return {"ok": True}
 
 
-_PROFILE_PICS_DIR = DB_PATH.parent / "profile_pics"
-
-
-def _profile_pic_path(username: str) -> Path:
-    """Sanitized filesystem path for a username's locally stored profile pic.
-    IG usernames are alnum + . + _ (1-30 chars) so no escaping is required,
-    but we still defensively reject anything else to keep the path scoped
-    inside data/profile_pics/."""
-    import re
-    if not re.fullmatch(r"[A-Za-z0-9._]{1,30}", username or ""):
-        raise HTTPException(status_code=400, detail="Invalid username for path.")
-    _PROFILE_PICS_DIR.mkdir(parents=True, exist_ok=True)
-    return _PROFILE_PICS_DIR / f"{username}.jpg"
-
-
-@app.post("/api/profile-pic-bytes")
-def store_profile_pic(payload: dict = Body(...)):
-    """Receive base64-encoded profile picture bytes from the extension and
-    save them to data/profile_pics/<username>.jpg. The IG CDN URL has a
-    short-lived signed token, so the URL we previously stored expires
-    after a few hours — local storage gives the modal/overlay a stable
-    image source for past observations.
-
-    Skips the write if the existing file is newer than 24 hours old
-    (mtime check) to avoid re-downloading on every page visit."""
-    import base64, time
-    username = (payload.get("username") or "").strip()
-    bytes_b64 = payload.get("bytes_b64")
-    if not username or not bytes_b64:
-        raise HTTPException(status_code=400, detail="Need 'username' and 'bytes_b64'.")
-    path = _profile_pic_path(username)
-    # 24h freshness skip — same picture probably hasn't changed.
-    if path.exists() and (time.time() - path.stat().st_mtime) < 86400:
-        return {"ok": True, "skipped": "fresh"}
-    try:
-        data = base64.b64decode(bytes_b64)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid base64.")
-    if len(data) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Image too large (>5MB).")
-    path.write_bytes(data)
-    return {"ok": True, "size": len(data)}
-
-
-@app.get("/api/profile-pic/{username}")
-def get_profile_pic(username: str):
-    """Serve the locally-stored profile picture for `username`. Cache-
-    Controls allow the browser to reuse the response for an hour, since
-    the file path is stable for a given username."""
-    path = _profile_pic_path(username)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="No local pic for this user.")
-    return FileResponse(path, media_type="image/jpeg",
-                        headers={"Cache-Control": "private, max-age=3600"})
+# Profile-picture endpoints have moved to routes_profiles.py. The router
+# is registered above (search "app.include_router(routes_profiles.router)").
 
 
 # ---------- generic media archive (posts / reels / stories) ----------
