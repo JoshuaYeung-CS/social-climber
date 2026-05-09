@@ -2584,6 +2584,38 @@ async function _archiveManifestItem(username, groupId, item) {
   return { ok: true, ext, summary };
 }
 
+// Stories-entry retry: when IG sends us to `/stories/<user>/` (no story
+// id), watch for up to STORY_ENTRY_RETRY_MS for it to specialize to
+// `/stories/<user>/<id>/`. Polls every 250ms. Single in-flight watcher
+// at a time — re-arming overwrites the previous deadline.
+const STORY_ENTRY_RETRY_MS = 5000;
+let _storyEntryRetryTimer = null;
+let _storyEntryRetryStartedAt = 0;
+let _storyEntryRetryEntryPath = "";
+function _scheduleStoryEntryRetry(entryPath) {
+  // Re-arm: a fresh entry path cancels the prior watcher (if any).
+  if (_storyEntryRetryTimer) clearInterval(_storyEntryRetryTimer);
+  _storyEntryRetryStartedAt = Date.now();
+  _storyEntryRetryEntryPath = entryPath;
+  _storyEntryRetryTimer = setInterval(() => {
+    const now = Date.now();
+    const cur = window.location.pathname;
+    if (cur !== _storyEntryRetryEntryPath) {
+      // URL changed — could be a specific story or anywhere else. Stop
+      // polling and let onLocationMaybeChanged decide what to do next.
+      clearInterval(_storyEntryRetryTimer);
+      _storyEntryRetryTimer = null;
+      onLocationMaybeChanged();
+      return;
+    }
+    if (now - _storyEntryRetryStartedAt >= STORY_ENTRY_RETRY_MS) {
+      clearInterval(_storyEntryRetryTimer);
+      _storyEntryRetryTimer = null;
+      console.log(`[IG Tracker] archive give-up: '${_storyEntryRetryEntryPath}' didn't specialize to a story id within ${STORY_ENTRY_RETRY_MS}ms — likely no active story`);
+    }
+  }, 250);
+}
+
 async function maybeArchiveCurrentMedia({ manual = false, fallbackUsername = null } = {}) {
   if (!extensionAlive()) return { ok: false, error: "extension reloaded" };
   if (!manual && !_settings?.autoArchiveMedia) return { ok: false, error: "auto-archive disabled" };
@@ -2607,6 +2639,22 @@ async function _maybeArchiveCurrentMediaImpl({ manual = false, fallbackUsername 
   const path = window.location.pathname;
   const parsed = _parseMediaPath(path);
   if (!parsed) {
+    // Stories entry URL is a brief transient. When you tap a story tray
+    // IG navigates to `/stories/<user>/` first, then auto-redirects to
+    // `/stories/<user>/<storyId>/` once the player loads. We'd see one
+    // path-skip log on the entry URL and then archive the specialized
+    // URL. But occasionally IG updates history without going through
+    // our pushState hook (observed: history.length advances silently),
+    // so we'd miss the second URL and never archive. Watch for ~5s
+    // here as a backstop. If the URL specializes, fire the location
+    // handler so archive runs against the new URL. If not, give up
+    // quietly — the user may have hit a profile with no active story.
+    const storyEntryMatch = path.match(/^\/stories\/([^/]+)\/?$/);
+    if (storyEntryMatch && storyEntryMatch[1] !== "highlights") {
+      console.log(`[IG Tracker] archive defer: '${path}' is stories entry — watching for IG to navigate to a specific story`);
+      _scheduleStoryEntryRetry(path);
+      return { ok: false, error: "stories entry; deferring" };
+    }
     const msg = `path '${path}' isn't a post, reel, story, or highlight`;
     console.log(`[IG Tracker] archive skip: ${msg}`);
     return { ok: false, error: msg };
