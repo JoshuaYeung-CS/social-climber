@@ -214,7 +214,17 @@ function showView(name, push = true) {
   if (name !== "lists") _renderedListKind = null;
 }
 
-$$(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
+// Tabs are anchors so the browser handles cmd/ctrl/shift-click and
+// middle-click natively (opens a new tab pointing at #<view> — the
+// receiving tab's bootstrapHistory routes to that view on load).
+// Plain click: intercept and SPA-route in place.
+$$(".tab").forEach((t) =>
+  t.addEventListener("click", (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+    e.preventDefault();
+    showView(t.dataset.view);
+  })
+);
 
 // ---------- home ----------
 

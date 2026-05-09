@@ -28,12 +28,16 @@
        still shows it until the user dismisses. -->
   <div id="calibration-banner" hidden></div>
 
+  <!-- Tabs are anchors (not buttons) so cmd/ctrl/shift-click and middle-
+       click open a new tab natively. Plain click is intercepted in JS to
+       SPA-route in place — same pattern as the bucket-btn anchors on the
+       home view. -->
   <nav class="tabs" role="tablist">
-    <button class="tab active" data-view="home">Home</button>
-    <button class="tab" data-view="lists">Lists</button>
-    <button class="tab" data-view="check">Check</button>
-    <button class="tab" data-view="history">History</button>
-    <button class="tab" data-view="snapshots">Imports</button>
+    <a class="tab active" data-view="home" href="#home" role="tab">Home</a>
+    <a class="tab" data-view="lists" href="#lists" role="tab">Lists</a>
+    <a class="tab" data-view="check" href="#check" role="tab">Check</a>
+    <a class="tab" data-view="history" href="#history" role="tab">History</a>
+    <a class="tab" data-view="snapshots" href="#snapshots" role="tab">Imports</a>
   </nav>
 
   <main id="main">
