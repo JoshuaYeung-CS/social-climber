@@ -3429,45 +3429,8 @@ def filter_list(payload: dict = Body(...)):
         return result
 
 
-@app.get("/api/followup")
-def followup_list():
-    with db_conn() as conn:
-        return {"items": followup_mod.list_all(conn)}
-
-
-@app.post("/api/followup/add")
-def followup_add(payload: dict = Body(...)):
-    items = payload.get("items")
-    if not items:
-        username = payload.get("username")
-        if not username:
-            raise HTTPException(status_code=400, detail="Provide 'username' or 'items'")
-        items = [{
-            "username": username,
-            "profile_url": payload.get("profile_url"),
-            "input": payload.get("input") or username,
-        }]
-    with db_conn() as conn:
-        added = followup_mod.add_many(conn, items)
-        total = followup_mod.count(conn)
-    return {"added": added, "total": total}
-
-
-@app.post("/api/followup/done")
-def followup_done(payload: dict = Body(...)):
-    username = payload.get("username")
-    if not username:
-        raise HTTPException(status_code=400, detail="username required")
-    with db_conn() as conn:
-        followup_mod.remove(conn, username)
-    return {"removed": username}
-
-
-@app.delete("/api/followup")
-def followup_clear():
-    with db_conn() as conn:
-        n = followup_mod.clear(conn)
-    return {"cleared": n}
+# Follow-up queue endpoints have moved to routes_followup.py. The router
+# is registered above (search "app.include_router(routes_followup.router)").
 
 
 # ---------- tags ----------
