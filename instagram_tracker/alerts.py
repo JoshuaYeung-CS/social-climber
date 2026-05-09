@@ -498,6 +498,28 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
         for u in to_unflag:
             set_flag(conn, u, flag, False)
 
+    # Dedup against stateful unfollow alerts: the per-import diff alert
+    # for "they unfollowed you" / "they removed you as follower" duplicates
+    # the same event surfaced by `recent_unfollow` / `favorite_recent_unfollow`,
+    # which carries strictly more info (the "last seen following N days
+    # ago" suffix) and is sticky across imports. Suppress the diff side
+    # so the user sees one entry per real-world event, not two. Other
+    # diff kinds (request_rejected, accepted, public_now_follows_back)
+    # have no stateful equivalent — those pass through.
+    _stateful_unfollow_users = {
+        a["username"] for a in stateful
+        if a.get("kind") in ("recent_unfollow", "favorite_recent_unfollow")
+    }
+    _redundant_diff_kinds = {
+        "they_unfollowed_you", "favorite_unfollowed_you",
+        "they_removed_you_as_follower", "favorite_removed_you",
+    }
+    diff_alerts = [
+        a for a in diff_alerts
+        if not (a.get("kind") in _redundant_diff_kinds
+                and a.get("username") in _stateful_unfollow_users)
+    ]
+
     # Sort newest-first within each list. Diff alerts mostly share the
     # latest snapshot's ts, so the favorites/non-favorites grouping
     # we want comes from a stable secondary sort by severity (high
