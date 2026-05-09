@@ -641,6 +641,97 @@ async function loadArchiveCard() {
 // whole loadHome flow), so the user's scroll position and any open
 // modals are preserved. Driven by the visible/active-view check so
 // we don't pointlessly poll while the user is on Lists / Imports.
+// Calibration banner — top-right sticky notification that surfaces
+// post-import "calibrating data..." → "✓ snapshot calibrated" so the
+// user knows exactly when their imports have been fully incorporated
+// into the cached views (instead of guessing whether the SWR reprewarm
+// has finished). Persistent until manually dismissed; survives tab
+// navigation and page reloads via localStorage of the last-shown
+// completed_id (so the user only ever sees each calibration once).
+const CAL_LS_LAST_ACKED = "igtracker:calibration:lastAcked";
+const CAL_LS_LAST_DISPLAYED_DONE = "igtracker:calibration:lastDisplayedDone";
+let _calibrationPollTimer = null;
+let _calibrationLastState = null;
+
+function _calLoadAcked() {
+  try { return parseInt(localStorage.getItem(CAL_LS_LAST_ACKED) || "0", 10) || 0; }
+  catch { return 0; }
+}
+function _calSaveAcked(id) {
+  try { localStorage.setItem(CAL_LS_LAST_ACKED, String(id)); } catch {}
+}
+
+function _calRender(state) {
+  const banner = document.getElementById("calibration-banner");
+  if (!banner) return;
+  const acked = _calLoadAcked();
+  const pendingId = state?.pending_id || 0;
+  const completedId = state?.completed_id || 0;
+  const isPending = pendingId > completedId;
+  const isUnackedDone = !isPending && completedId > 0 && completedId > acked;
+
+  if (!isPending && !isUnackedDone) {
+    banner.hidden = true;
+    banner.className = "";
+    banner.innerHTML = "";
+    return;
+  }
+  banner.hidden = false;
+  if (isPending) {
+    banner.className = "cal-pending";
+    banner.innerHTML = `
+      <span class="cal-spinner" aria-hidden="true"></span>
+      <span class="cal-text">Incorporating snapshot data… cached views still showing the previous snapshot until this finishes.</span>
+    `;
+  } else {
+    const snapId = state?.snapshot_id;
+    const label = snapId ? `Snapshot #${snapId} fully calibrated` : "Snapshot data fully calibrated";
+    banner.className = "cal-done";
+    banner.innerHTML = `
+      <span aria-hidden="true">✓</span>
+      <span class="cal-text">${escapeHtml(label)} — your views now reflect the latest import.</span>
+      <button class="cal-close" type="button" aria-label="Dismiss" data-cal-completed="${completedId}">×</button>
+    `;
+    const closeBtn = banner.querySelector(".cal-close");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", () => {
+        const id = parseInt(closeBtn.dataset.calCompleted || "0", 10);
+        if (id > 0) _calSaveAcked(id);
+        banner.hidden = true;
+        banner.className = "";
+        banner.innerHTML = "";
+      });
+    }
+  }
+}
+
+async function _calPoll() {
+  try {
+    const r = await fetch("/api/calibration-status");
+    if (!r.ok) return;
+    const state = await r.json();
+    // Skip re-render if nothing meaningful changed — avoids re-binding
+    // the close handler every poll while the banner is in "done" state.
+    const sig = `${state.pending_id}:${state.completed_id}:${state.snapshot_id || ""}`;
+    if (sig === _calibrationLastState) return;
+    _calibrationLastState = sig;
+    _calRender(state);
+  } catch {
+    /* ignore — not critical */
+  }
+}
+
+function _startCalibrationPolling() {
+  if (_calibrationPollTimer) return;
+  // First call right away so the banner renders before the first
+  // tick lands; subsequent ticks every 2.5s. 2.5s feels live without
+  // hammering the endpoint — reprewarm is debounced + 10-15s long, so
+  // we'll hit it ~5 times before completion.
+  _calPoll();
+  _calibrationPollTimer = setInterval(_calPoll, 2500);
+}
+_startCalibrationPolling();
+
 let _liveRefreshTimer = null;
 function _startLiveRefresh() {
   if (_liveRefreshTimer) return;

@@ -20,6 +20,14 @@
     <div class="snapshot-pill" id="snapshot-pill">no data</div>
   </header>
 
+  <!-- Calibration banner: pinned to top-right, sticky in viewport.
+       Shows "incorporating snapshot data..." while the SWR reprewarm
+       runs after an import (or any snapshot-version bump) and switches
+       to "✓ snapshot #N calibrated" with a manual close. Persistent —
+       does NOT auto-fade — so navigating tabs / leaving and returning
+       still shows it until the user dismisses. -->
+  <div id="calibration-banner" hidden></div>
+
   <nav class="tabs" role="tablist">
     <button class="tab active" data-view="home">Home</button>
     <button class="tab" data-view="lists">Lists</button>

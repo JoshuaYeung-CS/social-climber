@@ -85,6 +85,7 @@ def _bump_snapshot_version():
     # while the debounced reprewarm computes fresh values in the
     # background. Removes the user-visible 100s+ cold-cache wait that
     # used to happen on every snapshot bump.
+    _calibration_mark_pending("snapshot")
     _schedule_reprewarm()
 
 
@@ -92,6 +93,9 @@ def _bump_tag_version():
     global _tag_version
     _tag_version += 1
     # Same SWR pattern: keep stale entries, refresh in background.
+    # Tag-only bumps don't change the snapshot data, so they don't
+    # trigger the "calibrating" banner — the user sees no skew between
+    # what they see and what's true after a tag click.
     _schedule_reprewarm()
 
 
@@ -182,10 +186,75 @@ def _start_background_watcher():
     watcher_mod.start_watcher_thread()
 
 
+# Calibration tracker. The UI shows a top-right banner whenever
+# `_calibration_pending_id > _calibration_completed_id`: the user just
+# imported (or otherwise bumped snapshot_version) and the heavy SWR
+# caches haven't been refreshed yet. Once the reprewarm finishes, the
+# completed id catches up and the banner switches to "✓ calibrated".
+# Pending IDs are monotonic so the frontend can reason about
+# "is THIS bump done" rather than just "is anything pending".
+import time as _calib_time
+_calibration_lock = _threading.Lock()
+_calibration_pending_id = 0
+_calibration_completed_id = 0
+_calibration_pending_at: float | None = None
+_calibration_completed_at: float | None = None
+_calibration_last_snapshot_id: int | None = None  # surfaced in the banner copy
+
+
+def _calibration_mark_pending(_reason: str) -> int:
+    global _calibration_pending_id, _calibration_pending_at
+    with _calibration_lock:
+        _calibration_pending_id += 1
+        _calibration_pending_at = _calib_time.time()
+        return _calibration_pending_id
+
+
+def _calibration_mark_completed(target_id: int) -> None:
+    global _calibration_completed_id, _calibration_completed_at, _calibration_last_snapshot_id
+    with _calibration_lock:
+        # Only step forward — a slow reprewarm finishing AFTER a fresher
+        # one shouldn't roll the id backwards.
+        if target_id <= _calibration_completed_id:
+            return
+        _calibration_completed_id = target_id
+        _calibration_completed_at = _calib_time.time()
+        # Stash the latest snapshot id at completion time so the UI can
+        # show "Snapshot #4216 calibrated" rather than a bare timestamp.
+        try:
+            with db_conn() as conn:
+                row = conn.execute(
+                    "SELECT id FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT 1"
+                ).fetchone()
+                if row and row["id"] is not None:
+                    _calibration_last_snapshot_id = int(row["id"])
+        except Exception:
+            pass
+
+
+def _calibration_snapshot_state() -> dict:
+    with _calibration_lock:
+        pending = _calibration_pending_id > _calibration_completed_id
+        return {
+            "pending_id": _calibration_pending_id,
+            "completed_id": _calibration_completed_id,
+            "pending": pending,
+            "pending_at": _calibration_pending_at,
+            "completed_at": _calibration_completed_at,
+            "snapshot_id": _calibration_last_snapshot_id,
+        }
+
+
 def _do_warm(label: str = "prewarm"):
     """Force-refresh the three heavy endpoints. Uses `_cache_set` (not
     `_cached`) so a stale-but-present entry doesn't short-circuit the
-    fresh compute that this warm exists to perform."""
+    fresh compute that this warm exists to perform.
+
+    On reprewarm finish, advances the calibration completed id to
+    whatever the pending id was at the START of this warm. Means the
+    UI banner flips from "calibrating" → "calibrated" as soon as the
+    background warm hits all four heavy keys."""
+    target_id = _calibration_pending_id  # snapshot at start of warm
     warmed: list[str] = []
     try:
         _cache_set("home", _home_compute)
@@ -209,6 +278,8 @@ def _do_warm(label: str = "prewarm"):
         print(f"[{label}] timeline failed: {e}", flush=True)
     if warmed:
         print(f"[{label}] warmed caches: {', '.join(warmed)}", flush=True)
+    if target_id > 0:
+        _calibration_mark_completed(target_id)
 
 
 # Debounced re-prewarm: a snapshot/tag bump invalidates the cache, but
@@ -257,6 +328,20 @@ def _prewarm_caches():
         _do_warm("prewarm")
 
     threading.Thread(target=_boot_warm, daemon=True, name="igt-prewarm").start()
+
+
+@app.get("/api/calibration-status")
+def calibration_status():
+    """Return the current cache-calibration state so the UI can show a
+    "data being incorporated" banner that flips to "✓ calibrated" once
+    the background reprewarm finishes after a snapshot bump.
+
+    pending_id increments on every snapshot-version bump (import,
+    snapshot delete, reset). completed_id increments after the SWR
+    reprewarm finishes for the heavy keys. UI compares the two:
+    pending_id > completed_id → calibrating. Equal → idle.
+    """
+    return _calibration_snapshot_state()
 
 
 @app.get("/api/scan-status")
