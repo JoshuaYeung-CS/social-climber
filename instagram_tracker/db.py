@@ -10,6 +10,7 @@ PRAGMA synchronous = NORMAL;
 PRAGMA temp_store = MEMORY;
 PRAGMA cache_size = -32000;        -- 32 MB page cache (negative = KB)
 PRAGMA mmap_size = 268435456;      -- 256 MB memory-mapped I/O
+PRAGMA busy_timeout = 5000;        -- 5s lock-retry, see _FAST_PRAGMAS
 
 CREATE TABLE IF NOT EXISTS snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -160,6 +161,10 @@ _FAST_PRAGMAS = (
     "PRAGMA temp_store = MEMORY;"
     "PRAGMA cache_size = -32000;"
     "PRAGMA mmap_size = 268435456;"
+    # 5s of automatic retry on lock contention. Without this a writer
+    # competing with another writer (e.g. user-tag toggle vs.
+    # background ingest) gets "database is locked" instantly.
+    "PRAGMA busy_timeout = 5000;"
 )
 
 

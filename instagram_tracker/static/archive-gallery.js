@@ -94,6 +94,8 @@
       ${sections}
       <div class="archived-bulk-bar" hidden>
         <button class="archived-bulk-delete" data-action="bulk-delete-archive">Delete 0</button>
+        <input type="text" class="archived-bulk-move-input" data-action="move-target" placeholder="Move to @username" autocomplete="off" />
+        <button class="archived-bulk-move" data-action="bulk-move-archive">Move 0</button>
       </div>
     `;
   }
@@ -149,8 +151,10 @@
     if (!bar) return;
     const count = blockEl.querySelectorAll(".archived-tile-wrap.archived-selected").length;
     bar.hidden = count === 0;
-    const btn = bar.querySelector('[data-action="bulk-delete-archive"]');
-    if (btn) btn.textContent = `Delete ${count}`;
+    const delBtn = bar.querySelector('[data-action="bulk-delete-archive"]');
+    if (delBtn) delBtn.textContent = `Delete ${count}`;
+    const mvBtn = bar.querySelector('[data-action="bulk-move-archive"]');
+    if (mvBtn) mvBtn.textContent = `Move ${count}`;
   }
 
   function setBlockSelectMode(blockEl, on) {
@@ -286,6 +290,70 @@
     if (typeof window.loadArchiveCard === "function") window.loadArchiveCard();
   }
 
+  // Move N selected files to a different account. Used to reattach
+  // @unknown highlights (saved before the runner could resolve the
+  // owning username) to the actual account they came from.
+  async function _onBulkMove(e) {
+    const btn = e.target.closest('button[data-action="bulk-move-archive"]');
+    if (!btn) return;
+    e.preventDefault();
+    const block = btn.closest(".archived-media-block");
+    if (!block) return;
+    const sourceUser = block.dataset.username;
+    const input = block.querySelector('input[data-action="move-target"]');
+    const targetUser = (input?.value || "").trim().replace(/^@/, "");
+    if (!targetUser) {
+      if (input) { input.focus(); input.placeholder = "Type a target @username first"; }
+      return;
+    }
+    if (targetUser === sourceUser) {
+      if (input) input.placeholder = "Target must differ from source";
+      return;
+    }
+    const selected = Array.from(block.querySelectorAll(".archived-tile-wrap.archived-selected"));
+    if (!selected.length) return;
+    const items = selected.map((wrap) => {
+      const delBtn = wrap.querySelector('button[data-action="delete-media"]');
+      if (!delBtn) return null;
+      return { media_id: delBtn.dataset.mediaId, ext: delBtn.dataset.ext };
+    }).filter(Boolean);
+    btn.disabled = true;
+    if (input) input.disabled = true;
+    btn.textContent = `Moving ${items.length}…`;
+    let resp = null;
+    try {
+      const r = await fetch("/api/media-move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source_user: sourceUser, target_user: targetUser, items }),
+      });
+      resp = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(resp?.detail || `HTTP ${r.status}`);
+    } catch (err) {
+      btn.textContent = `Move failed`;
+      console.warn("[archive-gallery] bulk move failed:", err?.message || err);
+      setTimeout(() => {
+        btn.disabled = false;
+        if (input) input.disabled = false;
+        refreshDeleteBar(block);
+      }, 2500);
+      return;
+    }
+    const movedN = resp?.moved || 0;
+    const failedN = (resp?.failed || []).length;
+    btn.textContent = failedN
+      ? `Moved ${movedN} (${failedN} failed) ✓`
+      : `Moved ${movedN} ✓`;
+    if (input) input.value = "";
+    setTimeout(() => {
+      btn.disabled = false;
+      if (input) input.disabled = false;
+    }, 2500);
+    // Refresh the source view (selection mode auto-clears on re-render).
+    await fetchAndRender(block, sourceUser);
+    if (typeof window.loadArchiveCard === "function") window.loadArchiveCard();
+  }
+
   let _installed = false;
   function installHandlers() {
     if (_installed) return;
@@ -296,6 +364,7 @@
     document.addEventListener("change", _onMasterChange);
     document.addEventListener("change", _onGroupChange);
     document.addEventListener("click", _onBulkDelete);
+    document.addEventListener("click", _onBulkMove);
   }
 
   // ---------- public API ----------

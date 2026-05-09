@@ -11,7 +11,8 @@ from datetime import datetime, timedelta, timezone
 from .config import (
     RECENT_UNFOLLOW_ALERT_DAYS,
     WAITBACK_ALERT_DAYS,
-    WANT_REMOVE_ALERT_DAYS,
+    WANT_REMOVE_ALERT_DAYS_PRIVATE,
+    WANT_REMOVE_ALERT_DAYS_PUBLIC,
 )
 from .queries import (
     latest_id,
@@ -306,9 +307,12 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
 
     # Stateful: want-remove follow-up alerts.
     # Accounts you tagged "want to remove" (✦) that you currently follow
-    # AND who don't follow you back AND it's been WANT_REMOVE_ALERT_DAYS
-    # (default 3) since you started following them. Acts as a reminder
-    # to actually unfollow once the waiting period is up.
+    # AND who don't follow you back AND it's been past the per-privacy
+    # threshold since you started following them. Public accounts get
+    # WANT_REMOVE_ALERT_DAYS_PUBLIC (default 7) — auto-accept means
+    # they'd have followed back already if they were going to. Private
+    # accounts get WANT_REMOVE_ALERT_DAYS_PRIVATE (default 3) — accept
+    # is a manual decision they took or didn't.
     want_remove_entries = list_with_flag(conn, "want_remove")
     if want_remove_entries:
         wr_usernames = [e["username"] for e in want_remove_entries]
@@ -323,7 +327,7 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
             if r["ts"] is not None:
                 follow_ts_map[r["username"]] = int(r["ts"])
 
-        wr_cutoff = datetime.now(timezone.utc) - timedelta(days=WANT_REMOVE_ALERT_DAYS)
+        now_utc = datetime.now(timezone.utc)
         wr_privacy = privacy_status_bulk(conn, wr_usernames)
         # now_public tag overrides the inferred privacy for the badge.
         wr_now_public_set: set[str] = set()
@@ -343,11 +347,21 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
             if ts is None:
                 continue
             followed_at = datetime.fromtimestamp(ts, tz=timezone.utc)
-            if followed_at > wr_cutoff:
-                continue  # haven't waited the threshold yet
-            days = (datetime.now(timezone.utc) - followed_at).days
             status = wr_privacy.get(u, "unknown")
-            priv_label = _privacy_label(status, u in wr_now_public_set)
+            is_now_public = u in wr_now_public_set
+            # Pick the threshold per privacy. now_public (user manually
+            # confirmed they went public) maps to the public threshold.
+            # Unknown defaults to the private threshold so we nudge
+            # sooner when we can't tell.
+            if status == "likely_public" or is_now_public:
+                threshold_days = WANT_REMOVE_ALERT_DAYS_PUBLIC
+            else:
+                threshold_days = WANT_REMOVE_ALERT_DAYS_PRIVATE
+            cutoff = now_utc - timedelta(days=threshold_days)
+            if followed_at > cutoff:
+                continue  # haven't waited the threshold yet
+            days = (now_utc - followed_at).days
+            priv_label = _privacy_label(status, is_now_public)
             is_fav = u in favorites
             prefix = "★✦" if is_fav else "✦"
             fav_label = "★ Favorite " if is_fav else ""
@@ -371,36 +385,65 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
     # diff transient alert. The diff alerts above (they_unfollowed_you,
     # favorite_unfollowed_you) still fire per-import; the stateful one
     # is the durable companion view.
+    #
+    # CRITICAL: use MAX(snapshots.taken_at) — the most recent moment IG
+    # saw them as a follower — NOT MAX(followers.export_timestamp). The
+    # export_timestamp is when they first hit Follow (or the last time
+    # they re-followed); it has nothing to do with when they unfollowed.
+    # An earlier version used export_timestamp and produced two bugs:
+    #   1. The "N days ago" number was wrong — said "5 days ago" when
+    #      they actually unfollowed today, because their original follow
+    #      was 5 days ago.
+    #   2. Long-time followers who unfollowed got missed entirely — if
+    #      they followed in 2023, their MAX(export_timestamp) was 2 years
+    #      old, so they fell outside the 7-day cutoff even when the
+    #      unfollow was yesterday.
+    # snapshots.taken_at fixes both: it's the actual most recent
+    # observation we have of them as a follower, regardless of when the
+    # original follow occurred.
     cutoff_unfollow = datetime.now(timezone.utc) - timedelta(days=RECENT_UNFOLLOW_ALERT_DAYS)
-    cutoff_unfollow_ts = int(cutoff_unfollow.timestamp())
+    # Match the taken_at column's stored format (naive ISO, no tz
+    # suffix, no microseconds) for the lexical SQL comparison. Without
+    # this, the cutoff string is "2026-05-01T16:00:00.123456+00:00"
+    # and snapshot strings like "2026-05-01T16:00:00" sort BEFORE it
+    # because the longer suffix makes the cutoff lexically greater —
+    # silently excluding snapshots within a few seconds of the cutoff.
+    cutoff_unfollow_iso = cutoff_unfollow.replace(
+        tzinfo=None, microsecond=0
+    ).isoformat()
     bounced_now = curr.pending | curr.incoming_requests
-    # MAX(export_timestamp) per username in followers — that's the most
-    # recent moment IG saw them following us. ever_self_unfollowed isn't
-    # relevant here (this alert is for "they unfollowed", not "you did").
-    last_followed_ts: dict[str, int] = {}
+    last_seen_iso: dict[str, str] = {}
     for r in conn.execute(
-        "SELECT username, MAX(export_timestamp) AS ts FROM followers "
-        "WHERE export_timestamp IS NOT NULL "
-        "AND export_timestamp >= ? "
-        "GROUP BY username",
-        (cutoff_unfollow_ts,),
+        "SELECT f.username, MAX(s.taken_at) AS last_seen "
+        "FROM followers f "
+        "JOIN snapshots s ON s.id = f.snapshot_id "
+        "WHERE s.taken_at IS NOT NULL "
+        "GROUP BY f.username "
+        "HAVING last_seen >= ?",
+        (cutoff_unfollow_iso,),
     ).fetchall():
-        ts = r["ts"]
-        if ts is None:
-            continue
-        last_followed_ts[r["username"]] = int(ts)
+        if r["last_seen"]:
+            last_seen_iso[r["username"]] = r["last_seen"]
 
     recent_unfollow_users = [
-        u for u in last_followed_ts
+        u for u in last_seen_iso
         if u not in curr.followers
         and u not in suppressed
         and u not in bounced_now
     ]
     ru_priv, ru_np = _privacy_for(recent_unfollow_users)
-    for u in sorted(recent_unfollow_users, key=lambda x: -last_followed_ts[x]):
-        ts = last_followed_ts[u]
-        followed_at = datetime.fromtimestamp(ts, tz=timezone.utc)
-        days_ago = (datetime.now(timezone.utc) - followed_at).days
+    now_utc = datetime.now(timezone.utc)
+    for u in sorted(recent_unfollow_users, key=lambda x: last_seen_iso[x], reverse=True):
+        last_seen = _parse_iso(last_seen_iso[u])
+        if last_seen is None:
+            continue
+        # snapshots.taken_at is stored as a naive ISO string in some
+        # legacy rows. Promote it to UTC so the timezone-aware
+        # subtraction doesn't throw "can't subtract offset-naive and
+        # offset-aware datetimes".
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        days_ago = (now_utc - last_seen).days
         is_fav = u in favorites
         priv_label = _privacy_label(ru_priv.get(u, "unknown"), u in ru_np)
         prefix = "★⤴" if is_fav else "⤴"
@@ -412,10 +455,14 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
             "kind": "recent_unfollow" if not is_fav else "favorite_recent_unfollow",
             "username": u,
             "severity": "high" if is_fav else "normal",
-            "message": f"{prefix} {fav_label}{u} ({priv_label}) unfollowed you {when_text}.",
+            # The unfollow happened SOMETIME after we last saw them — we
+            # can't pinpoint the exact moment. The "last seen" phrasing
+            # is honest about that limit. "N days ago" = how long since
+            # the most recent snapshot they were still in.
+            "message": f"{prefix} {fav_label}{u} ({priv_label}) unfollowed you (last seen following {when_text}).",
             "days": days_ago,
             "privacy": ru_priv.get(u, "unknown"),
-            "ts": ts,
+            "ts": int(last_seen.timestamp()),
         })
 
     # Stateful: tagged-as-disabled or tagged-as-unavailable accounts that show

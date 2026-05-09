@@ -465,7 +465,7 @@ code {
   margin-bottom: 12px;
 }
 .full-select.inline { width: auto; flex: 1; margin-bottom: 0; }
-.sort-row { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
+.sort-row { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; flex-wrap: wrap; }
 .small { font-size: 12px; }
 
 /* Per-list search bar — sits below the list-kind select.
@@ -728,6 +728,7 @@ code {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
   padding: 6px 4px;
   border-bottom: 1px solid var(--border);
   font-size: 13px;
@@ -735,7 +736,13 @@ code {
 .al-row:last-child { border-bottom: 0; }
 .al-row.clickable { cursor: pointer; transition: background 100ms ease; }
 .al-row.clickable:hover { background: rgba(255, 255, 255, 0.04); }
-.al-row .al-name { font-weight: 500; }
+.al-row .al-name { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+.al-detail {
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 180px;
+  flex: 1 1 220px;
+}
 .al-time-cell {
   font-variant-numeric: tabular-nums;
   font-size: 12px;
@@ -757,6 +764,14 @@ code {
 .al-kind-pill.al-info  { color: var(--accent); border-color: rgba(79, 140, 255, 0.35); background: rgba(79, 140, 255, 0.08); }
 .al-kind-pill.al-muted { color: var(--muted); }
 .al-more { width: 100%; margin-top: 8px; }
+
+@media (max-width: 640px) {
+  .al-detail {
+    flex-basis: 100%;
+    margin-left: 52px;
+    min-width: 0;
+  }
+}
 
 /* Unique-accounts summary block. Renders above the chronological feed
  * when exactly one kind chip is selected, giving a deduped "who" view
@@ -2027,7 +2042,10 @@ textarea#queue-input::-webkit-scrollbar { display: none; }
 .archived-bulk-bar {
   margin-top: 8px;
   display: flex;
+  gap: 8px;
+  align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 .archived-bulk-delete {
   padding: 6px 14px;
@@ -2041,6 +2059,33 @@ textarea#queue-input::-webkit-scrollbar { display: none; }
 }
 .archived-bulk-delete:hover { opacity: 0.9; }
 .archived-bulk-delete:disabled { opacity: 0.6; cursor: progress; }
+.archived-bulk-move-input {
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid #2a2a30;
+  background: #18181b;
+  color: #f1f1f3;
+  font-size: 12px;
+  width: 200px;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+}
+.archived-bulk-move-input:focus {
+  outline: none;
+  border-color: var(--accent, #4f8cff);
+}
+.archived-bulk-move-input:disabled { opacity: 0.6; }
+.archived-bulk-move {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--accent, #4f8cff);
+  background: var(--accent, #4f8cff);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.archived-bulk-move:hover { opacity: 0.9; }
+.archived-bulk-move:disabled { opacity: 0.6; cursor: progress; }
 .archived-delete {
   position: absolute;
   top: 4px;

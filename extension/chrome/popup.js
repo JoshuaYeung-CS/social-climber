@@ -228,6 +228,17 @@ async function checkTrackerReachable(url) {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  // Show the extension version in the footer so the user can see at a
+  // glance whether they're running the latest code without having to
+  // open chrome://extensions. Useful when iterating on fixes — if the
+  // displayed version doesn't match the latest manifest bump, the
+  // extension hasn't been reloaded.
+  try {
+    const v = chrome.runtime.getManifest().version;
+    const ev = el("extension-version");
+    if (ev) ev.textContent = `v${v} · all data stays local`;
+  } catch (_) { /* getManifest unavailable in some test contexts */ }
+
   const settings = await loadSettings();
   el("tracker-url").value = settings.trackerUrl;
   el("vault-url").value = settings.vaultUrl;
@@ -273,6 +284,30 @@ document.addEventListener("DOMContentLoaded", async () => {
     try { await chrome.runtime.sendMessage({ type: "stop-export" }); } catch {}
     renderExportStats();
     flashStatus("Export stopped.");
+  });
+
+  // "▶ Now" — fires the next scheduled export immediately and
+  // re-anchors the schedule so the next auto-run is `interval`
+  // minutes from now (not from the original schedule).
+  el("run-export-now").addEventListener("click", async () => {
+    const btn = el("run-export-now");
+    btn.disabled = true;
+    try {
+      const r = await chrome.runtime.sendMessage({ type: "export-fire-now" });
+      if (r?.ok) {
+        flashStatus("Export firing now.");
+        renderExportStats();
+      } else {
+        flashStatus(r?.error ? `⚠ ${r.error}` : "⚠ Failed.");
+      }
+    } catch (e) {
+      flashStatus(`⚠ ${e?.message || e}`);
+    } finally {
+      // Re-enable after a beat so the user doesn't accidentally
+      // double-click before the in-flight check has a chance to
+      // see the new state.
+      setTimeout(() => { btn.disabled = false; }, 1500);
+    }
   });
 
   function flashStatus(text) {
@@ -455,6 +490,34 @@ function initArchiveRunnerControls() {
     };
     addBtn.addEventListener("click", doAdd);
     addInput.addEventListener("keydown", (e) => { if (e.key === "Enter") doAdd(); });
+  }
+
+  // "▶ Now" — fires the next scheduled archive runner cycle
+  // immediately and re-anchors the schedule.
+  const runNowBtn = el("run-archive-now");
+  if (runNowBtn) {
+    runNowBtn.addEventListener("click", async () => {
+      runNowBtn.disabled = true;
+      try {
+        const r = await chrome.runtime.sendMessage({ type: "archive-runner-fire-now" });
+        if (r?.ok) {
+          // The summary line / next-fire countdown re-renders from
+          // chrome.storage so the user sees the new schedule
+          // immediately. Don't await — it's best-effort UI refresh.
+          renderArchiveRunner();
+        } else {
+          // Surface the in-flight rejection or any other error in
+          // the runner status line so the user can see it without
+          // scrolling around.
+          if (statusEl) statusEl.textContent = r?.error || "Failed.";
+          setTimeout(() => renderArchiveRunner(), 2000);
+        }
+      } catch (e) {
+        if (statusEl) statusEl.textContent = `⚠ ${e?.message || e}`;
+      } finally {
+        setTimeout(() => { runNowBtn.disabled = false; }, 1500);
+      }
+    });
   }
 
   function _statusText(isOn, mode, intervalMin, graceMin) {

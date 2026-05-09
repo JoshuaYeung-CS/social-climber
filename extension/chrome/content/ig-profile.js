@@ -1319,13 +1319,15 @@ function renderPanel(panel, username, data) {
   const saveBtn = _settings.vaultUrl
     ? `<button class="igt-vault-btn" data-action="save-vault" title="Save current visible media to your encrypted vault">💾 Save to vault</button>`
     : "";
-  // Show "archive all" whenever we're on a profile page. We DON'T
-  // gate on tile presence at render-time because the grid often
-  // hasn't lazy-loaded yet when the overlay first paints — gating
-  // would hide the button on first render, then it'd never come
-  // back. The handler tolerates "no tiles found" gracefully.
-  const onProfilePage = /^\/[^/]+\/?$/.test(window.location.pathname)
-    && !/^\/(p|reel|stories|explore|reels|direct|accounts)\//.test(window.location.pathname);
+  // Show "archive all" whenever we're on any profile route — including
+  // subtabs like /<user>/reels/ and /<user>/tagged/. The handler
+  // navigates to /<user>/ before walking tabs, so it works fine from
+  // any starting point. (The earlier strict regex only matched the
+  // canonical /<user>/ path, which hid the button as soon as the user
+  // clicked into Reels or Tagged — that's why Joshua reported the
+  // archive box disappearing.) `isProfilePath` already excludes
+  // /p/, /reel/, /explore/, /stories/, etc.
+  const onProfilePage = !!isProfilePath(window.location.pathname);
   // Category selector for Archive — Posts / Reels / Tagged / Highlights /
   // Story. Each pill is independently toggleable so the user can
   // archive any subset (e.g. just Reels for a profile that posts a lot
@@ -1414,6 +1416,20 @@ function renderPanel(panel, username, data) {
     // in place, archiving keeps running at full speed even if you
     // immediately switch tabs — no separate button required.
     await _archiveArmAudio();
+    // Backstop: also tag the user `need_archive` server-side so the
+    // auto-runner is guaranteed to finish them later if the local
+    // foreground run fails for any reason (modal-mount race, IG
+    // rate-limit, tab closed mid-run, browser crashed). Idempotent
+    // on the server — already-archived users with the .archive_complete
+    // marker get auto-skipped on the next runner check, so the
+    // backstop costs nothing in the success case. Fire-and-forget
+    // — the local archive starts immediately regardless of whether
+    // the queue-add succeeded.
+    bgFetch(`${_settings.trackerUrl}/api/tags`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, flag: "need_archive", value: true }),
+    }).catch(() => { /* best-effort */ });
     archiveAllVisiblePosts(username, { ..._archiveCategories });
   });
   // Category-pill toggles. Click flips the pill's on-state, persists
@@ -1564,12 +1580,22 @@ async function refreshOverlay(username) {
 function onLocationMaybeChanged() {
   const username = isProfilePath(window.location.pathname);
   if (!username) {
+    // Capture who the user was viewing BEFORE we wipe _lastUsername.
+    // Highlight URLs (`/stories/highlights/<id>/`) don't carry the
+    // owning username — without this, `_lastUsername` got wiped here
+    // and then the archiver fell back to "unknown" because there
+    // was no signal left of whose profile we'd just clicked from.
+    // Pass the previous username through as `fallbackUsername` so
+    // the highlight lands under the right account folder.
+    const previousUsername = _lastUsername;
     if (_panelEl) { _panelEl.remove(); _panelEl = null; }
     _lastUsername = null;
     // Even when not on a profile, the URL might be a single-post /
     // reel page where we want to auto-archive media if the setting
     // is on. Fire the archive check independently of the overlay.
-    if (_settings?.autoArchiveMedia) maybeArchiveCurrentMedia();
+    if (_settings?.autoArchiveMedia) {
+      maybeArchiveCurrentMedia({ fallbackUsername: previousUsername });
+    }
     return;
   }
   if (username === _lastUsername) return;
@@ -1698,7 +1724,17 @@ async function _autoScrollToLoadAllTiles({
 async function archiveAllVisiblePosts(username, categories) {
   if (!extensionAlive()) return;
   if (_archiveAllInFlight) {
-    console.log("[IG Tracker] archive-all: already running, ignoring re-click");
+    // Another archive is running in this tab. Don't drop the click —
+    // queue this username server-side so the auto-runner picks it up
+    // after the current one finishes. Toast so the user knows it's
+    // not lost.
+    console.log(`[IG Tracker] archive-all: already running, queuing @${username} for the runner`);
+    bgFetch(`${_settings.trackerUrl}/api/tags`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, flag: "need_archive", value: true }),
+    }).catch(() => { /* best-effort */ });
+    showOverlayToast(`📦 @${username} queued — runner will pick up after current finishes.`);
     return;
   }
   // Default to all-on if caller didn't specify. Story stays off by
@@ -1715,6 +1751,42 @@ async function archiveAllVisiblePosts(username, categories) {
     return;
   }
   _archiveAllInFlight = true;
+  // Cross-tab serialization: ask the SW for a manual-archive slot.
+  // If granted, proceed. If queued, wait for the SW to grant later
+  // via a `manual-archive-slot-granted` message. The user-tested
+  // sweet spot is 2-3 concurrent foreground archives — anything
+  // beyond saturates the local server and trips IG's rate-limits.
+  const slotClaim = await new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ type: "claim-archive-slot", username }, (r) => {
+        resolve(r || { ok: false });
+      });
+    } catch (e) { resolve({ ok: false }); }
+  });
+  if (slotClaim?.ok && slotClaim.granted === false) {
+    // Queued. Show waiting UI and wait for the SW to grant later.
+    const ahead = Math.max(0, (slotClaim.position || 1) - 1);
+    const aheadLbl = ahead === 0 ? "next up" : `${ahead} ahead`;
+    showOverlayToast(`📦 @${username} queued — ${aheadLbl} (${slotClaim.slotsActive}/${slotClaim.slotLimit} slots active)`);
+    console.log(`[IG Tracker] archive-all: queued for slot — pos=${slotClaim.position}, slots=${slotClaim.slotsActive}/${slotClaim.slotLimit}`);
+    await new Promise((resolve) => {
+      const onMsg = (msg) => {
+        if (msg?.type === "manual-archive-slot-granted" && msg.username === username) {
+          chrome.runtime.onMessage.removeListener(onMsg);
+          resolve();
+        }
+      };
+      chrome.runtime.onMessage.addListener(onMsg);
+      // Page-unload cancel: if user navigates away or closes the
+      // tab while waiting, tell the SW to drop our queue entry.
+      const onUnload = () => {
+        try { chrome.runtime.sendMessage({ type: "cancel-archive-slot" }); } catch (_) {}
+      };
+      window.addEventListener("pagehide", onUnload, { once: true });
+    });
+    showOverlayToast(`📦 Slot opened — archiving @${username} now…`);
+    console.log(`[IG Tracker] archive-all: slot granted for @${username}`);
+  }
   _installArchiveAudioFallback();
   let completedSuccessfully = false;
   try {
@@ -1723,6 +1795,9 @@ async function archiveAllVisiblePosts(username, categories) {
     return result;
   } finally {
     _archiveAllInFlight = false;
+    // Always release the cross-tab slot, even on error/throw, so
+    // the next queued tab can proceed.
+    try { chrome.runtime.sendMessage({ type: "release-archive-slot" }); } catch (_) {}
     // Belt-and-suspenders: even if _updateProgressPanel({done:true})
     // never fired (impl threw mid-run, panel was closed manually,
     // etc.), we shouldn't leave a silent AudioContext running on
@@ -2104,6 +2179,18 @@ async function _archiveAllVisiblePostsImpl(username, categories) {
 // humans, audible to Chrome's audibility detector) without any
 // effect on IG's behavior.
 let _archiveAudioCtx = null;
+// Track the last trusted-gesture time so we can pre-check before
+// trying to create the AudioContext. Chrome's autoplay policy logs
+// a warning to the console BEFORE throwing — try/catch can't
+// suppress it. Skipping the call entirely when we know it'd fail
+// keeps the user's "Errors" panel quiet on auto-archive paths
+// triggered by mere navigation (e.g. opening a post URL by clicking
+// it 5+ minutes after the last user interaction).
+let _lastTrustedGestureAt = 0;
+const _GESTURE_FRESHNESS_MS = 1500;
+document.addEventListener("click",       (e) => { if (e.isTrusted) _lastTrustedGestureAt = Date.now(); }, { capture: true });
+document.addEventListener("keydown",     (e) => { if (e.isTrusted) _lastTrustedGestureAt = Date.now(); }, { capture: true });
+document.addEventListener("pointerdown", (e) => { if (e.isTrusted) _lastTrustedGestureAt = Date.now(); }, { capture: true });
 
 async function _archiveArmAudio() {
   if (_archiveAudioCtx?.state === "running") return true;
@@ -2112,6 +2199,16 @@ async function _archiveArmAudio() {
   // autoplay policy throws on construction). The "Archive selected"
   // click handler is the canonical caller and runs in a live gesture.
   if (!_archiveAudioCtx) {
+    // Pre-check: skip the call entirely if there's no recent
+    // trusted gesture. Chrome would log a console warning + throw,
+    // and we'd just swallow the throw — but the warning lands in
+    // the user-visible Errors panel regardless. Returning early
+    // here is silent.
+    if (Date.now() - _lastTrustedGestureAt > _GESTURE_FRESHNESS_MS) {
+      // Quiet — this is an expected no-op on auto-archive paths
+      // that ride a stale URL change rather than a fresh click.
+      return false;
+    }
     try {
       const Cls = window.AudioContext || window.webkitAudioContext;
       if (!Cls) return false;
@@ -2685,6 +2782,19 @@ async function _maybeArchiveCurrentMediaImpl({ manual = false, fallbackUsername 
     caps = findAllSaveableMedia();
   }
   if (caps.length === 0) {
+    // Race guard: if the URL drifted off the original media path
+    // during our scans (user closed the modal, IG auto-navigated
+    // back to the profile, archive-all moved on), the empty result
+    // is expected and not interesting. Log quietly and bail without
+    // a warning — this was producing the noisy
+    // `path=/<user>/, no media element found` errors after every
+    // modal close.
+    const drifted = !!_parseMediaPath(window.location.pathname) === false
+                  || window.location.pathname !== path;
+    if (drifted) {
+      console.log(`[IG Tracker] archive skip: URL drifted off media path mid-scan (started=${path}, now=${window.location.pathname})`);
+      return { ok: false, error: "url drifted mid-scan" };
+    }
     // Diagnostic: report what's on the page so we can tell whether
     // (a) the modal/viewer never mounted (DOM is wrong), or
     // (b) it mounted but our filters reject every element.
@@ -2833,20 +2943,45 @@ async function _maybeArchiveCurrentMediaImpl({ manual = false, fallbackUsername 
       let nextBtn = _findCarouselNextButton();
       // Late-render guard: on the legacy /p/<id>/ post layout the
       // carousel arrows can mount after the initial slide image
-      // resolves. If we're on step 1 with only 1 slide collected
-      // and there's no Next button visible, give the page another
-      // moment and re-check before declaring the post single-slide.
-      // This was making archive-all save only the cover when IG
-      // navigated to /p/<id>/ instead of /<user>/p/<id>/.
+      // resolves. In runner tabs the wait needs to be MUCH longer
+      // because Chrome throttles JS timers in minimized tabs — IG's
+      // React render that takes 1.5s in the foreground takes 4-6s
+      // in a backgrounded tab, and the previous 2s wait was missing
+      // most carousels (saving only the cover slide of multi-image
+      // posts — Joshua reported every bellaparkstolz post had 1
+      // file each). Try several waits, re-checking after each.
       if (!nextBtn && !isStoryLike && step === 0 && caps.length <= 1) {
-        console.log("[IG Tracker] archive: no Next button on step 1 — waiting 2s for late-mounting arrows");
-        await new Promise((r) => setTimeout(r, 2000));
-        nextBtn = _findCarouselNextButton();
-        if (nextBtn) {
-          console.log(`[IG Tracker] archive: late-mounted Next button found ${_describeBtn(nextBtn)}`);
-          // Also re-scan the initial slides — IG's lazy-loader may
-          // have populated more slide imgs while we were waiting.
-          scanForNew();
+        // Look for ANY carousel indicator that proves this is a
+        // multi-slide post — a "1/N" pagination indicator, a dot row
+        // at the bottom of the modal, or carousel-related aria
+        // labels. If we find one, we KNOW slides are coming and
+        // should wait longer; if not, it's likely a real
+        // single-image post and 2s is plenty.
+        const looksLikeCarousel = (() => {
+          if (document.querySelector('[aria-label*="Go to" i], [aria-label*="carousel" i]')) return true;
+          // Pagination dots: a row of small same-sized buttons
+          // beneath the media. IG renders them as 6-8px circles.
+          const dots = document.querySelectorAll('[role="dialog"] button[aria-disabled]');
+          if (dots.length >= 2) return true;
+          // "1 of N" / "1/N" text near the media.
+          const txt = (document.querySelector('[role="dialog"]')?.innerText || "").slice(0, 500);
+          if (/\b1\s*\/\s*[2-9]\b|\bof\s+[2-9]\b/i.test(txt)) return true;
+          return false;
+        })();
+        const waits = looksLikeCarousel
+          ? [2000, 3000, 4000]   // strong signal a carousel is coming → patient
+          : [2000];              // probably single-slide → quick re-check only
+        for (let attempt = 0; attempt < waits.length; attempt++) {
+          console.log(`[IG Tracker] archive: no Next button on step 1 — waiting ${waits[attempt]}ms for late-mounting arrows (attempt ${attempt + 1}/${waits.length}, looksLikeCarousel=${looksLikeCarousel})`);
+          await new Promise((r) => setTimeout(r, waits[attempt]));
+          nextBtn = _findCarouselNextButton();
+          if (nextBtn) {
+            console.log(`[IG Tracker] archive: late-mounted Next button found ${_describeBtn(nextBtn)} after ${waits[attempt]}ms`);
+            // Also re-scan the initial slides — IG's lazy-loader may
+            // have populated more slide imgs while we were waiting.
+            scanForNew();
+            break;
+          }
         }
       }
       if (!nextBtn && !isStoryLike) {
@@ -3110,15 +3245,80 @@ if (_IS_RUNNER_TAB) {
       console.error("[IG Tracker] runner: loadSettings failed:", e);
       return;
     }
-    // Wait for IG's grid to render a few tiles before kicking off
-    // archive-all (which scrolls + downloads). 3s seems to be enough
-    // for cold-loaded profiles.
-    await new Promise((r) => setTimeout(r, 3000));
+    // Wait longer (5s vs 3s) — runner tabs are minimized + Chrome
+    // throttles their JS timers, so IG needs more wall-clock time to
+    // hydrate the grid + bind post-modal handlers.
+    await new Promise((r) => setTimeout(r, 5000));
     const username = isProfilePath(window.location.pathname);
     if (!username) {
       console.warn("[IG Tracker] runner: not on a profile path (" + window.location.pathname + "), abort");
       return;
     }
+
+    // Dead-account detection. Account-not-found, banned, deactivated,
+    // and private-not-following profiles all silently produce zero
+    // archivable content in the runner — the bot would otherwise loop
+    // attempts on them forever (each costing ~4 min of tab time).
+    // Detect them up front and report back so background.js can mark
+    // them permanent-failed on the first attempt.
+    const _profileGridHasPosts = () => {
+      // Profile grids render <a> tiles linking to posts. If even one
+      // is present, the account has at least some archivable content.
+      return document.querySelectorAll(
+        'main a[href*="/p/"], main a[href*="/reel/"]'
+      ).length > 0;
+    };
+    const _privateNotFollowing = () => {
+      // IG renders an explicit "This account is private" block with a
+      // padlock when you don't follow a private account. The same text
+      // does NOT appear on private accounts you DO follow (those just
+      // render normally). Conservative match: text + no grid.
+      const txt = (document.body?.innerText || "").toLowerCase();
+      const banner = txt.includes("this account is private")
+                  || txt.includes("this profile is private");
+      return banner && !_profileGridHasPosts();
+    };
+    if (detectAccountUnavailable()) {
+      const reason = "account_unavailable";
+      console.warn(`[IG Tracker] runner: @${username} is unavailable (404 / banned / deactivated) — reporting dead and bailing`);
+      try {
+        chrome.runtime.sendMessage({
+          type: "archive-runner-dead-account",
+          username,
+          reason,
+        });
+      } catch (_) {}
+      return;
+    }
+    if (_privateNotFollowing()) {
+      console.warn(`[IG Tracker] runner: @${username} is private and you don't follow them — nothing to archive, reporting dead and bailing`);
+      try {
+        chrome.runtime.sendMessage({
+          type: "archive-runner-dead-account",
+          username,
+          reason: "private_not_following",
+        });
+      } catch (_) {}
+      return;
+    }
+    if (!_profileGridHasPosts()) {
+      // Wait a bit longer (grid lazy-load) then re-check. Empty even
+      // after the second wait = real empty (account has 0 posts and
+      // 0 reels visible).
+      await new Promise((r) => setTimeout(r, 4000));
+      if (!_profileGridHasPosts()) {
+        console.warn(`[IG Tracker] runner: @${username} has no visible posts/reels after wait — reporting dead and bailing`);
+        try {
+          chrome.runtime.sendMessage({
+            type: "archive-runner-dead-account",
+            username,
+            reason: "no_visible_content",
+          });
+        } catch (_) {}
+        return;
+      }
+    }
+
     const cats = { ..._archiveCategories };
     if (Object.values(cats).every((v) => !v)) {
       console.warn("[IG Tracker] runner: NO archive categories enabled — toggle at least one of posts/reels/tagged/highlights via the overlay or chrome.storage.local.archiveCategories");

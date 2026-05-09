@@ -17,6 +17,7 @@
     <div class="run-row">
       <button class="primary" id="run-export">Run export</button>
       <button class="secondary" id="stop-export" title="Cancel an in-progress export and prevent auto-resume on the next page load">Stop</button>
+      <button class="secondary" id="run-export-now" title="Fire the auto-export immediately and re-anchor the schedule. Disabled while a run is in flight.">▶ Now</button>
     </div>
     <div class="schedule-row">
       <label class="schedule-toggle">
@@ -45,6 +46,7 @@
         <span>Auto-archive on</span>
       </label>
       <span class="schedule-status muted small" id="archive-runner-status"></span>
+      <button class="secondary" id="run-archive-now" title="Fire the archive runner immediately. Picks the next user from the queue and re-anchors the schedule. Disabled while a run is in flight.">▶ Now</button>
     </div>
     <div class="archive-mode-row">
       <label class="archive-mode-opt">
@@ -121,7 +123,7 @@
   </section>
 
   <footer class="foot">
-    <span>v1.0 · all data stays local</span>
+    <span id="extension-version">v?.?.? · all data stays local</span>
   </footer>
 
   <script src="popup.js"></script>

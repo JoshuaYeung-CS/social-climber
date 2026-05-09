@@ -76,16 +76,18 @@ def main():
     # back to the OS after GC, so cumulative-compute caches and
     # transient working sets pile up indefinitely. After ~5 hours of
     # bot-driven traffic the live process was at 3.2 GB and /api/home
-    # cold-cache had blown past 3 minutes. The pragmatic fix is a
-    # periodic recycle: check RSS every 10 min, if > IG_MEMORY_LIMIT_MB
-    # exit so launchd's KeepAlive respawns a fresh process. Default
-    # 1500 MB; user can override via IG_MEMORY_LIMIT_MB env var.
+    # cold-cache had blown past 3 minutes. Periodically check RSS, and
+    # if over the threshold re-exec ourselves in place so the OS
+    # reclaims memory while the listener stays up. Default 1500 MB;
     # IG_MEMORY_LIMIT_MB=0 disables the watchdog entirely.
     import subprocess as _subprocess
     import threading as _threading
     import time as _time
     _mem_limit_mb = int(os.environ.get("IG_MEMORY_LIMIT_MB", "1500"))
-    _mem_check_interval_s = 600  # 10 min
+    _mem_check_interval_s = 180  # 3 min — re-exec is in-process and
+    # near-invisible, so we can poll often and catch bloat from a
+    # single heavy compute (cumulative diff peaks at ~1.8 GB) before
+    # it sits in RSS for 10 min.
     if _mem_limit_mb > 0:
         def _memory_watchdog():
             pid = os.getpid()
@@ -100,11 +102,13 @@ def main():
                     if rss_mb > _mem_limit_mb:
                         print(
                             f"[memory-watchdog] RSS {rss_mb:.0f} MB > "
-                            f"{_mem_limit_mb} MB threshold — exiting for "
-                            f"launchd respawn",
+                            f"{_mem_limit_mb} MB threshold — re-execing "
+                            f"to reclaim memory",
                             flush=True,
                         )
-                        os._exit(0)
+                        os.execv(sys.executable,
+                                 [sys.executable, "-m", "instagram_tracker"]
+                                 + sys.argv[1:])
                 except Exception as e:
                     print(f"[memory-watchdog] check failed: {e}", flush=True)
         _threading.Thread(target=_memory_watchdog, daemon=True).start()

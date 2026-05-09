@@ -50,6 +50,15 @@ _RECENT_ERROR_PATHS: set[str] = set()
 # scan endpoint can report the count without us spamming audit_log every
 # minute with the same error rows.
 _DEFERRED_PATHS: set[str] = set()
+# Per-path retry counter for EDEADLK defers. After
+# _MAX_DEFERRED_RETRIES failed rescues (in-process EDEADLK + tmp-copy
+# subprocess both unable to read the source), we escalate the path to
+# the skiplist so the watcher stops trying it every scan. Drive
+# Desktop's File Provider can leave folders in a state where neither
+# rglob nor `cp -R` ever succeed; rather than log "deferring" forever,
+# treat that as permanent and free the user from background CPU.
+_DEFERRED_RETRY_COUNTS: dict[str, int] = {}
+_MAX_DEFERRED_RETRIES = 10
 
 
 def clear_seen_cache() -> None:
@@ -57,6 +66,7 @@ def clear_seen_cache() -> None:
     a snapshot reset so the next scan treats every file as fresh."""
     _RECENT_ERROR_PATHS.clear()
     _DEFERRED_PATHS.clear()
+    _DEFERRED_RETRY_COUNTS.clear()
 
 # Filename patterns Meta uses for the artifacts we care about. Matched
 # case-insensitively against the basename. Two flavors:
@@ -811,18 +821,47 @@ def _scan_once_locked(force: bool = False) -> dict:
             if had_real_import or run.skipped:
                 _RECENT_ERROR_PATHS.discard(str(p))
                 _DEFERRED_PATHS.discard(str(p))
+                _DEFERRED_RETRY_COUNTS.pop(str(p), None)
         except OSError as e:
             # If we still get EDEADLK after the materialize+retry above,
             # genuinely defer — the folder's still mid-sync. Don't add
             # to _RECENT_ERROR_PATHS (which triggers force-retry) since
             # there's nothing the user can do about an in-flight sync.
             if getattr(e, "errno", None) == 11:
-                details.append({
-                    "file": p.name,
-                    "outcome": "deferred",
-                    "message": "Drive Desktop still syncing this folder (EDEADLK after prewarm+retry). Will retry on next scan.",
-                })
-                _DEFERRED_PATHS.add(str(p))
+                key = str(p)
+                _DEFERRED_RETRY_COUNTS[key] = _DEFERRED_RETRY_COUNTS.get(key, 0) + 1
+                if _DEFERRED_RETRY_COUNTS[key] >= _MAX_DEFERRED_RETRIES:
+                    print(
+                        f"[watcher] {p.name}: hit max defer retries "
+                        f"({_MAX_DEFERRED_RETRIES}) — auto-skiplisting; "
+                        f"manually delete the line in data/import_skiplist.txt "
+                        f"to retry.",
+                        flush=True,
+                    )
+                    _append_to_skiplist(p)
+                    _DEFERRED_PATHS.discard(key)
+                    _DEFERRED_RETRY_COUNTS.pop(key, None)
+                    details.append({
+                        "file": p.name,
+                        "outcome": "auto_skiplisted",
+                        "message": (
+                            f"Stuck in Drive-sync limbo after "
+                            f"{_MAX_DEFERRED_RETRIES} EDEADLK retries — "
+                            f"auto-added to import_skiplist.txt."
+                        ),
+                    })
+                else:
+                    details.append({
+                        "file": p.name,
+                        "outcome": "deferred",
+                        "message": (
+                            f"Drive Desktop still syncing this folder "
+                            f"(EDEADLK; attempt "
+                            f"{_DEFERRED_RETRY_COUNTS[key]}/"
+                            f"{_MAX_DEFERRED_RETRIES}). Will retry next scan."
+                        ),
+                    })
+                    _DEFERRED_PATHS.add(key)
             else:
                 details.append({"file": p.name, "outcome": "error", "message": str(e)})
                 _RECENT_ERROR_PATHS.add(str(p))

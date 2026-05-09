@@ -1470,13 +1470,25 @@ function _initKeepAwake() {
   // requires a real user gesture for both construction and resume().
   // _armKeepAwake() lazy-creates on the first gesture-tied call.
   //
-  // Only attempt arming on TRUSTED events (e.isTrusted=true) — i.e.
-  // events the user actually performed in the browser. Synthetic
-  // clicks dispatched by our own clickElement() during the wizard
-  // run would otherwise trigger arming, fail the autoplay check,
-  // and spam the console with "AudioContext was not allowed to
-  // start" warnings on every wizard click.
-  const tryArm = (e) => { if (e.isTrusted) _armKeepAwake().catch(() => {}); };
+  // Three filters before arming:
+  //   1. isTrusted=true — synthetic el.click() events fail autoplay
+  //   2. NOT a recent bot-injected click — chrome.debugger's
+  //      Input.dispatchMouseEvent ALSO produces isTrusted=true events,
+  //      but they don't satisfy Chrome's autoplay policy (no real
+  //      hardware gesture), so attempting AudioContext from those
+  //      logs the "not allowed to start" warning visible in the
+  //      Errors panel. We use _wasRecentBotClick() to detect those
+  //      and skip silently.
+  //   3. Chrome can still reject for other reasons (stale gesture,
+  //      cross-origin redirect carryover) — those throws are
+  //      swallowed by .catch() but the warning gets logged. The
+  //      _wasRecentBotClick check covers the only case we generate
+  //      ourselves; user-triggered legit gestures keep working.
+  const tryArm = (e) => {
+    if (!e.isTrusted) return;
+    if (_wasRecentBotClick(e)) return;
+    _armKeepAwake().catch(() => {});
+  };
   document.addEventListener("click",        tryArm, { capture: true });
   document.addEventListener("keydown",      tryArm, { capture: true });
   document.addEventListener("pointerdown",  tryArm, { capture: true });

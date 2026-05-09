@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/static/icon.svg" />
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/static/styles.css?v=20" />
+  <link rel="stylesheet" href="/static/styles.css?v=21" />
   <title>Instagram Tracker</title>
 </head>
 <body>
@@ -177,7 +177,8 @@
             <option value="alphabetical">A → Z</option>
           </select>
           <span id="sort-caption" class="muted small"></span>
-          <button type="button" id="list-select-toggle" class="select-toggle" style="margin-left:auto">Select</button>
+          <button type="button" id="list-export-csv" class="select-toggle" style="margin-left:auto" disabled>Export CSV</button>
+          <button type="button" id="list-select-toggle" class="select-toggle">Select</button>
         </div>
         <div id="bulk-toolbar" class="bulk-toolbar" hidden></div>
         <div id="list-output" class="list-output"></div>
@@ -271,7 +272,7 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="/static/archive-gallery.js"></script>
-  <script src="/static/app.js?v=29"></script>
+  <script src="/static/archive-gallery.js?v=2"></script>
+  <script src="/static/app.js?v=34"></script>
 </body>
 </html>

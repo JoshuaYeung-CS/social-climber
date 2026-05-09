@@ -4,6 +4,7 @@ Multi-snapshot queries load all rows in a single SQL roundtrip, then group in
 memory — much faster than re-fetching per snapshot in a loop.
 """
 
+import bisect
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -224,7 +225,7 @@ def _runs_in(conn: sqlite3.Connection, table: str, username: str) -> list[dict]:
 
 
 def _count_between(ordered: list[int], start: int, end: int) -> int:
-    return sum(1 for x in ordered if start <= x <= end)
+    return bisect.bisect_right(ordered, end) - bisect.bisect_left(ordered, start)
 
 
 def follow_runs(conn: sqlite3.Connection, username: str) -> list[dict]:

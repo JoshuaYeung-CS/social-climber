@@ -1226,6 +1226,15 @@ function renderBulkResult(data) {
       <a class="ig-link" href="${escapeAttr(instagramUrl(n.username))}" target="_blank" rel="noopener" title="Open on Instagram">↗</a>
     </div>`;
 
+  const viewedRow = (v) => `
+    <div class="item bulk-row">
+      <span class="clickable-name" data-username="${escapeAttr(v.username)}" title="Show history">${escapeHtml(v.username)}</span>
+      <a class="ig-link" href="${escapeAttr(instagramUrl(v.username))}" target="_blank" rel="noopener" title="Open on Instagram">↗</a>
+      <span class="status-pill status-muted">👀 viewed${v.observed_at ? ` ${_fmtRelative(v.observed_at)}` : ""}</span>
+    </div>`;
+
+  const viewedList = data.viewed || [];
+
   return `
     <div class="result-section">
       <h3>Already seen (${data.seen.length})</h3>
@@ -1235,8 +1244,15 @@ function renderBulkResult(data) {
       }</div>
     </div>
     <div class="result-section">
+      <h3>👀 Viewed before, no interaction (${viewedList.length})</h3>
+      <p class="muted small">You've opened their profile via the extension overlay before, but never followed or requested. Worth a second look before re-adding.</p>
+      <div class="result-list">${
+        viewedList.map(viewedRow).join("") || "<div class=\"item muted\">(none)</div>"
+      }</div>
+    </div>
+    <div class="result-section">
       <h3>New to you (${data.new.length})</h3>
-      <p class="muted small">Never followed, never requested, never a follower of yours. Safe to follow fresh.</p>
+      <p class="muted small">Never followed, never requested, never viewed via the extension. Safe to follow fresh.</p>
       <div class="result-list">${
         data.new.map(newRow).join("") || "<div class=\"item muted\">(none)</div>"
       }</div>
@@ -1244,6 +1260,29 @@ function renderBulkResult(data) {
     ${data.invalid.length ? `<div class="result-section"><h3>Couldn't parse (${data.invalid.length})</h3><div class="result-list">${data.invalid.map((i) => `<div class="item">${escapeHtml(i.input)} — ${escapeHtml(i.error)}</div>`).join("")}</div></div>` : ""}
     ${data.new.length ? `<button class="primary" id="copy-pruned">Copy new-only list to clipboard</button>` : ""}
   `;
+}
+
+// Format an ISO timestamp as "5h ago" / "3 days ago" for compact
+// display next to the viewed-before pill. Returns "" if the
+// timestamp is unparseable.
+function _fmtRelative(isoStr) {
+  if (!isoStr) return "";
+  try {
+    const t = new Date(isoStr).getTime();
+    if (!t) return "";
+    const ms = Date.now() - t;
+    if (ms < 0) return "just now";
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    if (d < 30) return `${d}d ago`;
+    const mo = Math.floor(d / 30);
+    return `${mo}mo ago`;
+  } catch { return ""; }
 }
 
 async function openAccount(account, { resultId = "lookup-result", saveToQueue = false } = {}) {
@@ -1686,6 +1725,8 @@ const LIST_DESCRIPTIONS = {
   all_following:                "Accounts you currently follow, per the latest snapshot, plus extension-confirmed follows that haven't been ingested into a snapshot yet.",
   mutuals:                      "Accounts that follow you AND that you follow.",
   public_mutuals:               "Mutuals whose privacy is public — either inferred 'likely public' from snapshot history or manually flipped via the now_public tag. Use this list to spot the public accounts that have followed you back (no request gate). New entries also fire a 🌐 follow-back alert.",
+  they_followed_first:          "Mutuals where THEY followed YOU first — IG's per-row export_timestamp on their follow of you predates your follow of them. Useful for spotting who's been actively engaging vs. who you initiated. Skips users with missing timestamps on either side (older imports may lack the data).",
+  you_followed_first:           "Mutuals where YOU followed THEM first — your follow timestamp predates theirs. The complement of 'they followed first'. Skips users with missing timestamps.",
   not_following_you_back:       "Accounts you follow but who don't follow you back. Excludes accounts who've sent you an incoming request you haven't acted on (those are 'requesting to follow back', not 'doesn't follow back').",
   feeder_accounts:              "Accounts that follow you but you don't follow them. The opposite side of 'Don't follow you back'.",
   pending:                      "Outbound follow requests you've sent that haven't been accepted yet, including extension-confirmed pending requests not yet visible in the IG export.",
@@ -1721,6 +1762,8 @@ const LIST_KINDS = [
   ["all_following", "All following"],
   ["mutuals", "Mutuals"],
   ["public_mutuals", "🌐 Public mutuals (followed back)"],
+  ["they_followed_first", "🪄 They followed you first"],
+  ["you_followed_first", "🪄 You followed them first"],
   ["private_accepted_no_follow_back", "🔒 Private accepted, no follow-back"],
   ["not_following_you_back", "Don't follow you back"],
   ["feeder_accounts", "Feeder accounts (follow you, you don't)"],
@@ -1767,7 +1810,7 @@ function buildListKindOptions() {
 // fast instead of opening a long dropdown. Each pill gets a count
 // once loadLists has data.
 const LIST_GROUPS = [
-  { label: "Current",  kinds: ["everyone", "all_followers", "all_following", "mutuals", "public_mutuals", "private_accepted_no_follow_back", "not_following_you_back", "feeder_accounts", "pending", "incoming_requests", "renamed"] },
+  { label: "Current",  kinds: ["everyone", "all_followers", "all_following", "mutuals", "public_mutuals", "they_followed_first", "you_followed_first", "private_accepted_no_follow_back", "not_following_you_back", "feeder_accounts", "pending", "incoming_requests", "renamed"] },
   { label: "History",  kinds: ["ever_unfollowed_you", "rats", "mutual_break_you_first", "mutual_break_they_first", "ever_removed_you_as_follower", "you_unfollowed_ever", "still_follow_after_drop"] },
   { label: "Requests", kinds: ["ever_incoming_requests", "real_requests", "incoming_request_dropped", "ever_requested_outgoing", "request_dropped"] },
   { label: "Tags",     kinds: ["favorite", "star", "want_remove", "watchlist", "to_follow", "disabled", "unavailable", "random_request", "now_public"] },
@@ -1884,6 +1927,10 @@ select.addEventListener("change", () => {
 const sortSelect = $("#list-sort");
 sortSelect.addEventListener("change", loadLists);
 
+const _listExportBtn = $("#list-export-csv");
+let _currentListExportItems = [];
+let _currentListExportKind = "everyone";
+
 // Per-list search bar. Filters DOM rows in place (no server roundtrip), matches
 // case-insensitive substring against username AND any past aliases (so a renamed
 // account is findable by its old handle). Esc clears.
@@ -1948,6 +1995,127 @@ function applyListSearch() {
       ? `${rows.length} matches`
       : `Showing ${visible} of ${rows.length}`;
   }
+  updateListExportButton();
+}
+
+function listLabel(kind) {
+  return (LIST_KINDS.find(([key]) => key === kind) || [, kind])[1];
+}
+
+function currentPrivacyFilter() {
+  const allowedPrivacy = new Set();
+  $$(".filter-chip.active").forEach((c) => {
+    const m = (c.dataset.filter || "").match(/^privacy:(.+)$/);
+    if (m) allowedPrivacy.add(m[1]);
+  });
+  const totalChips = $$(".filter-chip").length;
+  return allowedPrivacy.size > 0 && allowedPrivacy.size < totalChips
+    ? allowedPrivacy
+    : null;
+}
+
+function itemPrivacyKind(item) {
+  if (item.now_public) return "public";
+  if (item.privacy_confirmed_private || item.privacy === "likely_private") return "private";
+  if (item.privacy === "likely_public") return "likely_public";
+  return "unknown";
+}
+
+function currentListFilteredItems() {
+  const q = (searchInput?.value || "").toLowerCase().trim();
+  const privacyFilter = currentPrivacyFilter();
+  return (_currentListExportItems || []).filter((item) => {
+    const aliases = (item.aliases && item.aliases.length > 0) ? item.aliases : [item.username];
+    const hay = aliases.map((a) => String(a).toLowerCase()).join("|");
+    if (q && !hay.includes(q)) return false;
+    if (privacyFilter && !privacyFilter.has(itemPrivacyKind(item))) return false;
+    return true;
+  });
+}
+
+function updateListExportButton() {
+  if (!_listExportBtn) return;
+  const n = currentListFilteredItems().length;
+  _listExportBtn.disabled = n === 0;
+  _listExportBtn.textContent = n > 0 ? `Export CSV (${n})` : "Export CSV";
+}
+
+function csvCell(value) {
+  if (value == null) return "";
+  const s = Array.isArray(value) ? value.join(" | ") : String(value);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function csvDateTimeFromUnix(ts) {
+  if (typeof ts !== "number") return "";
+  const d = new Date(ts * 1000);
+  return isNaN(d) ? "" : d.toISOString();
+}
+
+function exportCurrentListCsv() {
+  const items = currentListFilteredItems();
+  if (!items.length) {
+    toast("No rows to export");
+    updateListExportButton();
+    return;
+  }
+  const kind = _currentListExportKind || select.value || "everyone";
+  const activeIntersections = [..._intersectKinds].map(listLabel).join(" + ");
+  const headers = [
+    "username", "instagram_url", "list_kind", "list_label", "intersections",
+    "relationship", "bucket_status", "privacy", "aliases", "note",
+    "favorite", "star", "want_remove", "watchlist", "to_follow",
+    "disabled", "unavailable", "random_request", "now_public",
+    "followed_at", "they_followed_at", "requested_at", "incoming_requested_at",
+    "you_unfollowed_at", "last_seen_as_follower_at", "last_archived_at",
+  ];
+  const rows = items.map((item) => ({
+    username: item.username,
+    instagram_url: instagramUrl(item.username),
+    list_kind: kind,
+    list_label: listLabel(kind),
+    intersections: activeIntersections,
+    relationship: item.relationship || "",
+    bucket_status: item.bucket_status || "",
+    privacy: itemPrivacyKind(item),
+    aliases: item.aliases || "",
+    note: item.note || "",
+    favorite: item.favorite ? "1" : "",
+    star: item.star ? "1" : "",
+    want_remove: item.want_remove ? "1" : "",
+    watchlist: item.watchlist ? "1" : "",
+    to_follow: item.to_follow ? "1" : "",
+    disabled: item.disabled ? "1" : "",
+    unavailable: item.unavailable ? "1" : "",
+    random_request: item.random_request ? "1" : "",
+    now_public: item.now_public ? "1" : "",
+    followed_at: csvDateTimeFromUnix(item.followed_ts) || item.followed_at || "",
+    they_followed_at: csvDateTimeFromUnix(item.followers_ts) || item.first_followed_you_at || "",
+    requested_at: csvDateTimeFromUnix(item.pending_ts) || item.pending_since_at || "",
+    incoming_requested_at: csvDateTimeFromUnix(item.incoming_ts),
+    you_unfollowed_at: csvDateTimeFromUnix(item.unfollowed_ts || item.unfollowed_by_you_ts) || item.unfollowed_by_you_at || "",
+    last_seen_as_follower_at: csvDateTimeFromUnix(item.last_followed_you_ts) || item.last_followed_you_at || "",
+    last_archived_at: csvDateTimeFromUnix(item.last_archived_ts),
+  }));
+  const csv = [headers.join(",")]
+    .concat(rows.map((row) => headers.map((h) => csvCell(row[h])).join(",")))
+    .join("\n") + "\n";
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const date = new Date().toISOString().slice(0, 10);
+  const suffix = _intersectKinds.size ? "-intersection" : "";
+  a.href = url;
+  a.download = `igtracker-${kind}${suffix}-${date}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  toast(`Exported ${items.length} row${items.length === 1 ? "" : "s"}`);
+}
+
+if (_listExportBtn) {
+  _listExportBtn.addEventListener("click", exportCurrentListCsv);
 }
 
 searchInput.addEventListener("input", applyListSearch);
@@ -2696,6 +2864,9 @@ async function loadLists() {
     }
 
     if (items.length === 0) {
+      _currentListExportKind = kind;
+      _currentListExportItems = [];
+      updateListExportButton();
       // Distinguish "no intersection match" from "empty list" — the
       // old hardcoded message was misleading for plain single-list
       // views where there's no intersection in play. Helps the user
@@ -2723,6 +2894,7 @@ async function loadLists() {
 
     sortSelect.parentElement.style.display = "";
     items = applySort(items, sortSelect.value);
+    let exportItems = items;
 
     // For "still follow after drop", group visually so the surprising "we're
     // mutual again" cases don't get lost in the longer "still doesn't follow
@@ -2730,6 +2902,7 @@ async function loadLists() {
     if (kind === "still_follow_after_drop") {
       const notBack = items.filter((i) => i.relationship_kind !== "good");
       const mutual = items.filter((i) => i.relationship_kind === "good");
+      exportItems = notBack.concat(mutual);
       const html = [];
       if (notBack.length) {
         html.push(`<div class="list-section">Still doesn't follow back (${notBack.length})</div>`);
@@ -2747,6 +2920,7 @@ async function loadLists() {
       // to the bottom and dim them via the .is-came-back CSS class.
       const stillGone = items.filter((i) => i.relationship_kind !== "good");
       const cameBack = items.filter((i) => i.relationship_kind === "good");
+      exportItems = stillGone.concat(cameBack);
       const html = [];
       if (stillGone.length) {
         html.push(stillGone.map(renderListRow).join(""));
@@ -2781,6 +2955,7 @@ async function loadLists() {
       const reordered = (requesting.length || done.length)
         ? active.concat(requesting, done)
         : items;
+      exportItems = reordered;
       // Chunked render: paint first ~120 rows synchronously so the user
       // sees something immediately, then append the rest in 300-row
       // batches via requestAnimationFrame so the browser can layout +
@@ -2788,6 +2963,9 @@ async function loadLists() {
       // single-pass render; only kicks in past the threshold.
       renderRowsChunked(out, reordered, renderListRow);
     }
+    _currentListExportKind = kind;
+    _currentListExportItems = exportItems;
+    updateListExportButton();
     // Re-apply any active search after rendering so a sort change (which
     // re-renders the rows) keeps the filter live.
     applyListSearch();
@@ -2950,18 +3128,27 @@ async function loadActivityLog(force = false) {
 }
 
 // Per-kind label and color for the flat activity feed.
+//
+// Naming conventions:
+//   "you …" / "they …" prefix makes the actor unambiguous at a glance.
+//   "→" separates a request from its outcome; "·" separates clarifying
+//   facts on the same step.
+//   "rejected/expired/cancelled" — when IG just removes a request
+//   without it becoming a follow, snapshot data alone can't tell us
+//   which of the three it was. Labelling with all three is more honest
+//   than "rejected" (the prior label, which was overconfident).
 const ACTIVITY_KIND_META = {
-  new_follower:         { label: "started following you",  cls: "good"  },
-  unfollowed_you:       { label: "unfollowed you",         cls: "bad"   },
-  you_followed:         { label: "you followed",           cls: "good"  },
-  you_unfollowed:       { label: "you unfollowed",         cls: "muted" },
-  removed_you:          { label: "removed you",            cls: "bad"   },
-  you_requested:        { label: "you requested",          cls: "info"  },
-  they_accepted:        { label: "they accepted you",      cls: "good"  },
-  pending_withdrawn:    { label: "follow request rejected", cls: "muted" },
-  new_incoming_request: { label: "requested to follow you", cls: "info" },
-  you_accepted:         { label: "you accepted them",      cls: "good"  },
-  incoming_withdrawn:   { label: "their request withdrawn", cls: "muted" },
+  new_follower:         { label: "they followed you",                          cls: "good"  },
+  unfollowed_you:       { label: "they unfollowed you",                        cls: "bad"   },
+  you_followed:         { label: "you followed them",                          cls: "good"  },
+  you_unfollowed:       { label: "you unfollowed them",                        cls: "muted" },
+  removed_you:          { label: "they removed you as a follower",             cls: "bad"   },
+  you_requested:        { label: "you requested → them",                       cls: "info"  },
+  they_accepted:        { label: "they accepted your request",                 cls: "good"  },
+  pending_withdrawn:    { label: "your request didn't go through (rejected/expired/cancelled)", cls: "muted" },
+  new_incoming_request: { label: "they requested → you",                       cls: "info"  },
+  you_accepted:         { label: "you accepted their request",                 cls: "good"  },
+  incoming_withdrawn:   { label: "their request to you didn't go through (withdrawn/rejected/expired)", cls: "muted" },
 };
 
 // "Significant" is a meta-filter — clicking it activates the set of kinds
@@ -2987,6 +3174,47 @@ const ACTIVITY_PSEUDO_LABELS = {
 // the set.
 let _activityKindFilter = new Set();
 let _activityVisibleCap = 500;  // soft cap for initial paint; "show more" expands it
+
+function parseActivityIso(iso) {
+  if (!iso) return null;
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (m) {
+    return new Date(
+      Number(m[1]),
+      Number(m[2]) - 1,
+      Number(m[3]),
+      Number(m[4]),
+      Number(m[5]),
+      Number(m[6] || 0)
+    );
+  }
+  const d = new Date(iso);
+  return isNaN(d) ? null : d;
+}
+
+function fmtActivityDateTime(iso, { timeOnly = false } = {}) {
+  const d = parseActivityIso(iso);
+  if (!d) return (iso || "").slice(0, 16).replace("T", " ");
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  if (timeOnly) {
+    return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  }
+  return d.toLocaleString("en-US", sameYear
+    ? { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }
+    : { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function activityTimeDetail(e) {
+  if (e.time_precision !== "bounded" || !e.time_lower_bound || !e.time_upper_bound) {
+    return "";
+  }
+  const lo = parseActivityIso(e.time_lower_bound);
+  const hi = parseActivityIso(e.time_upper_bound);
+  const sameDay = lo && hi && lo.toDateString() === hi.toDateString();
+  const lower = fmtActivityDateTime(e.time_lower_bound);
+  const upper = fmtActivityDateTime(e.time_upper_bound, { timeOnly: sameDay });
+  return `between ${lower} and ${upper}`;
+}
 
 function renderActivityLog() {
   const out = $("#activity-log");
@@ -3046,6 +3274,7 @@ function renderActivityLog() {
     const t = (e.timestamp || "").slice(0, 19);
     const day = t.slice(0, 10);
     const time = t.slice(11, 16) || "—";
+    const detail = activityTimeDetail(e);
     let header = "";
     if (day !== lastDay) {
       lastDay = day;
@@ -3056,6 +3285,7 @@ function renderActivityLog() {
         <span class="al-time-cell">${escapeHtml(time)}</span>
         <span class="al-kind-pill al-${meta.cls}">${escapeHtml(meta.label)}</span>
         <span class="al-name">${escapeHtml(e.username)}</span>
+        ${detail ? `<span class="al-detail">${escapeHtml(detail)}</span>` : ""}
         <a class="al-open" href="https://www.instagram.com/${encodeURIComponent(e.username)}/" target="_blank" rel="noopener" title="Open on Instagram" onclick="event.stopPropagation()">↗</a>
       </div>
     `;
@@ -3086,7 +3316,7 @@ function renderActivityLog() {
       unique.push(e);
     }
     const uniqueRows = unique.map((e) => {
-      const t = (e.timestamp || "").slice(0, 16).replace("T", " ");
+      const t = activityTimeDetail(e) || (e.timestamp || "").slice(0, 16).replace("T", " ");
       return `
         <div class="al-unique-row clickable" data-username="${escapeAttr(e.username)}" title="Click for full account history">
           <span class="al-name">${escapeHtml(e.username)}</span>
@@ -3171,6 +3401,14 @@ const HISTORY_SERIES = [
   { key: "pending",                label: "Pending (you sent)",       color: "#a78bfa", on: false },
   { key: "incoming",               label: "Pending (they sent)",      color: "#f472b6", on: false },
   { key: "cumulative_unfollowers", label: "Unfollowers (cumulative)", color: "#ff5e7a", on: false },
+  // Per-snapshot deltas — count of NEW entries since previous snapshot.
+  // Off by default to keep the initial chart clean; tick the boxes to
+  // overlay them. Useful for spotting follow-burst days vs. quiet ones,
+  // and the gap between "you requested" and "they accepted" cohorts.
+  { key: "new_outgoing_requests",  label: "Δ You requested",          color: "#c084fc", on: false },
+  { key: "new_follows",            label: "Δ You followed (accepted)", color: "#fbbf24", on: false },
+  { key: "new_incoming_requests",  label: "Δ They requested back",    color: "#ec4899", on: false },
+  { key: "new_followers",          label: "Δ They followed back",     color: "#34d399", on: false },
 ];
 let _historyZoom = null;  // { fromIdx, toIdx } in the (range-filtered) snaps array
 

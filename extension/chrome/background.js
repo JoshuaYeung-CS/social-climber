@@ -273,17 +273,21 @@ async function _trackerScan(sinceMs) {
   }
 }
 
-async function _onScheduledExportFire() {
+async function _onScheduledExportFire({ manual = false } = {}) {
   // Min-gap guard against chrome.alarms wake-from-sleep replay. If
   // the previous fire was less than (minScheduleMin - 1) ago, treat
   // this as a replay artifact and skip. Critical for the export bot
   // because back-to-back Meta-export creates would be the most
   // suspicious thing IG could see.
+  //
+  // `manual=true` from the popup's "▶ Now" button bypasses this —
+  // the user explicitly asked, and an extra export create is fine
+  // when they specifically chose to do it.
   const { lastScheduledFireAt, exportScheduleMinHours, exportScheduleHours } = await chrome.storage.local.get([
     "lastScheduledFireAt", "exportScheduleMinHours", "exportScheduleHours",
   ]);
   const minH = Number(exportScheduleMinHours) || Number(exportScheduleHours) || 0;
-  if (minH > 0 && lastScheduledFireAt) {
+  if (!manual && minH > 0 && lastScheduledFireAt) {
     const minGapMs = Math.max(60_000, (minH * 60_000) - 60_000);  // interval minus 1 min, minimum 1 min
     const sinceMs = Date.now() - lastScheduledFireAt;
     if (sinceMs < minGapMs) {
@@ -417,7 +421,16 @@ const CLOSE_RUNNER_WIN_PREFIX = "close-runner-window-";
 // dormant when the message arrived). chrome.alarms are MV3-safe
 // where the previous setTimeout(ARCHIVE_RUNNER_TAB_BUDGET_MS) wasn't.
 const RUNNER_BUDGET_PREFIX = "runner-budget-";
-const ARCHIVE_RUNNER_TAB_BUDGET_MIN = 4;
+// Per-account tab-budget. Bumped 4 → 10: accounts with lots of
+// posts + multi-slide carousels + highlights need more wall-clock
+// time to walk all five tabs (Posts → Reels → Tagged → Highlights →
+// Story) and step through each carousel. With the new 2-retry cap,
+// this is a hard 20-minute total cap per account before permanent-
+// fail (10 min × 2 attempts), which still lets the queue advance
+// reasonably while giving heavy accounts a real chance to finish in
+// one go. Idempotent saves on the server mean a second attempt only
+// downloads slides missed in the first.
+const ARCHIVE_RUNNER_TAB_BUDGET_MIN = 10;
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === SCHEDULE_ALARM) {
@@ -545,7 +558,101 @@ async function _scheduleNextRunnerFireFromCompletion(reason) {
 // attempts on a single account, mark it as PERMANENT FAILURE and
 // stop retrying — the user gets a persistent banner in the popup
 // plus a Reminders/iMessage push.
-const ARCHIVE_RUNNER_MAX_ATTEMPTS = 10;
+//
+// Set to 2 (down from 10): accounts that don't exist / went private /
+// got banned silently produce zero files and have no way to ever
+// succeed in the runner's hostile background-tab environment. With
+// the old cap of 10, dead accounts blocked the queue for ~80 minutes
+// before being given up on. 2 retries lets us move on to the next
+// account in <16 minutes. If a real account fails twice in a row in
+// the background, manually opening the profile and clicking the 📦
+// button is more reliable anyway — that path uses a foreground tab
+// without Chrome's timer throttling.
+const ARCHIVE_RUNNER_MAX_ATTEMPTS = 2;
+
+// ---------- manual-archive slot manager ----------
+//
+// Cross-tab serialization for 📦 Archive selected clicks. Each
+// "slot" lets one foreground tab archive a profile at full speed
+// (no Chrome timer throttling, real user gesture for AudioContext,
+// manual-quality results). When all slots are taken, additional
+// clicks queue and the SW grants them slots in FIFO order as
+// in-flight archives complete.
+//
+// User-tested observation: 2-3 concurrent foreground archives is
+// the sweet spot. 1 is too sequential, 10 saturates the local
+// server / IG. Default 2; configurable via chrome.storage.local.
+//   manualArchiveSlotLimit. Slots auto-release after 30 min if
+// the owning tab never sends a release (browser crash, navigation
+// away mid-run, etc.) so the queue can't deadlock.
+const MANUAL_ARCHIVE_SLOT_LIMIT_DEFAULT = 2;
+const MANUAL_ARCHIVE_SLOT_TIMEOUT_MS = 30 * 60_000;
+
+async function _loadManualArchiveState() {
+  const v = await chrome.storage.local.get([
+    "manualArchiveSlots", "manualArchiveQueue", "manualArchiveSlotLimit",
+  ]);
+  return {
+    slots: Array.isArray(v.manualArchiveSlots) ? v.manualArchiveSlots : [],
+    queue: Array.isArray(v.manualArchiveQueue) ? v.manualArchiveQueue : [],
+    limit: Number(v.manualArchiveSlotLimit) || MANUAL_ARCHIVE_SLOT_LIMIT_DEFAULT,
+  };
+}
+
+async function _saveManualArchiveState(state) {
+  await chrome.storage.local.set({
+    manualArchiveSlots: state.slots,
+    manualArchiveQueue: state.queue,
+  });
+}
+
+// Drop slots / queue entries whose owning tab is gone or whose
+// claim is stale (>30 min). Called before any allocate decision.
+async function _cleanupStaleManualSlots(state) {
+  const now = Date.now();
+  const validSlots = [];
+  for (const s of state.slots) {
+    if (now - (s.claimedAt || 0) > MANUAL_ARCHIVE_SLOT_TIMEOUT_MS) continue;
+    try {
+      await chrome.tabs.get(s.tabId);
+      validSlots.push(s);
+    } catch { /* tab gone */ }
+  }
+  state.slots = validSlots;
+  const validQueue = [];
+  for (const q of state.queue) {
+    try {
+      await chrome.tabs.get(q.tabId);
+      validQueue.push(q);
+    } catch { /* tab gone */ }
+  }
+  state.queue = validQueue;
+}
+
+// After releasing a slot or cleaning stale ones, hand grants to as
+// many waiters as the slot limit allows. Sends each granted tab a
+// `manual-archive-slot-granted` message so its content script can
+// kick off the archive.
+async function _grantManualSlotsAsAvailable(state) {
+  while (state.slots.length < state.limit && state.queue.length > 0) {
+    const next = state.queue.shift();
+    state.slots.push({
+      tabId: next.tabId,
+      username: next.username,
+      claimedAt: Date.now(),
+    });
+    try {
+      await chrome.tabs.sendMessage(next.tabId, {
+        type: "manual-archive-slot-granted",
+        username: next.username,
+      });
+    } catch (e) {
+      // Tab gone between queueing and granting — pop the slot we
+      // just allocated and try the next waiter.
+      state.slots.pop();
+    }
+  }
+}
 
 async function _loadArchiveState() {
   const { archiveRunnerState = {} } = await chrome.storage.local.get(["archiveRunnerState"]);
@@ -612,7 +719,20 @@ async function _verifyPreviousAttempt(state, liveQueue) {
   state.inFlight = null;
 }
 
-async function _onArchiveRunnerFire() {
+async function _onArchiveRunnerFire({ manual = false } = {}) {
+  // Manual-slot priority: don't kick off the auto-runner if any
+  // manual-archive slots are currently active. Two foreground
+  // archives + a runner background tab would compete for the
+  // local server's threadpool and IG's anti-bot patience. The
+  // auto-runner alarm will fire again next interval; if the
+  // manual slots are still busy, it'll skip again. This applies
+  // to BOTH alarm fires AND the popup's "▶ Now" button — manual
+  // archives always win the conflict.
+  const { manualArchiveSlots: _mSlots = [] } = await chrome.storage.local.get(["manualArchiveSlots"]);
+  if (Array.isArray(_mSlots) && _mSlots.length > 0) {
+    console.log(`[IG Tracker] Archive runner: ${_mSlots.length} manual slot(s) active — yielding to manual archives`);
+    return;
+  }
   // Min-gap guard. chrome.alarms replays missed periodic fires after
   // the system wakes from sleep — if the laptop slept 5h with the
   // runner armed for 8min, on wake Chrome can fire several catch-up
@@ -621,12 +741,16 @@ async function _onArchiveRunnerFire() {
   // bot. We treat any fire that lands within (interval - 30s) of
   // the previous fire as a replay artifact and skip — the next
   // properly-spaced fire will resume normal cadence.
+  //
+  // `manual=true` from the popup's "▶ Now" button bypasses this —
+  // the user explicitly asked us to fire now, so a 30s replay
+  // shouldn't suppress them.
   const { archiveRunnerLastFireAt, archiveRunnerIntervalMin } = await chrome.storage.local.get([
     "archiveRunnerLastFireAt", "archiveRunnerIntervalMin",
   ]);
   const intervalMin = Math.max(1, Number(archiveRunnerIntervalMin) || ARCHIVE_RUNNER_DEFAULT_INTERVAL_MIN);
   const minGapMs = (intervalMin * 60_000) - 30_000;
-  if (archiveRunnerLastFireAt && (Date.now() - archiveRunnerLastFireAt) < minGapMs) {
+  if (!manual && archiveRunnerLastFireAt && (Date.now() - archiveRunnerLastFireAt) < minGapMs) {
     const sinceS = Math.round((Date.now() - archiveRunnerLastFireAt) / 1000);
     console.log(`[IG Tracker] Archive runner: alarm-replay protection — last fire ${sinceS}s ago (need ${Math.round(minGapMs/1000)}s+). Skipping this fire.`);
     return;
@@ -764,8 +888,48 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // hours. This was the actual cause of the 3-hour silent gap the user
 // reported. The alarm itself is persistent across SW restarts; we
 // only need to repair it if it's missing.
-chrome.runtime.onInstalled.addListener(() => { refreshExportAlarm(); refreshArchiveRunnerAlarm(); });
-chrome.runtime.onStartup.addListener(() => { refreshExportAlarm(); refreshArchiveRunnerAlarm(); });
+// One-time migration: when ARCHIVE_RUNNER_MAX_ATTEMPTS dropped from
+// 10 → 2 and the per-account budget bumped 4 → 10 min, accounts that
+// already had attemptCounts ≥ 2 from the old code would be instantly
+// permanent-failed on the next runner fire — without ever seeing the
+// new longer budget. Reset attemptCounts + triedThisPass once per
+// migration version so every stuck account gets a fair fresh shot
+// under the new constants. Permanent-fails (which were set after
+// reaching the OLD cap of 10) are preserved — those are genuine
+// "couldn't archive after lots of tries" signals worth keeping.
+const RUNNER_STATE_MIGRATION_VERSION = "1.0.147-2-retry-cap-and-10min-budget";
+async function _maybeMigrateRunnerState() {
+  const { runnerStateMigrationVersion } = await chrome.storage.local.get(["runnerStateMigrationVersion"]);
+  if (runnerStateMigrationVersion === RUNNER_STATE_MIGRATION_VERSION) return;
+  const { archiveRunnerState } = await chrome.storage.local.get(["archiveRunnerState"]);
+  if (archiveRunnerState && typeof archiveRunnerState === "object") {
+    const before = {
+      attempts: Object.keys(archiveRunnerState.attemptCounts || {}).length,
+      tried: (archiveRunnerState.triedThisPass || []).length,
+    };
+    archiveRunnerState.attemptCounts = {};
+    archiveRunnerState.triedThisPass = [];
+    // Reset the pass number so the runner starts a clean pass too —
+    // otherwise the in-memory "this pass" tracking can carry over.
+    archiveRunnerState.passNumber = 1;
+    await chrome.storage.local.set({ archiveRunnerState });
+    console.log(`[IG Tracker] Runner state migrated to ${RUNNER_STATE_MIGRATION_VERSION} (cleared ${before.attempts} attempt counts, ${before.tried} tried-this-pass entries)`);
+  } else {
+    console.log(`[IG Tracker] Runner state migration: nothing to clear (no prior state)`);
+  }
+  await chrome.storage.local.set({ runnerStateMigrationVersion: RUNNER_STATE_MIGRATION_VERSION });
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  _maybeMigrateRunnerState();
+  refreshExportAlarm();
+  refreshArchiveRunnerAlarm();
+});
+chrome.runtime.onStartup.addListener(() => {
+  _maybeMigrateRunnerState();
+  refreshExportAlarm();
+  refreshArchiveRunnerAlarm();
+});
 
 (async function _ensureAlarmsArmed() {
   try {
@@ -1134,6 +1298,149 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // re-arm a one-shot alarm `graceMin` minutes out. In interval mode
   // this is informational only — the periodic alarm is what advances
   // the queue.
+  // Dead-account signal from the runner content script. Fires the
+  // moment we land on a profile and detect "Sorry, this page isn't
+  // available" / "This account is private" (and not following) /
+  // empty grid. We mark the account as permanently failed
+  // immediately — no retries, no waiting for the 4-minute budget.
+  // This unsticks the queue: a typo'd or banned handle moves out of
+  // the way in seconds instead of blocking 8+ hours of retry cycles.
+  // Manual-archive slot manager. See _loadManualArchiveState comment
+  // block for design. Three message types: claim, release, cancel,
+  // plus query for UI status.
+  if (msg.type === "claim-archive-slot") {
+    (async () => {
+      const tabId = sender?.tab?.id;
+      const username = (msg.username || "").trim();
+      if (!tabId || !username) {
+        sendResponse({ ok: false, error: "missing tab or username" });
+        return;
+      }
+      const state = await _loadManualArchiveState();
+      await _cleanupStaleManualSlots(state);
+      // If this tab already owns a slot (re-entry), confirm.
+      if (state.slots.find((s) => s.tabId === tabId)) {
+        await _saveManualArchiveState(state);
+        sendResponse({
+          ok: true, granted: true, slotsActive: state.slots.length,
+          slotLimit: state.limit, position: 0,
+        });
+        return;
+      }
+      // Try immediate grant.
+      if (state.slots.length < state.limit) {
+        state.slots.push({ tabId, username, claimedAt: Date.now() });
+        await _saveManualArchiveState(state);
+        sendResponse({
+          ok: true, granted: true, slotsActive: state.slots.length,
+          slotLimit: state.limit, position: 0,
+        });
+        return;
+      }
+      // Queue (de-dup by tabId).
+      if (!state.queue.find((q) => q.tabId === tabId)) {
+        state.queue.push({ tabId, username, requestedAt: Date.now() });
+      }
+      await _saveManualArchiveState(state);
+      const position = state.queue.findIndex((q) => q.tabId === tabId) + 1;
+      sendResponse({
+        ok: true, granted: false, position,
+        slotsActive: state.slots.length, slotLimit: state.limit,
+      });
+    })();
+    return true;
+  }
+  if (msg.type === "release-archive-slot") {
+    (async () => {
+      const tabId = sender?.tab?.id;
+      if (!tabId) { sendResponse({ ok: false }); return; }
+      const state = await _loadManualArchiveState();
+      state.slots = state.slots.filter((s) => s.tabId !== tabId);
+      state.queue = state.queue.filter((q) => q.tabId !== tabId);
+      await _cleanupStaleManualSlots(state);
+      await _grantManualSlotsAsAvailable(state);
+      await _saveManualArchiveState(state);
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+  if (msg.type === "cancel-archive-slot") {
+    (async () => {
+      const tabId = sender?.tab?.id;
+      if (!tabId) { sendResponse({ ok: false }); return; }
+      const state = await _loadManualArchiveState();
+      state.slots = state.slots.filter((s) => s.tabId !== tabId);
+      state.queue = state.queue.filter((q) => q.tabId !== tabId);
+      await _grantManualSlotsAsAvailable(state);
+      await _saveManualArchiveState(state);
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+  if (msg.type === "query-archive-slot-status") {
+    (async () => {
+      const state = await _loadManualArchiveState();
+      sendResponse({
+        ok: true,
+        slotsActive: state.slots.length,
+        slotLimit: state.limit,
+        queueDepth: state.queue.length,
+      });
+    })();
+    return true;
+  }
+  if (msg.type === "archive-runner-dead-account") {
+    (async () => {
+      try {
+        if (!msg.username) { sendResponse({ ok: false, error: "missing username" }); return; }
+        const state = await _loadArchiveState();
+        // Only act if the dead account matches the one we're tracking.
+        if (state.inFlight && state.inFlight === msg.username) {
+          state.permanentFailures[msg.username] = {
+            firstFailedAt: state.permanentFailures[msg.username]?.firstFailedAt || Date.now(),
+            attempts: (state.attemptCounts[msg.username] || 0) + 1,
+            reason: msg.reason || "dead_account",
+          };
+          delete state.attemptCounts[msg.username];
+          state.triedThisPass = state.triedThisPass.filter(x => x !== msg.username);
+          console.warn(`[IG Tracker] Archive runner: PERMANENT FAILURE @${msg.username} (${msg.reason || "dead_account"}, fast-fail)`);
+          await _appendArchiveRunnerHistory({ ts: Date.now(), username: msg.username, status: "permanent-fail", reason: msg.reason });
+          // Close the window now and advance immediately — no point
+          // waiting the full 4-minute budget on a confirmed dead
+          // account.
+          const winToClose = state.inFlightWindowId;
+          state.inFlight = null;
+          state.inFlightWindowId = null;
+          await _saveArchiveState(state);
+          if (winToClose != null) {
+            try { await chrome.windows.remove(winToClose); } catch (_) {}
+            try { await chrome.alarms.clear(`${RUNNER_BUDGET_PREFIX}${winToClose}`); } catch (_) {}
+          }
+          await _scheduleNextRunnerFireFromCompletion("dead-account-fast-fail");
+          // One push notification per dead account so the user sees
+          // which handle to investigate (typo? rename? account gone?).
+          try {
+            const reasonLabel = ({
+              account_unavailable: "page not found / banned / deactivated",
+              private_not_following: "private and you don't follow",
+              no_visible_content: "no visible posts or reels",
+            })[msg.reason] || msg.reason || "dead account";
+            await _phonePush(
+              `IG Archive: @${msg.username} skipped`,
+              `Reason: ${reasonLabel}. Check the handle, or unfollow it from the queue.`,
+              "normal",
+            );
+          } catch (_) { /* push best-effort */ }
+        } else {
+          console.log(`[IG Tracker] archive-runner-dead-account: ignored (inFlight=${state.inFlight}, msg=${msg.username})`);
+        }
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e?.message || e) });
+      }
+    })();
+    return true;
+  }
   if (msg.type === "archive-runner-complete") {
     (async () => {
       try {
@@ -1184,6 +1491,55 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
         const j = await r.json().catch(() => ({}));
         sendResponse({ ok: r.ok, body: j });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e?.message || e) });
+      }
+    })();
+    return true;
+  }
+  // "Run now" buttons — manually trigger the next scheduled fire of
+  // the export wizard or the archive runner without waiting for the
+  // alarm. Same code path as the alarm fire, then re-arms the alarm
+  // so the next auto-run happens `interval` minutes from NOW (not
+  // from the original schedule, which would otherwise double-fire
+  // shortly after).
+  //
+  // No-op (with error) if a run is already in flight, to avoid
+  // overlap and respect the existing concurrency model.
+  if (msg.type === "export-fire-now") {
+    (async () => {
+      try {
+        const { pendingArrival } = await chrome.storage.local.get(["pendingArrival"]);
+        if (pendingArrival) {
+          sendResponse({ ok: false, error: "An export is already in flight. Hit Stop first if you want to restart." });
+          return;
+        }
+        await _appendHistory({ ts: Date.now(), status: "triggered-now" });
+        await _onScheduledExportFire({ manual: true });
+        // Re-anchor the alarm so the next auto-fire is `interval`
+        // minutes from now, not from the previously-armed time.
+        await refreshExportAlarm();
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e?.message || e) });
+      }
+    })();
+    return true;
+  }
+  if (msg.type === "archive-runner-fire-now") {
+    (async () => {
+      try {
+        const state = await _loadArchiveState();
+        if (state.inFlight) {
+          sendResponse({ ok: false, error: `Archive runner is already in flight on @${state.inFlight}.` });
+          return;
+        }
+        await _appendArchiveRunnerHistory({ ts: Date.now(), status: "triggered-now" });
+        await _onArchiveRunnerFire({ manual: true });
+        // Re-anchor the alarm so the next auto-fire is `interval`
+        // minutes from now, not from the previously-armed time.
+        await refreshArchiveRunnerAlarm();
+        sendResponse({ ok: true });
       } catch (e) {
         sendResponse({ ok: false, error: String(e?.message || e) });
       }

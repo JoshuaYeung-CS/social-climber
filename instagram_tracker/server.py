@@ -69,17 +69,19 @@ _DEPS_BOTH = ("snapshot", "tag")
 def _bump_snapshot_version():
     global _snapshot_version
     _snapshot_version += 1
-    _cache.clear()  # everything depends on snapshot, so wipe everything
+    # Stale-while-revalidate: do NOT clear the cache. Existing entries
+    # become stale (version mismatched), but reads keep serving them
+    # while the debounced reprewarm computes fresh values in the
+    # background. Removes the user-visible 100s+ cold-cache wait that
+    # used to happen on every snapshot bump.
+    _schedule_reprewarm()
 
 
 def _bump_tag_version():
     global _tag_version
     _tag_version += 1
-    # Selectively drop entries that depend on tags. Snapshot-only entries
-    # (timeline, activity-log) survive intact.
-    for k in list(_cache.keys()):
-        if "tag" in _CACHE_DEPS.get(k, _DEPS_BOTH):
-            _cache.pop(k, None)
+    # Same SWR pattern: keep stale entries, refresh in background.
+    _schedule_reprewarm()
 
 
 # Static map of cache-key → deps. Set when an endpoint registers itself.
@@ -106,27 +108,24 @@ def _get_cache_lock(key: str) -> _threading.Lock:
         return lock
 
 
-def _cached(key: str, compute, deps: tuple[str, ...] = _DEPS_BOTH):
-    """Return the cached response for `key` if its stored version still
-    matches the relevant counters, else compute, store, return.
+# Keys that the prewarm/reprewarm thread refreshes on every bump.
+# Only these are eligible for stale-while-revalidate reads — other
+# keys (e.g. per-username lookup) would go stale forever if served
+# without recompute, since nothing schedules a background refresh
+# for them.
+_SWR_KEYS = {"home", "lists_pure", "activity_log"}
 
-    Cache-stampede protection: concurrent callers on the same cold key
-    queue at a per-key lock so only one runs the (expensive) compute.
-    The rest re-check the cache after the lock releases and almost
-    always hit. Massive win for cold-cache scenarios where the prewarm
-    thread and the user's first click race for the same key."""
+
+def _cache_set(key: str, compute, deps: tuple[str, ...] = _DEPS_BOTH):
+    """Force-recompute and store. Used by the prewarm/reprewarm path to
+    refresh stale entries. Stampede-protected: if another thread is
+    already computing the same key, wait at the lock and pick up its
+    fresh result without re-running compute."""
     _CACHE_DEPS[key] = deps
-    entry = _cache.get(key)
-    if entry is not None:
-        cached_versions = entry[0]
-        snap_match = "snapshot" not in deps or cached_versions[0] == _snapshot_version
-        tag_match = "tag" not in deps or cached_versions[1] == _tag_version
-        if snap_match and tag_match:
-            return entry[1]
     lock = _get_cache_lock(key)
     with lock:
-        # Re-check inside the lock — another thread may have populated
-        # while we were waiting.
+        # Inside the lock: if another thread already stored a fresh
+        # entry while we were waiting, take it.
         entry = _cache.get(key)
         if entry is not None:
             cached_versions = entry[0]
@@ -139,6 +138,30 @@ def _cached(key: str, compute, deps: tuple[str, ...] = _DEPS_BOTH):
         return result
 
 
+def _cached(key: str, compute, deps: tuple[str, ...] = _DEPS_BOTH):
+    """Read-side cache lookup. For keys in `_SWR_KEYS` (the heavy
+    endpoints the prewarm thread refreshes on every bump), return any
+    cached entry instantly — even if stale — and trust the background
+    reprewarm to overwrite it shortly. For other keys, behave the
+    classic way: version mismatch triggers a synchronous recompute,
+    since nothing else will refresh them.
+
+    Cold path (no entry at all) always blocks once for the compute,
+    stampede-protected via per-key lock."""
+    _CACHE_DEPS[key] = deps
+    entry = _cache.get(key)
+    if entry is not None:
+        cached_versions = entry[0]
+        snap_match = "snapshot" not in deps or cached_versions[0] == _snapshot_version
+        tag_match = "tag" not in deps or cached_versions[1] == _tag_version
+        if snap_match and tag_match:
+            return entry[1]
+        # Stale: serve it if SWR-eligible, else fall through to recompute.
+        if key in _SWR_KEYS:
+            return entry[1]
+    return _cache_set(key, compute, deps)
+
+
 @app.on_event("startup")
 def _start_background_watcher():
     """Auto-import zips that land in IG_WATCH_FOLDER. Disabled by default —
@@ -146,6 +169,54 @@ def _start_background_watcher():
     triggered /api/scan endpoint is cheaper and almost always the right
     choice when watching a large folder like the Drive root."""
     watcher_mod.start_watcher_thread()
+
+
+def _do_warm(label: str = "prewarm"):
+    """Force-refresh the three heavy endpoints. Uses `_cache_set` (not
+    `_cached`) so a stale-but-present entry doesn't short-circuit the
+    fresh compute that this warm exists to perform."""
+    warmed: list[str] = []
+    try:
+        _cache_set("home", _home_compute)
+        warmed.append("home")
+    except Exception as e:
+        print(f"[{label}] home failed: {e}", flush=True)
+    try:
+        _cache_set("lists_pure", _lists_pure_compute_default, deps=_DEPS_SNAPSHOT_ONLY)
+        warmed.append("lists")
+    except Exception as e:
+        print(f"[{label}] lists failed: {e}", flush=True)
+    try:
+        _cache_set("activity_log", _activity_log_compute, deps=_DEPS_BOTH)
+        warmed.append("activity_log")
+    except Exception as e:
+        print(f"[{label}] activity_log failed: {e}", flush=True)
+    if warmed:
+        print(f"[{label}] warmed caches: {', '.join(warmed)}", flush=True)
+
+
+# Debounced re-prewarm: a snapshot/tag bump invalidates the cache, but
+# rather than letting the next user request pay the 30-100s cold-cache
+# bill, we kick off a background warm. Debouncing coalesces bursts —
+# importing 5 zips in a row should warm once at the end, not 5 times
+# overlapping. Timer pattern: each bump cancels the pending timer and
+# schedules a fresh one, so the warm runs `_REPREWARM_DELAY_S` after
+# the LAST bump in a burst.
+_REPREWARM_DELAY_S = 3.0
+_reprewarm_timer: _threading.Timer | None = None
+_reprewarm_lock = _threading.Lock()
+
+
+def _schedule_reprewarm():
+    global _reprewarm_timer
+    with _reprewarm_lock:
+        if _reprewarm_timer is not None:
+            _reprewarm_timer.cancel()
+        t = _threading.Timer(_REPREWARM_DELAY_S, _do_warm, args=("reprewarm",))
+        t.daemon = True
+        t.name = "igt-reprewarm"
+        _reprewarm_timer = t
+        t.start()
 
 
 @app.on_event("startup")
@@ -162,31 +233,14 @@ def _prewarm_caches():
     user (10s of background work, 0s of foreground waiting)."""
     import threading
 
-    def _do_warm():
+    def _boot_warm():
         # Tiny stagger so uvicorn's "startup complete" log lands first
         # in stdout — keeps the boot sequence readable.
         import time as _t
         _t.sleep(0.5)
-        warmed: list[str] = []
-        try:
-            _cached("home", _home_compute)
-            warmed.append("home")
-        except Exception as e:
-            print(f"[prewarm] home failed: {e}", flush=True)
-        try:
-            _cached("lists_pure", _lists_pure_compute_default, deps=_DEPS_SNAPSHOT_ONLY)
-            warmed.append("lists")
-        except Exception as e:
-            print(f"[prewarm] lists failed: {e}", flush=True)
-        try:
-            _cached("activity_log", _activity_log_compute, deps=_DEPS_BOTH)
-            warmed.append("activity_log")
-        except Exception as e:
-            print(f"[prewarm] activity_log failed: {e}", flush=True)
-        if warmed:
-            print(f"[prewarm] warmed caches: {', '.join(warmed)}", flush=True)
+        _do_warm("prewarm")
 
-    threading.Thread(target=_do_warm, daemon=True, name="igt-prewarm").start()
+    threading.Thread(target=_boot_warm, daemon=True, name="igt-prewarm").start()
 
 
 @app.get("/api/scan-status")
@@ -1263,9 +1317,10 @@ def _activity_log_compute():
     1. Creation events (someone started following you, you followed someone,
        you sent a request, they sent you a request) carry the EXACT IG
        export_timestamp from the underlying row, not just the snapshot's
-       taken_at. Resolution events (unfollowed_you, you_unfollowed,
-       removed_you, request resolutions) fall back to the curr snapshot's
-       taken_at because the underlying data is gone.
+       taken_at. Inbound unfollows expose a bounded interval because IG
+       only tells us they were present in the previous snapshot and gone
+       in the current one. Other disappearances fall back to the current
+       snapshot's taken_at because the underlying data is gone.
 
     2. Resolution events split based on current state so the user sees what
        actually happened: 'they_accepted' vs 'pending_withdrawn',
@@ -1339,9 +1394,19 @@ def _activity_log_compute():
             except (OSError, ValueError):
                 return None
 
-        def emit(events_list, kind, username, snapshot_id, fallback_ts, actual_epoch=None):
+        def emit(
+            events_list,
+            kind,
+            username,
+            snapshot_id,
+            fallback_ts,
+            actual_epoch=None,
+            *,
+            time_lower_bound=None,
+            time_upper_bound=None,
+        ):
             actual_iso = epoch_to_iso(actual_epoch)
-            events_list.append({
+            event = {
                 # Sort/display timestamp prefers the precise IG-recorded
                 # moment when we have one (creation events), otherwise
                 # falls back to the snapshot's taken_at.
@@ -1353,7 +1418,14 @@ def _activity_log_compute():
                 # for events whose actual time predates the snapshot.
                 "snapshot_at": fallback_ts,
                 "actual_event_at": actual_iso,
-            })
+            }
+            if time_lower_bound and time_upper_bound:
+                event.update({
+                    "time_precision": "bounded",
+                    "time_lower_bound": time_lower_bound,
+                    "time_upper_bound": time_upper_bound,
+                })
+            events_list.append(event)
 
         events: list[dict] = []
         prev_sd = None
@@ -1391,7 +1463,17 @@ def _activity_log_compute():
                 pending_left = prev_sd.pending - curr_sd.pending
                 for u in sorted(pending_left):
                     if u in curr_sd.following or u in latest_following_set:
-                        emit(events, "they_accepted", u, s.id, curr_ts)
+                        # The accept-event time = the IG follow timestamp
+                        # on this user's row in the `following` table.
+                        # Prefer the current snapshot's row; fall back to
+                        # the latest snapshot's if curr doesn't have it
+                        # yet (transition split across snapshots). Without
+                        # this, all accepts were tagged with the snapshot's
+                        # taken_at — producing the 17-people-at-the-exact-
+                        # same-minute clusters Joshua reported.
+                        accept_ts = (ts_following.get(s.id, {}).get(u)
+                                  or (ts_following.get(latest, {}).get(u) if latest is not None else None))
+                        emit(events, "they_accepted", u, s.id, curr_ts, accept_ts)
                     else:
                         emit(events, "pending_withdrawn", u, s.id, curr_ts)
 
@@ -1408,11 +1490,15 @@ def _activity_log_compute():
                         # IG sometimes splits "you accepted" across two
                         # snapshots so the per-transition view sees a gap.
                         if u in curr_sd.followers or u in latest_followers_set:
-                            emit(events, "you_accepted", u, s.id, curr_ts)
+                            # When YOU accept, the user becomes your follower —
+                            # the per-event timestamp is in followers.export_timestamp.
+                            accept_ts = (ts_followers.get(s.id, {}).get(u)
+                                      or (ts_followers.get(latest, {}).get(u) if latest is not None else None))
+                            emit(events, "you_accepted", u, s.id, curr_ts, accept_ts)
                         else:
                             emit(events, "incoming_withdrawn", u, s.id, curr_ts)
 
-                # ---------- follower-side disappearances: snapshot-time ----------
+                # ---------- follower-side disappearances ----------
                 # No bounce filter on the event log. The activity log is
                 # an EVENT log — every transition where someone left
                 # followers / following gets emitted, even if the next
@@ -1431,8 +1517,17 @@ def _activity_log_compute():
                 # The you_unfollowed / removed_you split still uses
                 # recently_unfollowed (the ground truth for
                 # user-initiated unfollows).
+                prev_ts = taken_at_by_id.get(prev_id) if prev_id is not None else None
                 for u in sorted(left_followers):
-                    emit(events, "unfollowed_you", u, s.id, curr_ts)
+                    emit(
+                        events,
+                        "unfollowed_you",
+                        u,
+                        s.id,
+                        curr_ts,
+                        time_lower_bound=prev_ts,
+                        time_upper_bound=curr_ts,
+                    )
                 for u in sorted(left_following & curr_sd.recently_unfollowed):
                     emit(events, "you_unfollowed", u, s.id, curr_ts)
                 for u in sorted(left_following - curr_sd.recently_unfollowed):
@@ -1557,6 +1652,67 @@ def _timeline_compute():
             cum_unfollowers_at[s.id] = len(cumulative_unfollowers)
             prev_followers = curr_followers
 
+        # Per-snapshot deltas — counts of accounts that newly appeared in
+        # each list relative to the previous chronological snapshot. Lets
+        # the History chart visualise the *flow* of follow events instead
+        # of just the cumulative totals:
+        #   new_outgoing_requests — you sent N new follow requests
+        #   new_follows           — N follows became real (public auto-
+        #                            accepts + private accept-of-pending)
+        #   new_incoming_requests — N new requests landed in your inbox
+        #   new_followers         — N new followers were gained
+        # First snapshot has no prior to diff against → emit 0 for all
+        # four. Same set-difference machinery as the cumulative count
+        # above; one full pass per metric.
+        following_by_sid: dict[int, set[str]] = {}
+        for r in conn.execute("SELECT snapshot_id, username FROM following").fetchall():
+            following_by_sid.setdefault(int(r["snapshot_id"]), set()).add(r["username"])
+        pending_by_sid: dict[int, set[str]] = {}
+        for r in conn.execute(
+            "SELECT snapshot_id, username FROM pending_follow_requests "
+            "WHERE source_label IN ('pending_follow_requests', 'both')"
+        ).fetchall():
+            pending_by_sid.setdefault(int(r["snapshot_id"]), set()).add(r["username"])
+        incoming_by_sid: dict[int, set[str]] = {}
+        for r in conn.execute(
+            "SELECT snapshot_id, username FROM incoming_follow_requests"
+        ).fetchall():
+            incoming_by_sid.setdefault(int(r["snapshot_id"]), set()).add(r["username"])
+
+        new_followers_at: dict[int, int] = {}
+        new_follows_at: dict[int, int] = {}
+        new_outgoing_at: dict[int, int] = {}
+        new_incoming_at: dict[int, int] = {}
+        prev_followers_set: set[str] | None = None
+        prev_following_set: set[str] | None = None
+        prev_pending_set: set[str] | None = None
+        prev_incoming_set: set[str] | None = None
+        for s in snaps:
+            curr_followers_set = followers_by_sid.get(s.id, set())
+            curr_following_set = following_by_sid.get(s.id, set())
+            curr_pending_set = pending_by_sid.get(s.id, set())
+            curr_incoming_set = incoming_by_sid.get(s.id, set())
+            new_followers_at[s.id] = (
+                len(curr_followers_set - prev_followers_set)
+                if prev_followers_set is not None else 0
+            )
+            new_follows_at[s.id] = (
+                len(curr_following_set - prev_following_set)
+                if prev_following_set is not None else 0
+            )
+            new_outgoing_at[s.id] = (
+                len(curr_pending_set - prev_pending_set)
+                if prev_pending_set is not None else 0
+            )
+            new_incoming_at[s.id] = (
+                len(curr_incoming_set - prev_incoming_set)
+                if prev_incoming_set is not None else 0
+            )
+            prev_followers_set = curr_followers_set
+            prev_following_set = curr_following_set
+            prev_pending_set = curr_pending_set
+            prev_incoming_set = curr_incoming_set
+
         # Resolve each snapshot's taken_at from a single bulk query.
         taken_at_by_id = {
             int(r["id"]): r["taken_at"]
@@ -1576,6 +1732,12 @@ def _timeline_compute():
                 "pending": pending_count.get(s.id, 0),
                 "incoming": incoming_count.get(s.id, 0),
                 "cumulative_unfollowers": cum_unfollowers_at.get(s.id, 0),
+                # Deltas vs. the previous chronological snapshot.
+                # First snapshot is 0 for all four (no prior).
+                "new_followers": new_followers_at.get(s.id, 0),
+                "new_follows": new_follows_at.get(s.id, 0),
+                "new_outgoing_requests": new_outgoing_at.get(s.id, 0),
+                "new_incoming_requests": new_incoming_at.get(s.id, 0),
             })
         return {"snapshots": out}
 
@@ -2162,6 +2324,8 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
             "unfollowers_you_still_follow",
             "mutuals",
             "public_mutuals",
+            "they_followed_first",
+            "you_followed_first",
             "all_following",
             "pending",
             "all_followers",
@@ -2227,6 +2391,27 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         sections["public_mutuals"] = sorted(
             u for u in mutual_set
             if privacy_map.get(u) == "likely_public" or u in now_public_set
+        )
+
+        # "They followed you first" / "You followed them first":
+        # subsets of the current mutual set, partitioned by which
+        # side IG's per-row export_timestamp says happened earlier.
+        # Useful for spotting "who's been actively engaging with me"
+        # vs. "who I added and they reciprocated later." Skips users
+        # with missing timestamps on either side — older imports
+        # before IG started recording per-row export_timestamp can
+        # lack the data, and there's no useful answer in that case.
+        sections["they_followed_first"] = sorted(
+            u for u in mutual_set
+            if followers_ts.get(u) is not None
+            and following_ts.get(u) is not None
+            and followers_ts[u] < following_ts[u]
+        )
+        sections["you_followed_first"] = sorted(
+            u for u in mutual_set
+            if followers_ts.get(u) is not None
+            and following_ts.get(u) is not None
+            and following_ts[u] < followers_ts[u]
         )
 
         # Per-row chronological dates for history lists. Without these, lists like
@@ -3030,6 +3215,41 @@ _LOOKUP_HOT_TTL_S = 30.0
 _LOOKUP_HOT_MAX = 500
 
 
+# Per-snapshot-version cache for the heavy globals every /api/lookup
+# rebuilds: the latest snapshot's full follower/following/pending sets,
+# and the rename-chain alias map (which scans all 1M+ rows in
+# following/followers/pending). Without this, 10 concurrent lookups
+# each loaded 1.3M rows from SQLite and serialised on the GIL,
+# producing the 30s timeouts Joshua reported. Refreshes lazily when
+# _snapshot_version bumps; thread-safe via a per-cache lock.
+_LOOKUP_GLOBALS: tuple[int, dict] | None = None
+_LOOKUP_GLOBALS_LOCK = _threading.Lock()
+
+
+def _lookup_globals(conn):
+    """Return globals shared by every lookup, cached per snapshot version.
+    Stampede-protected so a burst of concurrent first-callers compute once
+    and the rest pick up the cached result."""
+    global _LOOKUP_GLOBALS
+    cached = _LOOKUP_GLOBALS
+    if cached is not None and cached[0] == _snapshot_version:
+        return cached[1]
+    with _LOOKUP_GLOBALS_LOCK:
+        cached = _LOOKUP_GLOBALS
+        if cached is not None and cached[0] == _snapshot_version:
+            return cached[1]
+        latest = q.latest_id(conn)
+        snap = q.snapshot_data(conn, latest) if latest is not None else None
+        alias_map = q.username_alias_map(conn)
+        result = {
+            "latest_id": latest,
+            "snapshot_data": snap,
+            "alias_map": alias_map,
+        }
+        _LOOKUP_GLOBALS = (_snapshot_version, result)
+        return result
+
+
 @app.get("/api/lookup")
 def lookup(account: str):
     username, profile_url = normalize_account_input(account)
@@ -3050,18 +3270,24 @@ def lookup(account: str):
 
 def _lookup_compute(username: str, profile_url: str):
     with db_conn() as conn:
+        # Heavy globals (latest snapshot data + rename map) come from
+        # the per-snapshot-version cache so we don't rebuild them on
+        # every lookup.
+        globals_ = _lookup_globals(conn)
+        latest = globals_["latest_id"]
+        sd = globals_["snapshot_data"]
+        alias_map = globals_["alias_map"]
+
         summary = q.ever_summary(conn, username)
         tags = tags_mod.get_tags(conn, username)
-        aliases = q.username_alias_map(conn).get(username, [])
+        aliases = alias_map.get(username, [])
         privacy = q.privacy_status_bulk(conn, [username]).get(username, "unknown")
 
         # Current-snapshot relationship state — needed by the browser
         # extension overlay so it can render "mutual" / "doesn't follow back"
         # without making a second request.
-        latest = q.latest_id(conn)
         currently_following = currently_follower = currently_pending = currently_incoming = False
-        if latest is not None:
-            sd = q.snapshot_data(conn, latest)
+        if sd is not None:
             currently_following = username in sd.following
             currently_follower = username in sd.followers
             currently_pending = username in sd.pending
@@ -3327,9 +3553,16 @@ def profile_observation(payload: dict = Body(...)):
             fields,
         )
         conn.commit()
-    # Bumping the tag version is the cheapest way to invalidate the lookup
-    # cache so the next /api/lookup for this username picks up fresh data.
-    _bump_tag_version()
+    # Surgically invalidate only this username's lookup caches —
+    # observations are extension-driven and arrive on every profile
+    # page load, so calling _bump_tag_version() here would schedule a
+    # full reprewarm of home/lists/activity_log every time the user
+    # browses a profile. That cumulative compute peaks at 2+ GB / 300%
+    # CPU and starves concurrent lookup threads, causing the
+    # extension-overlay slowness Joshua reported. Targeted eviction
+    # leaves the global aggregates alone.
+    _cache.pop(f"lookup:{username}", None)
+    _LOOKUP_HOT.pop(username, None)
     return {"ok": True}
 
 
@@ -3852,6 +4085,106 @@ def delete_media(username: str, media_id: str, ext: str):
     except OSError:
         pass
     return {"ok": True, "deleted": f"{username}/{media_id}.{ext}"}
+
+
+@app.post("/api/media-move")
+def media_move(payload: dict = Body(...)):
+    """Reattach archived media from one username folder to another.
+    Used to fix media that landed under @unknown because the runner
+    couldn't determine the username at save time (e.g., highlights —
+    `/stories/highlights/<id>/` URLs don't include the user).
+
+    Body: {source_user, target_user, items: [{media_id, ext}, ...]}
+    Each (media_id, ext) gets resolved via _media_path on both sides
+    (path-traversal protection inherited), then renamed across folders.
+    Cross-device renames fall back to copy+unlink. Empty source group
+    folders are pruned afterward; if the source-user folder ends up
+    empty, that gets pruned too so the home-page archive list drops
+    the @unknown entry once it's cleaned out."""
+    source = (payload.get("source_user") or "").strip()
+    target_raw = (payload.get("target_user") or "").strip().lstrip("@")
+    items = payload.get("items") or []
+    import re
+    if not source or not re.fullmatch(r"[A-Za-z0-9._]{1,30}", source):
+        raise HTTPException(status_code=400, detail="Invalid source_user.")
+    if not target_raw or not re.fullmatch(r"[A-Za-z0-9._]{1,30}", target_raw):
+        raise HTTPException(status_code=400, detail="Invalid target_user.")
+    target = target_raw
+    if source == target:
+        raise HTTPException(status_code=400, detail="source and target must differ.")
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=400, detail="items list is required.")
+
+    src_root = _MEDIA_DIR / source
+    if not src_root.is_dir():
+        raise HTTPException(status_code=404, detail=f"source folder not found: {source}")
+
+    moved = 0
+    overwrote = 0
+    failed: list[dict] = []
+    touched_groups: set[Path] = set()  # source-side group dirs to consider pruning
+    import shutil
+    for it in items:
+        media_id = (it.get("media_id") or "").strip()
+        ext = (it.get("ext") or "").strip().lower()
+        try:
+            src_path = _media_path(source, media_id, ext)
+            tgt_path = _media_path(target, media_id, ext)
+        except HTTPException as e:
+            failed.append({"media_id": media_id, "ext": ext, "error": e.detail})
+            continue
+        if not src_path.is_file():
+            failed.append({"media_id": media_id, "ext": ext, "error": "source missing"})
+            continue
+        try:
+            tgt_path.parent.mkdir(parents=True, exist_ok=True)
+            existed = tgt_path.exists()
+            try:
+                src_path.rename(tgt_path)
+            except OSError:
+                # Cross-device or some other rename failure — fall back
+                # to copy + unlink so the move still completes.
+                shutil.copy2(src_path, tgt_path)
+                src_path.unlink()
+            moved += 1
+            if existed:
+                overwrote += 1
+            # Track parent on the source side for empty-prune below.
+            if src_path.parent != src_root:
+                touched_groups.add(src_path.parent)
+        except OSError as e:
+            failed.append({"media_id": media_id, "ext": ext, "error": str(e)})
+
+    # Prune empty source group folders.
+    for d in touched_groups:
+        try:
+            if d.is_dir() and not any(d.iterdir()):
+                d.rmdir()
+        except OSError:
+            pass
+    # And the source-user folder itself if everything's gone.
+    try:
+        if src_root.is_dir() and not any(src_root.iterdir()):
+            src_root.rmdir()
+    except OSError:
+        pass
+
+    with db_conn() as conn:
+        audit_mod.log(
+            conn,
+            "media_move",
+            target=f"{source}->{target}",
+            ok=True,
+            moved=moved,
+            overwrote=overwrote,
+            failed=len(failed),
+        )
+
+    # Bump cache so the lookup overlay's archived_media_count refreshes
+    # for both the source and target users.
+    _bump_snapshot_version()
+    return {"ok": True, "moved": moved, "overwrote": overwrote, "failed": failed,
+            "source_user": source, "target_user": target}
 
 
 @app.get("/api/media-list/{username}")
