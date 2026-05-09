@@ -2485,6 +2485,82 @@ async function _waitForStoryManifest(albumId, timeoutMs = 4000) {
   return null;
 }
 
+// DOM-walk fallback for the stories-entry path: when no manifest is
+// cached for this user, save whatever <img>/<video> is currently
+// rendered as a story slide. Best effort — for blob:-backed videos
+// we save the poster image or a canvas frame grab (one still per
+// video story). Re-archives dedup against existing files via the
+// CDN-filename slide fingerprint, so re-firing on the same slide is
+// free. Returns { savedCount, totalCount, groupId } or null.
+async function _archiveStoryEntryFromDom(storyUser) {
+  // Give IG ~600ms to mount its story player before walking, otherwise
+  // we'd race and find nothing on cold tab loads. Quick poll: stop as
+  // soon as the player has rendered a save-worthy element.
+  let caps = [];
+  for (let i = 0; i < 6; i++) {
+    caps = findAllSaveableMedia();
+    if (caps.length) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  if (!caps.length) {
+    return { savedCount: 0, totalCount: 0, groupId: `story_${storyUser}` };
+  }
+  // groupId is `story_<username>` here (no userPk available). Per-slide
+  // filename uses the CDN URL fingerprint when present so re-archives
+  // dedup; canvas-grabbed frames fall back to slide<N> + a millisecond
+  // suffix so consecutive grabs don't clobber one another.
+  const groupId = `story_${storyUser}`;
+  const _slideFp = (cap) => {
+    const fromUrl = (url) => {
+      if (!url || url.startsWith("blob:") || url.startsWith("data:")) return null;
+      try {
+        const u = new URL(url);
+        const last = (u.pathname.split("/").pop() || "").replace(/\.[^.]+$/, "");
+        const safe = last.replace(/[^A-Za-z0-9_]/g, "_");
+        return safe || null;
+      } catch { return null; }
+    };
+    return fromUrl(cap.src) || fromUrl(cap.fallbackSrc) || null;
+  };
+  let savedCount = 0;
+  for (let i = 0; i < caps.length; i++) {
+    const cap = caps[i];
+    const fp = _slideFp(cap) || `slide${i + 1}_${Date.now()}`;
+    const slideId = `${groupId}/${fp}`;
+    const isBlob = (cap.src || "").startsWith("blob:");
+    let fetched = await _fetchAsBase64(cap.src);
+    let usedFallback = false;
+    if ((!fetched.ok || !fetched.body) && cap.fallbackSrc) {
+      fetched = await _fetchAsBase64(cap.fallbackSrc);
+      usedFallback = true;
+    }
+    if (!fetched.ok || !fetched.body) {
+      const frame = _captureVideoFrameAsBase64(cap.element);
+      if (frame) { fetched = { ok: true, body: frame }; usedFallback = true; }
+    }
+    if (!fetched.ok || !fetched.body) {
+      console.warn(`[IG Tracker] DOM story-archive: slide ${i + 1} failed (${fetched.error || "unknown"})`);
+      continue;
+    }
+    const ext = (cap.media_type === "video" && !usedFallback) ? "mp4" : "jpg";
+    const resp = await bgFetch(`${_settings.trackerUrl}/api/media-bytes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: storyUser, media_id: slideId, ext, bytes_b64: fetched.body }),
+    });
+    if (!resp.ok) {
+      const detail = (resp.body && resp.body.detail) || resp.error || `HTTP ${resp.status}`;
+      console.warn(`[IG Tracker] DOM story-archive: POST failed for slide ${i + 1} (${detail})`);
+      continue;
+    }
+    const body = resp.body || {};
+    const summary = body.size ? `${body.size} bytes` : (body.skipped || "ok");
+    console.log(`[IG Tracker] DOM story-archive: saved @${storyUser}/${slideId}.${ext}${isBlob ? " (blob→canvas)" : ""} (${summary})`);
+    savedCount += 1;
+  }
+  return { savedCount, totalCount: caps.length, groupId };
+}
+
 // Used by the stories-entry fallback: when the URL is just
 // `/stories/<user>/` (no story id), scan every cached manifest for
 // items whose user.username matches `username`. Returns {items, userPk}
@@ -2698,9 +2774,31 @@ async function _maybeArchiveCurrentMediaImpl({ manual = false, fallbackUsername 
             summary: `${savedCount}/${found.items.length} slides (manifest, entry-url)`,
           };
         }
-        // 0 saved despite manifest existing — fall through to retry.
+        // 0 saved despite manifest existing — fall through to DOM walk.
       }
-      console.log(`[IG Tracker] archive defer: '${path}' is stories entry — watching for IG to navigate to a specific story`);
+      // DOM walk fallback: when no manifest is cached (interceptor missed
+      // the response, or IG used a shape our walker doesn't match), grab
+      // whatever <img>/<video> is currently rendered. Worse fidelity than
+      // the manifest path (video → still frame for blob: URLs), but
+      // produces SOMETHING for users on stuck-entry-URL accounts. The
+      // retry below still runs in parallel — if IG eventually specializes
+      // the URL, the manifest path will fire next and save real video.
+      const domResult = await _archiveStoryEntryFromDom(storyUser);
+      if (domResult && domResult.savedCount > 0) {
+        // Re-arm the retry anyway: subsequent slides may push a real
+        // story id when the user advances, and we'd want manifest-quality
+        // saves for those.
+        _scheduleStoryEntryRetry(path);
+        return {
+          ok: true,
+          username: storyUser,
+          media_id: domResult.groupId,
+          slides: domResult.totalCount,
+          saved: domResult.savedCount,
+          summary: `${domResult.savedCount}/${domResult.totalCount} slides (DOM walk, entry-url)`,
+        };
+      }
+      console.log(`[IG Tracker] archive defer: '${path}' is stories entry — watching for IG to navigate to a specific story (manifest miss, DOM walk found ${domResult?.totalCount || 0} candidates)`);
       _scheduleStoryEntryRetry(path);
       return { ok: false, error: "stories entry; deferring" };
     }
