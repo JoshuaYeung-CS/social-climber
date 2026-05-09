@@ -593,6 +593,76 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
             "ts": int(last_seen.timestamp()),
         })
 
+    # Stateful: inbound request withdrawn / expired. Mirrors the
+    # recent_unfollow pattern but for the incoming_follow_requests
+    # table. Surfaces every account whose last appearance in your
+    # incoming requests was within the past RECENT_UNFOLLOW_ALERT_DAYS
+    # days but who isn't currently requesting AND isn't currently a
+    # follower (which would mean you accepted and they followed
+    # through). The diff alert (removed_their_request /
+    # favorite_removed_their_request) fires once per import; this
+    # stateful one keeps surfacing them for a week so the user has
+    # time to notice + act on missed requests.
+    #
+    # IG doesn't tell us WHO ended it (they withdrew vs you ignored
+    # vs auto-expired) — same ambiguity as request_withdrawn_inbound
+    # in the diff path. Phrasing stays honest.
+    cutoff_request = datetime.now(timezone.utc) - timedelta(days=RECENT_UNFOLLOW_ALERT_DAYS)
+    cutoff_request_iso = cutoff_request.replace(
+        tzinfo=None, microsecond=0
+    ).isoformat()
+    last_requested_iso: dict[str, str] = {}
+    for r in conn.execute(
+        "SELECT i.username, MAX(s.taken_at) AS last_seen "
+        "FROM incoming_follow_requests i "
+        "JOIN snapshots s ON s.id = i.snapshot_id "
+        "WHERE s.taken_at IS NOT NULL "
+        "GROUP BY i.username "
+        "HAVING last_seen >= ?",
+        (cutoff_request_iso,),
+    ).fetchall():
+        if r["last_seen"]:
+            last_requested_iso[r["username"]] = r["last_seen"]
+    # Skip users already surfaced by recent_unfollow. IG's pending-list
+    # bounce sometimes flicks an unfollower briefly through your incoming
+    # requests on the way out (the same memo'd quirk that drives the
+    # bounced-now filter on the diff side); without this skip, we'd
+    # double-alert on the same real-world event with two different
+    # framings, none of them quite right.
+    _ru_set = set(recent_unfollow_users)
+    recent_request_withdrawn_users = [
+        u for u in last_requested_iso
+        if u not in curr.incoming_requests
+        and u not in curr.followers
+        and u not in suppressed
+        and u not in _ru_set
+    ]
+    rw_priv, rw_np = _privacy_for(recent_request_withdrawn_users)
+    for u in sorted(recent_request_withdrawn_users,
+                     key=lambda x: last_requested_iso[x], reverse=True):
+        last_seen = _parse_iso(last_requested_iso[u])
+        if last_seen is None:
+            continue
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        days_ago = (now_utc - last_seen).days
+        is_fav = u in favorites
+        priv_label = _privacy_label(rw_priv.get(u, "unknown"), u in rw_np)
+        prefix = "★✕" if is_fav else "✕"
+        fav_label = "★ Favorite " if is_fav else ""
+        when_text = "today" if days_ago == 0 else (
+            f"{days_ago} day{'s' if days_ago != 1 else ''} ago"
+        )
+        stateful.append({
+            "kind": "favorite_recent_request_withdrawn" if is_fav else "recent_request_withdrawn",
+            "username": u,
+            "severity": "high" if is_fav else "normal",
+            "message": f"{prefix} {fav_label}{u} ({priv_label}) — their follow request to you went away (last seen requesting {when_text}).",
+            "days": days_ago,
+            "privacy": rw_priv.get(u, "unknown"),
+            "ts": int(last_seen.timestamp()),
+        })
+
     # Stateful: tagged-as-disabled or tagged-as-unavailable accounts that show
     # real proof-of-life. The only reliable signal is them appearing in YOUR
     # followers (they actively follow you back, so their account must be alive).
@@ -618,26 +688,41 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
         for u in to_unflag:
             set_flag(conn, u, flag, False)
 
-    # Dedup against stateful unfollow alerts: the per-import diff alert
-    # for "they unfollowed you" / "they removed you as follower" duplicates
-    # the same event surfaced by `recent_unfollow` / `favorite_recent_unfollow`,
-    # which carries strictly more info (the "last seen following N days
-    # ago" suffix) and is sticky across imports. Suppress the diff side
-    # so the user sees one entry per real-world event, not two. Other
-    # diff kinds (request_rejected, accepted, public_now_follows_back)
+    # Dedup against stateful alerts: the per-import diff alert
+    # duplicates the same event surfaced by the matching stateful
+    # alert (which carries the "N days ago" suffix and persists for a
+    # week). Suppress the diff side so the user sees one entry per
+    # real-world event, not two.
+    #
+    # Pairs:
+    #   they_unfollowed_you / favorite_unfollowed_you
+    #     ↔ recent_unfollow / favorite_recent_unfollow
+    #   they_removed_you_as_follower / favorite_removed_you
+    #     ↔ recent_unfollow / favorite_recent_unfollow (same source list)
+    #   removed_their_request / favorite_removed_their_request
+    #     ↔ recent_request_withdrawn / favorite_recent_request_withdrawn
+    # Other diff kinds (request_rejected, accepted, public_now_follows_back)
     # have no stateful equivalent — those pass through.
     _stateful_unfollow_users = {
         a["username"] for a in stateful
         if a.get("kind") in ("recent_unfollow", "favorite_recent_unfollow")
     }
-    _redundant_diff_kinds = {
-        "they_unfollowed_you", "favorite_unfollowed_you",
-        "they_removed_you_as_follower", "favorite_removed_you",
+    _stateful_request_withdrawn_users = {
+        a["username"] for a in stateful
+        if a.get("kind") in ("recent_request_withdrawn", "favorite_recent_request_withdrawn")
     }
     diff_alerts = [
         a for a in diff_alerts
-        if not (a.get("kind") in _redundant_diff_kinds
-                and a.get("username") in _stateful_unfollow_users)
+        if not (
+            a.get("kind") in (
+                "they_unfollowed_you", "favorite_unfollowed_you",
+                "they_removed_you_as_follower", "favorite_removed_you",
+            ) and a.get("username") in _stateful_unfollow_users
+        ) and not (
+            a.get("kind") in (
+                "removed_their_request", "favorite_removed_their_request",
+            ) and a.get("username") in _stateful_request_withdrawn_users
+        )
     ]
 
     # Sort newest-first by ts. Pure chronological — favorites and
