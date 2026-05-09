@@ -601,14 +601,13 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 and a.get("username") in _stateful_unfollow_users)
     ]
 
-    # Sort newest-first within each list. Diff alerts mostly share the
-    # latest snapshot's ts, so the favorites/non-favorites grouping
-    # we want comes from a stable secondary sort by severity (high
-    # first) then by username. Stateful alerts have meaningful ts
-    # spread across days, so chronological sorting matters most there.
-    SEV_ORDER = {"high": 0, "normal": 1, "good": 2, "muted": 3}
-    diff_alerts.sort(key=lambda a: (SEV_ORDER.get(a.get("severity"), 9), -a.get("ts", 0), a.get("username", "")))
-    stateful.sort(key=lambda a: (SEV_ORDER.get(a.get("severity"), 9), -a.get("ts", 0), a.get("username", "")))
+    # Sort newest-first by ts. Pure chronological — favorites and
+    # non-favorites interleave by date, so the most recent activity
+    # always reads at the top regardless of severity. Username is the
+    # secondary sort to keep ordering stable when many alerts share
+    # the same ts (e.g. all the diff alerts firing for one import).
+    diff_alerts.sort(key=lambda a: (-a.get("ts", 0), a.get("username", "")))
+    stateful.sort(key=lambda a: (-a.get("ts", 0), a.get("username", "")))
 
     return {
         "diff": diff_alerts,
