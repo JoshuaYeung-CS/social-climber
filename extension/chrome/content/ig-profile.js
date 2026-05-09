@@ -41,6 +41,15 @@ const RESERVED = new Set([
 
 let _settings = null;
 let _lastUsername = null;
+// Sticky echo of the most recent username we observed via a profile URL.
+// Unlike _lastUsername (which gets wiped on every navigation to a non-
+// profile path so the overlay can react), this is only ever overwritten
+// by the NEXT profile visit. Manual archive triggers fired from
+// /stories/highlights/<id>/ — where the URL has no username at all and
+// _lastUsername has already been wiped by onLocationMaybeChanged — fall
+// back to this so the saved media lands under the right account folder
+// instead of @unknown.
+let _lastProfileUsername = null;
 let _panelOpen = true;
 let _panelEl = null;
 // Which categories Archive-selected walks. Persisted to
@@ -1600,6 +1609,7 @@ function onLocationMaybeChanged() {
   }
   if (username === _lastUsername) return;
   _lastUsername = username;
+  _lastProfileUsername = username;
   refreshOverlay(username);
   if (_settings?.autoArchiveMedia) maybeArchiveCurrentMedia();
 }
@@ -3377,7 +3387,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "archive-current-media") {
     (async () => {
       try {
-        const r = await maybeArchiveCurrentMedia({ manual: true });
+        // Pass _lastProfileUsername as fallback so manual archives from
+        // /stories/highlights/<id>/ (URL has no username, _lastUsername
+        // has been wiped) attribute the saved media to the profile the
+        // user just came from instead of @unknown.
+        const r = await maybeArchiveCurrentMedia({
+          manual: true,
+          fallbackUsername: _lastProfileUsername,
+        });
         sendResponse(r || { ok: false, error: "no result" });
       } catch (e) {
         sendResponse({ ok: false, error: e.message || String(e) });
