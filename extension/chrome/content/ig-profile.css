@@ -150,6 +150,15 @@
   text-decoration: none;
 }
 .igt-link:hover { color: #4f8cff; }
+.igt-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-top: 4px;
+}
+.igt-link-archive { color: #8f8f99; }
+.igt-link-archive:hover { color: #ffb454; }
 .igt-vault-btn {
   display: block;
   width: 100%;

@@ -1411,7 +1411,12 @@ function renderPanel(panel, username, data) {
       <div class="igt-tags">${tagBtns}</div>
       ${saveBtn}
       ${archiveAllBtn}
-      <a class="igt-link" href="${_settings.trackerUrl}/?lookup=${encodeURIComponent(username)}" target="_blank" rel="noopener">↗ open in tracker</a>
+      <div class="igt-link-row">
+        <a class="igt-link" href="${_settings.trackerUrl}/?lookup=${encodeURIComponent(username)}" target="_blank" rel="noopener">↗ open in tracker</a>
+        ${(data.archived_media_count && data.archived_media_count > 0)
+          ? `<a class="igt-link igt-link-archive" href="${_settings.trackerUrl}/media/${encodeURIComponent(username)}" target="_blank" rel="noopener" title="Open the archived-media gallery for this account">📦 archived media</a>`
+          : ""}
+      </div>
     </div>
   `;
   bindHeaderActions(panel);
