@@ -80,11 +80,17 @@
     const totalKb = (items.reduce((a, b) => a + b.size, 0) / 1024).toFixed(0);
     const fullPageHref = `/media/${encodeURIComponent(username)}`;
     blockEl.dataset.username = username;
+    // Stash the rendered items on the block so the slideshow can pull
+    // them directly without reparsing the DOM. Order here is mtime-desc
+    // (matches the server) but the slideshow steps in render order so
+    // the user sees groups in the same order as the page above.
+    blockEl._archivedItems = items;
     blockEl.innerHTML = `
       <h4 class="archived-heading">
         📦 Archived media
         <span class="muted small">${items.length} item${items.length === 1 ? "" : "s"} &middot; ${totalKb} KB total</span>
         <a class="archived-fullpage-link" href="${escapeAttr(fullPageHref)}" target="_blank" rel="noopener" title="Open full-page archive view in a new tab">↗ Full page</a>
+        <button class="archived-slideshow" data-action="archive-slideshow" title="Cycle through every post and highlight">▶ Slideshow</button>
         <button class="archived-select-toggle" data-action="toggle-archive-select" title="Select multiple to delete in bulk">Select</button>
       </h4>
       <label class="archived-select-all" hidden>
@@ -354,6 +360,135 @@
     if (typeof window.loadArchiveCard === "function") window.loadArchiveCard();
   }
 
+  // ---------- slideshow ----------
+  // Fullscreen overlay that walks every archived file in render order.
+  // Images auto-advance after IMAGE_HOLD_MS; videos play through and
+  // advance on `ended` (or after VIDEO_MAX_MS as a hard cap so a glitchy
+  // 10-minute clip doesn't stall the loop). Space pauses; arrow keys
+  // step manually; Esc closes. Single overlay shared across mounts —
+  // closing one before opening another (defensive cleanup).
+  const IMAGE_HOLD_MS = 4000;
+  const VIDEO_MAX_MS = 30000;
+  let _slideshowState = null;
+
+  function _slideshowGroupLabel(item) {
+    const key = item.group || "_flat";
+    if (key === "_flat") return "(other)";
+    const m = key.match(/^([^_]+)_(.+)$/);
+    const kind = m ? m[1] : "media";
+    const id = m ? m[2] : key;
+    const icon = kind === "post" ? "📷"
+               : kind === "reel" ? "🎬"
+               : kind === "highlight" ? "📚"
+               : kind === "story" ? "📖"
+               : "📦";
+    return `${icon} ${kind} ${id}`;
+  }
+
+  function closeSlideshow() {
+    if (!_slideshowState) return;
+    const { overlay, onKey, advanceTimer } = _slideshowState;
+    if (advanceTimer) clearTimeout(advanceTimer);
+    if (onKey) document.removeEventListener("keydown", onKey);
+    if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    _slideshowState = null;
+  }
+
+  function _renderSlide() {
+    if (!_slideshowState) return;
+    const s = _slideshowState;
+    const item = s.items[s.index];
+    if (!item) { closeSlideshow(); return; }
+    if (s.advanceTimer) {
+      clearTimeout(s.advanceTimer);
+      s.advanceTimer = null;
+    }
+    const isVideo = item.ext === "mp4";
+    const url = item.url;
+    s.stage.innerHTML = isVideo
+      ? `<video src="${escapeAttr(url)}" autoplay muted playsinline></video>`
+      : `<img src="${escapeAttr(url)}" alt="" />`;
+    s.caption.textContent =
+      `${_slideshowGroupLabel(item)}  ·  slide ${s.index + 1} of ${s.items.length}`;
+    s.playPauseBtn.textContent = s.paused ? "▶" : "⏸";
+    if (s.paused) return;
+    if (isVideo) {
+      const v = s.stage.querySelector("video");
+      if (v) {
+        const onEnded = () => {
+          v.removeEventListener("ended", onEnded);
+          if (_slideshowState === s && !s.paused) _advance(1);
+        };
+        v.addEventListener("ended", onEnded);
+        // Hard cap so a long/looping clip doesn't freeze the show.
+        s.advanceTimer = setTimeout(() => _advance(1), VIDEO_MAX_MS);
+      } else {
+        s.advanceTimer = setTimeout(() => _advance(1), IMAGE_HOLD_MS);
+      }
+    } else {
+      s.advanceTimer = setTimeout(() => _advance(1), IMAGE_HOLD_MS);
+    }
+  }
+
+  function _advance(delta) {
+    if (!_slideshowState) return;
+    const s = _slideshowState;
+    s.index = (s.index + delta + s.items.length) % s.items.length;
+    _renderSlide();
+  }
+
+  function _togglePause() {
+    if (!_slideshowState) return;
+    _slideshowState.paused = !_slideshowState.paused;
+    _renderSlide();
+  }
+
+  function _onSlideshow(e) {
+    const btn = e.target.closest('button[data-action="archive-slideshow"]');
+    if (!btn) return;
+    const block = btn.closest(".archived-media-block");
+    if (!block) return;
+    e.preventDefault();
+    const items = (block._archivedItems || []).filter(
+      (it) => it.ext === "mp4" || /^(jpg|jpeg|png|gif|webp)$/i.test(it.ext)
+    );
+    if (!items.length) return;
+    closeSlideshow();
+    const overlay = document.createElement("div");
+    overlay.className = "archived-slideshow-overlay";
+    overlay.innerHTML = `
+      <button class="ssh-close" type="button" title="Close (Esc)">✕</button>
+      <div class="ssh-stage"></div>
+      <div class="ssh-controls">
+        <button class="ssh-prev" type="button" title="Previous (←)">⟨</button>
+        <button class="ssh-playpause" type="button" title="Play/pause (Space)">⏸</button>
+        <button class="ssh-next" type="button" title="Next (→)">⟩</button>
+      </div>
+      <div class="ssh-caption"></div>
+    `;
+    document.body.appendChild(overlay);
+    const stage = overlay.querySelector(".ssh-stage");
+    const caption = overlay.querySelector(".ssh-caption");
+    const playPauseBtn = overlay.querySelector(".ssh-playpause");
+    const onKey = (ev) => {
+      if (ev.key === "Escape") { ev.preventDefault(); closeSlideshow(); }
+      else if (ev.key === "ArrowLeft") { ev.preventDefault(); _advance(-1); }
+      else if (ev.key === "ArrowRight") { ev.preventDefault(); _advance(1); }
+      else if (ev.key === " ") { ev.preventDefault(); _togglePause(); }
+    };
+    document.addEventListener("keydown", onKey);
+    overlay.addEventListener("click", (ev) => { if (ev.target === overlay) closeSlideshow(); });
+    overlay.querySelector(".ssh-close").addEventListener("click", closeSlideshow);
+    overlay.querySelector(".ssh-prev").addEventListener("click", () => _advance(-1));
+    overlay.querySelector(".ssh-next").addEventListener("click", () => _advance(1));
+    playPauseBtn.addEventListener("click", _togglePause);
+    _slideshowState = {
+      overlay, stage, caption, playPauseBtn, onKey,
+      items, index: 0, paused: false, advanceTimer: null,
+    };
+    _renderSlide();
+  }
+
   let _installed = false;
   function installHandlers() {
     if (_installed) return;
@@ -365,6 +500,7 @@
     document.addEventListener("change", _onGroupChange);
     document.addEventListener("click", _onBulkDelete);
     document.addEventListener("click", _onBulkMove);
+    document.addEventListener("click", _onSlideshow);
   }
 
   // ---------- public API ----------

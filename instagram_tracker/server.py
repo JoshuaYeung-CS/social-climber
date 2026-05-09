@@ -4192,6 +4192,12 @@ def list_media(username: str):
     for p in sorted(d.rglob("*"), key=lambda x: x.stat().st_mtime if x.is_file() else 0, reverse=True):
         if not p.is_file():
             continue
+        # Skip dotfiles — `.archive_complete` is our completion marker
+        # written by /api/archive-complete and `.DS_Store` is macOS
+        # metadata. They aren't real media but were leaking into the
+        # gallery as a tile labelled ".archive_complete" with no preview.
+        if p.name.startswith("."):
+            continue
         rel = p.relative_to(d)
         stem_parts = rel.with_suffix("").parts
         stem = "/".join(stem_parts)

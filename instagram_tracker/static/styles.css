@@ -2149,6 +2149,86 @@ textarea#queue-input::-webkit-scrollbar { display: none; }
   transition: border-color 120ms ease, color 120ms ease;
 }
 .archived-select-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.archived-slideshow {
+  padding: 3px 10px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elev-2, transparent);
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+.archived-slideshow:hover { border-color: var(--accent); color: var(--accent); }
+/* Slideshow overlay — fullscreen, dark, centered media. The stage
+   sizes the media to fit; controls bar sits below; caption above the
+   close button. Single overlay shared across mounts. */
+.archived-slideshow-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(0, 0, 0, 0.92);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 20px 40px;
+  gap: 14px;
+}
+.archived-slideshow-overlay .ssh-stage {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+.archived-slideshow-overlay .ssh-stage img,
+.archived-slideshow-overlay .ssh-stage video {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  background: #000;
+  border-radius: 6px;
+}
+.archived-slideshow-overlay .ssh-controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.archived-slideshow-overlay .ssh-controls button {
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 12px;
+  line-height: 1;
+}
+.archived-slideshow-overlay .ssh-controls button:hover { color: var(--accent); }
+.archived-slideshow-overlay .ssh-caption {
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+  word-break: break-word;
+}
+.archived-slideshow-overlay .ssh-close {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+.archived-slideshow-overlay .ssh-close:hover { color: var(--text); }
 .archived-bulk-bar {
   margin-top: 8px;
   display: flex;
