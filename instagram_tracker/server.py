@@ -1582,6 +1582,36 @@ def _activity_log_compute():
             prev_sd = curr_sd
             prev_id = s.id
 
+        # Dedupe events that refer to the same underlying IG action.
+        # The pending list (and to a lesser extent following / followers /
+        # incoming) bounces in/out of consecutive exports — IG re-includes
+        # the row with its original export_timestamp. The set-difference
+        # diff fires on every re-entry, so a single "you requested" can
+        # produce 5 events across 5 bounce cycles, all tagged with the
+        # same per-event timestamp. We dedupe by
+        # (kind, username, actual_event_at) for events with a precise
+        # IG timestamp; for bounded / fallback events we dedupe by
+        # (kind, username, snapshot_id) which keeps legitimately separate
+        # transitions distinct.
+        seen_event_keys: set[tuple] = set()
+        deduped: list[dict] = []
+        for e in events:
+            actual = e.get("actual_event_at")
+            if actual:
+                key = (e["kind"], e["username"], actual)
+            else:
+                # No precise time — bounded or pure-snapshot event.
+                # Dedupe by snapshot_id so consecutive same-snapshot
+                # emits collapse, but real cross-snapshot transitions
+                # (e.g. an account that left followers, came back, left
+                # again) get one event per transition.
+                key = (e["kind"], e["username"], e["snapshot_id"])
+            if key in seen_event_keys:
+                continue
+            seen_event_keys.add(key)
+            deduped.append(e)
+        events = deduped
+
         # Filter out events involving accounts the user has tagged as
         # ✕ unavailable, ⚠ disabled, or 🎲 random_request. The user has
         # already declared "this account is gone / spam," so surfacing
