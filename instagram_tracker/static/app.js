@@ -129,12 +129,14 @@ function fmtRelativeDate(iso) {
 
 // ---------- scroll persistence per route ----------
 //
-// Persist window.scrollY per URL hash to sessionStorage so reload (or
-// closing+reopening the tab in the same session) lands back at where
-// the user was. Browser default scrollRestoration would jump to top
-// after our SPA rebuild swaps in fresh DOM, so we manage it manually.
-// Tab-scoped (sessionStorage, not localStorage) so two tabs on
-// different routes don't fight each other.
+// Persist window.scrollY per URL hash to localStorage so reload AND
+// Cmd+Shift+T (reopen closed tab — sessionStorage would be cleared
+// across that gesture) both land back where the user was. Browser
+// default scrollRestoration would jump to top after our SPA rebuild
+// swaps in fresh DOM, so we manage it manually. Local-only app on a
+// single browser profile — cross-tab interference isn't a real risk
+// (and even when two tabs are on the same route, last-write-wins is
+// fine for this UX).
 if ("scrollRestoration" in history) {
   history.scrollRestoration = "manual";
 }
@@ -145,8 +147,8 @@ function _scrollRouteKey() {
 function _saveScrollNow() {
   try {
     const y = window.scrollY;
-    if (y <= 0) sessionStorage.removeItem(_SCROLL_KEY_PREFIX + _scrollRouteKey());
-    else sessionStorage.setItem(_SCROLL_KEY_PREFIX + _scrollRouteKey(), String(y));
+    if (y <= 0) localStorage.removeItem(_SCROLL_KEY_PREFIX + _scrollRouteKey());
+    else localStorage.setItem(_SCROLL_KEY_PREFIX + _scrollRouteKey(), String(y));
   } catch {}
 }
 let _scrollSaveTimer = null;
@@ -166,7 +168,7 @@ window.addEventListener("pagehide", _saveScrollNow);  // Safari/iOS
 let _pendingScrollRestoreY = null;
 function _markScrollRestorePending() {
   try {
-    const v = sessionStorage.getItem(_SCROLL_KEY_PREFIX + _scrollRouteKey());
+    const v = localStorage.getItem(_SCROLL_KEY_PREFIX + _scrollRouteKey());
     const y = Number(v);
     if (Number.isFinite(y) && y > 0) _pendingScrollRestoreY = y;
   } catch {}
@@ -1789,37 +1791,51 @@ window.addEventListener("popstate", (e) => {
 // initialized — `goToList` references `select`, which is in the
 // temporal dead zone if we run the bootstrap inline here. Called from
 // the boot section at the bottom of the file.
+// Returns the view name we resolved to ("home" / "lists" / etc.) so the
+// caller can skip loadHome() when we landed somewhere else. Without this
+// return, page reload + Cmd+Shift+T (reopen closed tab) used to bounce
+// the user back to Home: history.state was restored by the browser,
+// the if-no-state branch was skipped, and the default DOM .active
+// class on the home view stuck — so even though state said "lists",
+// nothing in the DOM updated.
 function bootstrapHistory() {
-  // Page-reload restore: if the URL hash points at a list (or any
-  // view), check sessionStorage for a saved scroll position keyed by
-  // that hash and arm the restore. The actual scrollTo happens after
-  // the view's first paint (via _tryRestoreScroll calls in loadLists/
-  // loadHome/etc.) once the document is tall enough.
   _markScrollRestorePending();
-  if (!history.state) {
-    const hash = location.hash.slice(1);
-    if (hash) {
-      const [view, kind] = hash.split("/");
-      if (view) {
-        if (view === "lists" && kind) {
-          history.replaceState({ view: "lists", listKind: kind }, "", `#lists/${kind}`);
-          // Use goToList — it handles dropdown population via
-          // buildListKindOptions() when the option isn't there yet,
-          // sets the right sort default per bucket-vs-non-bucket
-          // kind, and calls loadLists. The previous inline path
-          // skipped buildListKindOptions, so on a fresh tab the
-          // select had no options → select.value never got set →
-          // loadLists ran with no kind → "Loading list…" forever.
-          goToList(kind, false);
-          return;
-        }
-        history.replaceState({ view }, "", `#${view}`);
-        showView(view, false);
-        return;
-      }
+  // Reload / restore-tab case: history.state survives across reloads,
+  // so honor it. Drives showView so the DOM reflects what state says.
+  if (history.state && history.state.view) {
+    const view = history.state.view;
+    const kind = history.state.listKind;
+    if (view === "lists" && kind) {
+      goToList(kind, false);
+      return view;
     }
-    history.replaceState({ view: "home" }, "", "");
+    showView(view, false);
+    return view;
   }
+  // Fresh tab / no state — fall back to the URL hash.
+  const hash = location.hash.slice(1);
+  if (hash) {
+    const [view, kind] = hash.split("/");
+    if (view) {
+      if (view === "lists" && kind) {
+        history.replaceState({ view: "lists", listKind: kind }, "", `#lists/${kind}`);
+        // Use goToList — it handles dropdown population via
+        // buildListKindOptions() when the option isn't there yet,
+        // sets the right sort default per bucket-vs-non-bucket
+        // kind, and calls loadLists. The previous inline path
+        // skipped buildListKindOptions, so on a fresh tab the
+        // select had no options → select.value never got set →
+        // loadLists ran with no kind → "Loading list…" forever.
+        goToList(kind, false);
+        return view;
+      }
+      history.replaceState({ view }, "", `#${view}`);
+      showView(view, false);
+      return view;
+    }
+  }
+  history.replaceState({ view: "home" }, "", "");
+  return "home";
 }
 
 async function openAccountModal(username, push = true) {
@@ -4186,13 +4202,20 @@ function escapeAttr(s) {
 
 // ---------- boot ----------
 
-// Resolve URL-hash routing FIRST so that on a fresh new-tab open of
-// e.g. /#lists/<kind> we navigate to the list before loadHome paints
-// the home view underneath. bootstrapHistory may call goToList (which
-// uses const-declared `select` etc.), so it has to run after all the
-// declarations above have initialized.
-bootstrapHistory();
-loadHome();
+// Resolve URL-hash / saved-state routing FIRST so that on a fresh
+// new-tab open of /#lists/<kind> OR a reload while on a non-home view,
+// we navigate there directly instead of painting Home underneath. If
+// bootstrap landed us on Home, kick off the home fetch; otherwise the
+// destination view's loader (loadLists / loadHistory / etc.) is
+// already firing inside showView/goToList. bootstrapHistory may call
+// goToList (which uses const-declared `select` etc.), so it has to
+// run after all the declarations above have initialized.
+const _bootView = bootstrapHistory();
+if (_bootView === "home") loadHome();
+// We still want home data warm for the snapshot pill etc., even when
+// the user lands on lists/history. Fetch it lazily so the visible view
+// gets the network slot first.
+else setTimeout(loadHome, 250);
 
 // Allow ?lookup=<username|url> to auto-open a lookup. Used by iOS Shortcuts and bookmarklets.
 (function autoLookupFromUrl() {
