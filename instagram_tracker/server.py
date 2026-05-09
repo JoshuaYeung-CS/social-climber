@@ -421,7 +421,15 @@ def scan_now(force: bool = False, since_ms: int | None = None):
             result["since_ms"] = int(since_ms)
         except (ValueError, TypeError):
             result["new_files_since"] = 0
-    if result.get("imported") or result.get("skipped"):
+    # Bump only when something REAL changed — same rule as /api/import.
+    # Pure-duplicate skips don't change snapshot data; bumping for them
+    # would fire the calibration banner on no-op scans (which run on a
+    # 1-minute extension cadence, so this matters).
+    had_real_change = bool(result.get("imported")) or any(
+        (d.get("outcome") == "backfilled")
+        for d in (result.get("details") or [])
+    )
+    if had_real_change:
         _bump_snapshot_version()
     # When auto-import is disabled, skip the audit log entirely —
     # otherwise every minute's extension-driven scan poll would stamp
@@ -1902,6 +1910,18 @@ def _timeline_compute():
 
 # ---------- import ----------
 
+# Concurrent-import serialization. The ingest path uses content_hash to
+# dedupe, so two zips with the same content can't both be inserted. But
+# without this lock, dueling imports of DIFFERENT zips race the duplicate
+# check + INSERT, both extract to tmp dirs, both spend the SQLite-busy
+# budget elbowing each other on the snapshots write. Serializing keeps
+# the user's home page warm (the second import doesn't fight the first).
+# AsyncIO Lock works inside the FastAPI thread pool — fine for this rate.
+import asyncio as _asyncio
+_import_lock = _asyncio.Lock()
+_IMPORT_MAX_BYTES = 500 * 1024 * 1024  # 500MB — a typical IG export is <50MB
+
+
 @app.post("/api/import")
 async def import_export(
     file: UploadFile | None = File(default=None),
@@ -1913,51 +1933,105 @@ async def import_export(
     Folder uploads from a browser cannot stream a directory, so the supported
     web flow is: zip the export folder, drop the zip. Power users can pass
     `folder_path` to point at a folder that's already on the Mac.
+
+    Edge cases handled:
+      * concurrent imports → serialized so the second one waits, no
+        race between content-hash dedup and INSERT
+      * file size > _IMPORT_MAX_BYTES → 413 with a clean message
+        (streamed cap so a malicious 50GB upload doesn't fill /tmp)
+      * unsupported extension → 400 (".zip" required for the file path)
+      * malformed zip / no followers_and_following dir / empty folder
+        → 400 with the underlying message, not a 500 stack trace
+      * pure-duplicate imports → snapshot version is NOT bumped, so
+        the calibration banner doesn't fire on no-op imports
+      * backfilled imports → snapshot version IS bumped, since
+        timeline counts depend on the newly-inserted rows
     """
     if file is None and not folder_path:
         raise HTTPException(status_code=400, detail="Provide a zip file or folder_path.")
+    if file is not None and file.filename and not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only .zip files are accepted via upload.")
 
-    cleanup: Path | None = None
-    try:
-        if file is not None:
-            tmp = Path(tempfile.mkdtemp(prefix="ig_upload_"))
-            cleanup = tmp
-            target = tmp / (file.filename or "upload.zip")
-            with target.open("wb") as out:
-                shutil.copyfileobj(file.file, out)
-            import_target = target
-        else:
-            import_target = Path(folder_path).expanduser().resolve()
+    async with _import_lock:
+        cleanup: Path | None = None
+        try:
+            if file is not None:
+                tmp = Path(tempfile.mkdtemp(prefix="ig_upload_"))
+                cleanup = tmp
+                target = tmp / (file.filename or "upload.zip")
+                # Streamed copy with a hard size cap. Without this, a 50GB
+                # upload would happily fill /tmp before we ever touched the
+                # ingest pipeline.
+                bytes_written = 0
+                chunk_size = 1 << 20  # 1 MB
+                with target.open("wb") as out:
+                    while True:
+                        chunk = await file.read(chunk_size)
+                        if not chunk:
+                            break
+                        bytes_written += len(chunk)
+                        if bytes_written > _IMPORT_MAX_BYTES:
+                            raise HTTPException(
+                                status_code=413,
+                                detail=f"Upload exceeds {_IMPORT_MAX_BYTES // (1024*1024)}MB cap.",
+                            )
+                        out.write(chunk)
+                if bytes_written == 0:
+                    raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+                import_target = target
+            else:
+                import_target = Path(folder_path).expanduser().resolve()
+                if not import_target.exists():
+                    raise HTTPException(status_code=400, detail=f"folder_path not found: {folder_path}")
 
-        with db_conn() as conn:
-            run = ingest_mod.import_path(conn, import_target, label)
-        if run.imports or run.skipped:
-            _bump_snapshot_version()
+            try:
+                with db_conn() as conn:
+                    run = ingest_mod.import_path(conn, import_target, label)
+            except ValueError as e:
+                # ingest raises ValueError for: missing path, unsupported
+                # path type, no followers_and_following dir. All are user-
+                # facing input errors, not server crashes.
+                raise HTTPException(status_code=400, detail=str(e)) from None
+            except __import__("zipfile").BadZipFile:
+                raise HTTPException(status_code=400, detail="Uploaded file is not a valid .zip archive.") from None
 
-        return {
-            "imports": [
-                {
-                    "snapshot_id": r.snapshot_id,
-                    "label": r.label,
-                    "counts": r.counts,
-                    "missing_files": r.missing_files,
-                }
-                for r in run.imports
-            ],
-            "skipped": [
-                {
-                    "label": s.label,
-                    "reason": s.reason,
-                    "message": s.message,
-                    "existing_snapshot_id": s.existing_snapshot_id,
-                    "existing_label": s.existing_label,
-                }
-                for s in run.skipped
-            ],
-        }
-    finally:
-        if cleanup is not None and cleanup.exists():
-            shutil.rmtree(cleanup, ignore_errors=True)
+            # Cache invalidation rule: bump snapshot_version only when
+            # something REAL changed in snapshot data — either a new
+            # snapshot row was inserted (imports) OR an existing one
+            # got rows backfilled (e.g. incoming_follow_requests for a
+            # snapshot that predates that column). A pure-duplicate
+            # skip means nothing changed and we shouldn't trigger a
+            # calibration cycle for nothing.
+            had_real_change = bool(run.imports) or any(
+                s.reason == "backfilled" for s in run.skipped
+            )
+            if had_real_change:
+                _bump_snapshot_version()
+
+            return {
+                "imports": [
+                    {
+                        "snapshot_id": r.snapshot_id,
+                        "label": r.label,
+                        "counts": r.counts,
+                        "missing_files": r.missing_files,
+                    }
+                    for r in run.imports
+                ],
+                "skipped": [
+                    {
+                        "label": s.label,
+                        "reason": s.reason,
+                        "message": s.message,
+                        "existing_snapshot_id": s.existing_snapshot_id,
+                        "existing_label": s.existing_label,
+                    }
+                    for s in run.skipped
+                ],
+            }
+        finally:
+            if cleanup is not None and cleanup.exists():
+                shutil.rmtree(cleanup, ignore_errors=True)
 
 
 # ---------- diffs & lists ----------
