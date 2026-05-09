@@ -124,7 +124,7 @@ def _get_cache_lock(key: str) -> _threading.Lock:
 # keys (e.g. per-username lookup) would go stale forever if served
 # without recompute, since nothing schedules a background refresh
 # for them.
-_SWR_KEYS = {"home", "lists_pure", "activity_log"}
+_SWR_KEYS = {"home", "lists_pure", "activity_log", "timeline"}
 
 
 def _cache_set(key: str, compute, deps: tuple[str, ...] = _DEPS_BOTH):
@@ -202,6 +202,11 @@ def _do_warm(label: str = "prewarm"):
         warmed.append("activity_log")
     except Exception as e:
         print(f"[{label}] activity_log failed: {e}", flush=True)
+    try:
+        _cache_set("timeline", _timeline_compute, deps=_DEPS_SNAPSHOT_ONLY)
+        warmed.append("timeline")
+    except Exception as e:
+        print(f"[{label}] timeline failed: {e}", flush=True)
     if warmed:
         print(f"[{label}] warmed caches: {', '.join(warmed)}", flush=True)
 
@@ -4247,6 +4252,63 @@ def get_note(username: str):
             "SELECT notes FROM profile_tags WHERE username = ?", (username,)
         ).fetchone()
     return {"username": username, "note": (row["notes"] if row and row["notes"] else "")}
+
+
+@app.post("/api/note/bulk")
+def set_note_bulk(payload: dict = Body(...)):
+    """Apply the same note to a list of accounts in one transaction.
+    `mode`: 'replace' (default) overwrites existing notes; 'append'
+    concatenates "\\n\\n<new>" to whatever's there (no-op when the new
+    note is empty). One tag-version bump for the whole batch instead
+    of one per account, so the bulk path doesn't cause N reprewarms.
+
+    Response includes per-account final-note length so the UI can
+    summarize the result without re-fetching each account."""
+    accounts = payload.get("accounts") or []
+    note_raw = payload.get("note", "")
+    mode = (payload.get("mode") or "replace").lower()
+    if mode not in ("replace", "append"):
+        raise HTTPException(status_code=400, detail="mode must be 'replace' or 'append'")
+    if not isinstance(accounts, list) or not accounts:
+        raise HTTPException(status_code=400, detail="accounts must be a non-empty list")
+    new_note = (note_raw or "").strip()
+    # Append-mode + empty input is a no-op — don't pollute existing notes
+    # with phantom blank appends.
+    if mode == "append" and not new_note:
+        return {"updated": 0, "mode": mode, "results": []}
+    results: list[dict] = []
+    with db_conn() as conn:
+        for raw in accounts:
+            if not raw:
+                continue
+            try:
+                username, profile_url = normalize_account_input(raw)
+            except Exception:
+                results.append({"input": raw, "error": "invalid"})
+                continue
+            if mode == "replace":
+                final = new_note or None
+            else:
+                row = conn.execute(
+                    "SELECT notes FROM profile_tags WHERE username = ?",
+                    (username,),
+                ).fetchone()
+                existing = (row["notes"] if row and row["notes"] else "").strip()
+                final = (existing + "\n\n" + new_note).strip() if existing else new_note
+                final = final or None
+            conn.execute(
+                """INSERT INTO profile_tags (username, notes, profile_url, updated_at)
+                   VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(username) DO UPDATE SET
+                       notes = excluded.notes,
+                       profile_url = COALESCE(excluded.profile_url, profile_tags.profile_url),
+                       updated_at = CURRENT_TIMESTAMP""",
+                (username, final, profile_url),
+            )
+            results.append({"username": username, "length": len(final or "")})
+        conn.commit()
+    _bump_tag_version()
+    return {"updated": sum(1 for r in results if "username" in r), "mode": mode, "results": results}
 
 
 @app.post("/api/note")

@@ -1392,6 +1392,7 @@ function renderLookup(data) {
       ${renderTagToggles(data.tags)}
       ${obsBlock}
       ${data.aliases && data.aliases.length > 1 ? `<div class="warn-banner info-banner">↪ This account has been renamed. Aliases (oldest → newest): ${data.aliases.map((a) => a === data.username ? `<strong>${escapeHtml(a)}</strong>` : `<a href="#" class="alias-link" data-username="${escapeAttr(a)}">${escapeHtml(a)}</a>`).join(" → ")}</div>` : ""}
+      <div class="journey-block" data-username="${escapeAttr(data.username)}" data-aliases="${escapeAttr((data.aliases || []).join(","))}"></div>
       ${data.follow_runs_count > 1 ? `<div class="warn-banner">⚠ You've followed this person <strong>${data.follow_runs_count} separate times</strong> across history.</div>` : ""}
       ${data.follower_runs_count > 1 ? `<div class="warn-banner">⚠ They've followed you <strong>${data.follower_runs_count} separate times</strong> across history.</div>` : ""}
       <div class="facts">
@@ -1443,6 +1444,57 @@ async function loadArchivedMediaForModal(username) {
 function cssEscape(s) {
   if (typeof CSS !== "undefined" && CSS.escape) return CSS.escape(s);
   return String(s).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+}
+
+// Per-account follow journey: finds every activity-log event for the
+// account (including its prior aliases if it was renamed) and renders a
+// compact chronological strip in the modal. Sources from `_activityData`
+// when it's already loaded; lazy-loads /api/activity-log otherwise so
+// modals opened from the home/lists tabs don't fail. Cached SWR — the
+// first call is the only slow one.
+async function renderJourneyForModal(username, aliases) {
+  const block = document.querySelector(
+    `.journey-block[data-username="${cssEscape(username)}"]`
+  );
+  if (!block) return;
+  // Match any of the alias chain — events emitted under prior usernames
+  // belong to the same person and should appear in the same journey.
+  const names = new Set([username, ...(aliases || [])]);
+  let events = _activityData;
+  if (!events) {
+    try {
+      const data = await api.get("/api/activity-log");
+      _activityData = data.events || [];
+      events = _activityData;
+    } catch {
+      return;
+    }
+  }
+  // Sanity: if the modal closed or moved on while we were loading,
+  // bail rather than render into a stale node.
+  if (!block.isConnected) return;
+  const mine = events.filter((e) => names.has(e.username));
+  if (!mine.length) return;
+  const cap = 30;
+  const shown = mine.slice(0, cap);
+  const rows = shown.map((e) => {
+    const meta = ACTIVITY_KIND_META[e.kind] || { label: e.kind, cls: "muted" };
+    const detail = activityTimeDetail(e);
+    const t = detail || (e.timestamp || "").slice(0, 16).replace("T", " ");
+    return `
+      <div class="journey-step">
+        <span class="al-kind-pill al-${meta.cls}">${escapeHtml(meta.label)}</span>
+        <span class="muted small">${escapeHtml(t)}</span>
+      </div>
+    `;
+  }).join("");
+  const more = mine.length > cap
+    ? `<div class="muted small journey-more">+${mine.length - cap} earlier events — see Activity log</div>`
+    : "";
+  block.innerHTML = `
+    <h4 class="journey-h">📜 Journey (${mine.length} event${mine.length === 1 ? "" : "s"})</h4>
+    <div class="journey-list">${rows}${more}</div>
+  `;
 }
 
 // Free-form per-account note. Loaded async after the modal renders so
@@ -1688,6 +1740,7 @@ async function openAccountModal(username, push = true) {
     bindTagToggles($("#account-detail"), data.username, data.tags);
     loadArchivedMediaForModal(data.username);
     loadAccountNote(data.username);
+    renderJourneyForModal(data.username, data.aliases || []);
   } catch (e) {
     $("#account-detail").innerHTML =
       `<div class="warn-banner">Couldn't load ${escapeHtml(username)}: ${escapeHtml(e.message)}</div>`;
@@ -2282,6 +2335,7 @@ function renderBulkToolbar() {
     ${tagBtn("now_public", "🌐", "Now public")}
     <button type="button" class="bulk-btn" data-bulk="open">Open all in tabs</button>
     <button type="button" class="bulk-btn" data-bulk="queue">Add to follow queue</button>
+    <button type="button" class="bulk-btn" data-bulk="note">📝 Note all</button>
     <button type="button" class="bulk-btn bulk-cancel" data-bulk="cancel">Cancel</button>
   `;
   $$(".bulk-btn", _bulkToolbar).forEach((btn) =>
@@ -2316,6 +2370,10 @@ async function runBulkAction(action) {
     }
     return;
   }
+  if (action === "note") {
+    await openBulkNoteEditor(usernames);
+    return;
+  }
   // Tag bulk apply: POST /api/tags for each, in parallel.
   const flag = action;
   toast(`Applying ${flag} to ${usernames.length}…`);
@@ -2336,6 +2394,68 @@ async function runBulkAction(action) {
 
 if (_selectToggleBtn) {
   _selectToggleBtn.addEventListener("click", () => setSelectMode(!_selectMode));
+}
+
+// Lightweight inline editor for bulk-note. Builds a small overlay with
+// a textarea + replace/append toggle + Save. Posts to /api/note/bulk so
+// it's one tag-version bump for the whole batch (single reprewarm) —
+// looping the per-account /api/note POST would fire 50 bumps and stall
+// the server while reprewarms thrashed.
+async function openBulkNoteEditor(usernames) {
+  if (!usernames.length) return;
+  const existing = document.getElementById("bulk-note-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "bulk-note-overlay";
+  overlay.className = "modal-overlay";
+  const sample = usernames.slice(0, 6).join(", ") + (usernames.length > 6 ? `, … +${usernames.length - 6} more` : "");
+  overlay.innerHTML = `
+    <div class="modal-card bulk-note-card">
+      <h3 class="bulk-note-title">📝 Add note to ${usernames.length} account${usernames.length === 1 ? "" : "s"}</h3>
+      <div class="muted small bulk-note-targets">${escapeHtml(sample)}</div>
+      <textarea id="bulk-note-text" placeholder="e.g. met at SF meetup, do not unfollow until June, has VSCO at …"></textarea>
+      <div class="bulk-note-mode">
+        <label><input type="radio" name="bulk-note-mode" value="append" checked /> Append (preserve existing notes)</label>
+        <label><input type="radio" name="bulk-note-mode" value="replace" /> Replace existing notes</label>
+      </div>
+      <div class="bulk-note-actions">
+        <button type="button" class="ghost-btn" id="bulk-note-cancel">Cancel</button>
+        <button type="button" class="primary" id="bulk-note-save">Save</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const ta = overlay.querySelector("#bulk-note-text");
+  ta?.focus();
+  const save = async () => {
+    const note = (ta?.value || "").trim();
+    const mode = overlay.querySelector('input[name="bulk-note-mode"]:checked')?.value || "append";
+    if (!note) { toast("Note is empty — nothing to save"); return; }
+    try {
+      const r = await api.post("/api/note/bulk", { accounts: usernames, note, mode });
+      toast(`Saved note on ${r.updated} account${r.updated === 1 ? "" : "s"} (${mode})`);
+      close();
+      setSelectMode(false);
+      loadLists();
+    } catch (e) {
+      toast(`Bulk note failed: ${e.message}`);
+    }
+  };
+  // Esc to dismiss, Cmd/Ctrl+Enter to save — common keyboard shortcuts
+  // for modal-like editors. Listener is attached to overlay so it
+  // dies when the overlay is removed.
+  const onKey = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); close(); }
+    else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); save(); }
+  };
+  const close = () => {
+    document.removeEventListener("keydown", onKey);
+    overlay.remove();
+  };
+  document.addEventListener("keydown", onKey);
+  overlay.querySelector("#bulk-note-cancel").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector("#bulk-note-save").addEventListener("click", save);
 }
 
 function goToList(kind, push = true) {
@@ -2567,6 +2687,12 @@ function renderListRow(item) {
   if (item.followed_ts) parts.push(`you followed ${escapeHtml(fmtDateTime(item.followed_ts))}`);
   else if (item.followed_at) parts.push(`you followed ${escapeHtml(fmtDate(item.followed_at))}`);
   if (item.followers_ts) parts.push(`they followed you ${escapeHtml(fmtDateTime(item.followers_ts))}`);
+  // Reciprocity gap: when both timestamps exist, render the time delta
+  // between you-follow and them-follow with a bucketed pill (instant /
+  // fast / slow / late). Surfaces follow-back speed on every mutual list
+  // without needing a dedicated tab.
+  const gap = reciprocityGapPill(item.followed_ts, item.followers_ts);
+  if (gap) parts.push(gap);
   if (item.pending_ts) parts.push(`you requested ${escapeHtml(fmtDateTime(item.pending_ts))}`);
   else if (item.pending_since_at && !item.pending_ts) parts.push(`requested ${escapeHtml(fmtDate(item.pending_since_at))}`);
   if (item.incoming_ts) parts.push(`they requested ${escapeHtml(fmtDateTime(item.incoming_ts))}`);
@@ -2706,6 +2832,31 @@ function fmtDuration(days) {
   if (days < 30) return `${days}d`;
   if (days < 365) return `${Math.round(days / 30)} mo`;
   return `${Math.round(days / 365 * 10) / 10} yr`;
+}
+
+// Reciprocity gap: time between when YOU followed THEM and when THEY
+// followed YOU (mutuals only). Returns a pre-escaped HTML pill or "" if
+// either timestamp is missing. Buckets:
+//   instant <1h, fast <24h, slow 1-7d, late >7d.
+// Direction is named by who acted first ("you-first" / "they-first").
+// Same-second case → "instant ↔ same time".
+function reciprocityGapPill(youTs, theyTs) {
+  if (!youTs || !theyTs) return "";
+  const a = Number(youTs), b = Number(theyTs);
+  if (!isFinite(a) || !isFinite(b)) return "";
+  const diff = Math.abs(a - b);  // seconds
+  let bucket, label;
+  if (diff < 60) { bucket = "instant"; label = "↔ within a minute"; }
+  else if (diff < 3600) { bucket = "instant"; label = `↔ ${Math.round(diff / 60)}m`; }
+  else if (diff < 86400) { bucket = "fast"; label = `${Math.round(diff / 3600)}h`; }
+  else if (diff < 7 * 86400) { bucket = "slow"; label = `${Math.round(diff / 86400)}d`; }
+  else { bucket = "late"; label = `${Math.round(diff / 86400)}d`; }
+  let dirLabel = "";
+  if (diff >= 60) {
+    dirLabel = a < b ? "you-first by " : "they-first by ";
+  }
+  const text = `gap: ${dirLabel}${label}`;
+  return `<span class="recip-gap recip-${bucket}" title="you followed ${fmtDateTime(youTs)} · they followed ${fmtDateTime(theyTs)}">${escapeHtml(text)}</span>`;
 }
 
 function fmtAgo(days) {

@@ -24,12 +24,20 @@ from .tags import list_with_flag, set_flag
 
 
 def _parse_iso(value: str | None) -> datetime | None:
+    """Parse a stored timestamp into a tz-aware UTC datetime. Defensively
+    promotes naive results to UTC so downstream comparisons against
+    `datetime.now(timezone.utc)` never raise. Older rows may be naive even
+    though current writes go through `utc_now_iso()` (which is tz-aware) —
+    don't crash alerts the next time an old row resurfaces."""
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _privacy_label(status: str, now_public: bool = False) -> str:
