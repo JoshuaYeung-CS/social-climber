@@ -238,6 +238,33 @@ def _ingest_one(
     if not any([follower_rows, following_rows, pending_rows, recent_rows, unfollowed_rows, incoming_rows]):
         raise ValueError(f"No usable Instagram export data found in: {ff_dir}")
 
+    # Critical-file guard: every real IG export includes followers_*.json
+    # AND following.json. If either is missing, this isn't a complete
+    # export — usually a Drive placeholder hasn't finished streaming, or
+    # the user dropped a manually-trimmed zip. Importing a partial here
+    # would corrupt every diff against the previous snapshot (looks
+    # like "everyone unfollowed" / "you unfollowed everyone"). Skip
+    # rather than recording the corrupted snapshot — the user can
+    # re-drop once the export is complete. The secondary files
+    # (pending / recent / unfollowed / incoming) can legitimately be
+    # absent when those lists are empty IG-side, so missing them isn't
+    # a skip trigger.
+    _critical_missing = []
+    if not follower_rows and "followers (followers_*.json)" in missing_files:
+        _critical_missing.append("followers")
+    if not following_rows and "following (following.json)" in missing_files:
+        _critical_missing.append("following")
+    if _critical_missing:
+        return SkippedImport(
+            label=label,
+            reason="missing_files",
+            message=(
+                f"Skipped — missing critical file{'s' if len(_critical_missing) != 1 else ''}: "
+                f"{', '.join(_critical_missing)}. Likely a partial/placeholder export; "
+                f"re-drop the zip once Drive finishes syncing."
+            ),
+        )
+
     # Drive-placeholder guard: when the auto-watcher imports a folder that
     # Drive hasn't fully streamed yet, the JSON files exist but parse to
     # empty arrays. The snapshot then looks like "everyone unfollowed"

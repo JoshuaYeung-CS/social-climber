@@ -60,6 +60,14 @@ _DEFERRED_PATHS: set[str] = set()
 _DEFERRED_RETRY_COUNTS: dict[str, int] = {}
 _MAX_DEFERRED_RETRIES = 10
 
+# Paths previously skipped because critical IG export files (followers /
+# following) were missing — almost always a Drive placeholder that hadn't
+# fully synced. Keyed by path → (mtime, size); subsequent scans skip the
+# path while its fingerprint matches. When Drive finishes streaming, the
+# size/mtime change → fingerprint stale → entry effectively cleared on
+# the next can_skip() check → import retried.
+_PARTIAL_SKIP_PATHS: dict[str, tuple[float, int]] = {}
+
 
 def clear_seen_cache() -> None:
     """Reset the in-memory recent-error + deferred sets. Called after
@@ -67,6 +75,7 @@ def clear_seen_cache() -> None:
     _RECENT_ERROR_PATHS.clear()
     _DEFERRED_PATHS.clear()
     _DEFERRED_RETRY_COUNTS.clear()
+    _PARTIAL_SKIP_PATHS.clear()
 
 # Filename patterns Meta uses for the artifacts we care about. Matched
 # case-insensitively against the basename. Two flavors:
@@ -684,6 +693,25 @@ def _scan_once_locked(force: bool = False) -> dict:
         # Force-retry paths that errored earlier in this process's lifetime.
         if path_str in _RECENT_ERROR_PATHS:
             return False
+        # Partial-import skip: if a previous scan saw this path with the
+        # same mtime+size and skipped because critical files were missing,
+        # don't retry until the file actually changes (Drive finishing
+        # the sync grows the file → mtime+size change → entry stale →
+        # retry runs naturally).
+        partial = _PARTIAL_SKIP_PATHS.get(path_str)
+        if partial is not None:
+            try:
+                st = p.stat()
+                if (abs(float(st.st_mtime) - partial[0]) <= 1.0
+                        and int(st.st_size) == partial[1]):
+                    return True
+            except OSError:
+                # If we can't stat, treat as unchanged — be conservative
+                # rather than burn cycles re-running ingest on a flaky path.
+                return True
+            # File grew or mtime changed → drop the stale entry so it can
+            # be retried this scan.
+            _PARTIAL_SKIP_PATHS.pop(path_str, None)
         prev = fingerprints.get(path_str)
         if prev is None:
             return False
@@ -815,6 +843,16 @@ def _scan_once_locked(force: bool = False) -> dict:
                 skipped += 1
                 details.append({"file": p.name, "outcome": s.reason,
                                 "label": s.label, "message": s.message[:200]})
+                # Record the path's current mtime+size so we don't re-run
+                # ingest on the same partial export every scan. If Drive
+                # later grows the file, the fingerprint mismatches and
+                # the next scan retries automatically.
+                if s.reason == "missing_files":
+                    try:
+                        st = p.stat()
+                        _PARTIAL_SKIP_PATHS[str(p)] = (float(st.st_mtime), int(st.st_size))
+                    except OSError:
+                        pass
             # Successful, non-empty import → clear any prior error record
             # AND drop from the deferred set (the EDEADLK retry path is
             # how 'previously deferred' files exit the limbo state).

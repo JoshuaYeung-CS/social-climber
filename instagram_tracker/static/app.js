@@ -1113,8 +1113,15 @@ async function doImport(file) {
       if (backfilledCount > 0 && trueSkippedCount === 0) {
         toast(`Backfilled ${backfilledCount} snapshot${backfilledCount === 1 ? "" : "s"}`);
       } else {
-        const reason = skipped[0].reason === "duplicate" ? "duplicate" : "older than existing snapshots";
-        toast(`Skipped — ${reason}`);
+        const r = skipped[0].reason;
+        const reasonLabel = r === "duplicate"
+          ? "duplicate"
+          : r === "missing_files"
+            ? "missing critical files (partial export)"
+            : r === "placeholder_partial"
+              ? "Drive sync incomplete"
+              : "older than existing snapshots";
+        toast(`Skipped — ${reasonLabel}`);
       }
     } else {
       const parts = [];
