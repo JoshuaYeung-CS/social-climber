@@ -127,6 +127,19 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
         request_rejected_outbound = (
             (prev.pending - curr.pending) - curr.following - suppressed
         )
+        # Outbound follow request accepted (was pending, now in following).
+        # Of those, the subset who haven't followed you back yet AND
+        # aren't currently requesting to follow you. This is the moment
+        # of acceptance — distinct from the stateful 3-day overdue alert
+        # which catches the durable state. The diff alert fires once at
+        # acceptance, the stateful one keeps firing if they don't
+        # reciprocate within the threshold window.
+        request_accepted_outbound = (
+            (prev.pending - curr.pending) & curr.following
+        ) - suppressed
+        accepted_no_followback = (
+            request_accepted_outbound - curr.followers - curr.incoming_requests
+        )
         # Inbound follow request disappeared without becoming a follow:
         # they withdrew, the user rejected, or it was auto-handled.
         # Same ambiguity, framed as "withdrew their request".
@@ -142,6 +155,7 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
             | they_removed_you
             | request_rejected_outbound
             | request_withdrawn_inbound
+            | accepted_no_followback
             | ((curr.followers - prev.followers) & curr.following)
         )
         diff_priv, diff_np = _privacy_for(diff_users)
@@ -224,6 +238,31 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "username": u,
                 "severity": "normal",
                 "message": f"✕ {u} ({_badge(u)}) removed their follow request to you.",
+                "ts": latest_ts,
+            })
+
+        # Acceptance event: they accepted your follow request AND didn't
+        # follow you back AND aren't currently requesting to follow you.
+        # This is the per-import notification at the moment of accept;
+        # the stateful private_no_followback_overdue keeps surfacing them
+        # past the 3-day threshold. Fires for ALL privacy types — public
+        # accounts can also end up here when a request resolves to a
+        # follow without reciprocation (rare but possible).
+        for u in sorted(accepted_no_followback & favorites):
+            diff_alerts.append({
+                "kind": "favorite_accepted_no_followback",
+                "username": u,
+                "severity": "high",
+                "message": f"★ Favorite {u} ({_badge(u)}) accepted your follow — they haven't followed back or requested.",
+                "ts": latest_ts,
+            })
+
+        for u in sorted(accepted_no_followback - favorites):
+            diff_alerts.append({
+                "kind": "accepted_no_followback",
+                "username": u,
+                "severity": "normal",
+                "message": f"✓ {u} ({_badge(u)}) accepted your follow — they haven't followed back or requested.",
                 "ts": latest_ts,
             })
 
