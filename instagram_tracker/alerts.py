@@ -9,6 +9,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from .config import (
+    PRIVATE_NO_FOLLOWBACK_ALERT_DAYS,
     RECENT_UNFOLLOW_ALERT_DAYS,
     WAITBACK_ALERT_DAYS,
     WANT_REMOVE_ALERT_DAYS_PRIVATE,
@@ -382,6 +383,86 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "privacy": status,
                 "ts": int(followed_at.timestamp()),
             })
+
+    # Stateful: private-no-followback (auto). Fires for every private
+    # account you've been following PRIVATE_NO_FOLLOWBACK_ALERT_DAYS+
+    # without them following back, regardless of any tag. Mirrors the
+    # private-side want_remove threshold but doesn't require the manual
+    # ✦ tag, so requests you sent and forgot about still surface.
+    #
+    # Skips accounts that the user has already actively classified:
+    #   want_remove → handled by want_remove_overdue (higher signal).
+    #   watchlist   → handled by waitback_overdue (user-controlled wait).
+    #   suppressed  → user already said "this isn't a real candidate"
+    #                  (disabled / unavailable / random_request).
+    # And skips:
+    #   * accounts in your incoming requests (they ARE trying to follow
+    #     back, just bouncing through approval flow on either side).
+    #   * accounts not currently in your following at all (you haven't
+    #     followed them; nothing to wait on).
+    #   * accounts you don't have a private signal on (only fire when
+    #     we have positive evidence they're private — likely_private or
+    #     manually-marked now_public is the explicit override case and
+    #     belongs to the public threshold path).
+    private_following_users = [u for u in curr.following if u not in curr.followers]
+    if private_following_users:
+        # Reuse already-loaded suppressed set + favorites.
+        # Pull existing tag-based skip-sets in one pass each.
+        already_handled: set[str] = set()
+        for entry in list_with_flag(conn, "want_remove"):
+            already_handled.add(entry["username"])
+        for entry in list_with_flag(conn, "watchlist"):
+            already_handled.add(entry["username"])
+        # Privacy + now_public overlay for the candidate set.
+        priv_filtered = [u for u in private_following_users if u not in already_handled and u not in suppressed]
+        if priv_filtered:
+            pn_privacy = privacy_status_bulk(conn, priv_filtered)
+            ph = ",".join("?" * len(priv_filtered))
+            pn_now_public: set[str] = set()
+            for r in conn.execute(
+                f"SELECT username FROM profile_tags WHERE now_public = 1 AND username IN ({ph})",
+                priv_filtered,
+            ).fetchall():
+                pn_now_public.add(r["username"])
+            # Follow-timestamps in one bulk query.
+            pn_follow_ts: dict[str, int] = {}
+            for r in conn.execute(
+                f"SELECT username, MAX(export_timestamp) AS ts FROM following "
+                f"WHERE username IN ({ph}) AND export_timestamp IS NOT NULL "
+                f"GROUP BY username",
+                priv_filtered,
+            ).fetchall():
+                if r["ts"] is not None:
+                    pn_follow_ts[r["username"]] = int(r["ts"])
+            now_utc_pn = datetime.now(timezone.utc)
+            cutoff_pn = now_utc_pn - timedelta(days=PRIVATE_NO_FOLLOWBACK_ALERT_DAYS)
+            for u in priv_filtered:
+                if u in curr.incoming_requests:
+                    continue  # they're requesting back; don't nag yet
+                status = pn_privacy.get(u, "unknown")
+                if u in pn_now_public:
+                    continue  # they're public per user override; not "private no follow back"
+                if status != "likely_private":
+                    continue  # only fire when we have positive private evidence
+                ts = pn_follow_ts.get(u)
+                if ts is None:
+                    continue
+                followed_at = datetime.fromtimestamp(ts, tz=timezone.utc)
+                if followed_at > cutoff_pn:
+                    continue  # under threshold
+                days = (now_utc_pn - followed_at).days
+                is_fav = u in favorites
+                prefix = "★🔒" if is_fav else "🔒"
+                fav_label = "★ Favorite " if is_fav else ""
+                stateful.append({
+                    "kind": "private_no_followback_overdue",
+                    "username": u,
+                    "severity": "high" if is_fav else "normal",
+                    "message": f"{prefix} {fav_label}{u} (🔒 private) accepted but hasn't followed you back in {days} days.",
+                    "days": days,
+                    "privacy": "likely_private",
+                    "ts": int(followed_at.timestamp()),
+                })
 
     # Stateful: recent unfollows. Surfaces every account whose last
     # appearance in your followers was within the past

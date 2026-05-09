@@ -28,3 +28,12 @@ WANT_REMOVE_ALERT_DAYS = WANT_REMOVE_ALERT_DAYS_PRIVATE
 # enough to see and act on (re-follow, tag, etc.) without piling up
 # old alerts forever. The transient diff alert still fires per-import.
 RECENT_UNFOLLOW_ALERT_DAYS = 7
+# Auto-alert when a private account you follow hasn't followed you back
+# within this many days. Mirrors WANT_REMOVE_ALERT_DAYS_PRIVATE but does
+# NOT require the want_remove tag — fires for ANY private account you've
+# been following past the threshold. The waitback_overdue (7d, watchlist-
+# tagged only) and want_remove_overdue alerts handle the explicitly-
+# tagged cases; this fills the un-tagged gap. Skipped for accounts
+# already covered by those tagged paths so a single account never
+# triggers two alerts.
+PRIVATE_NO_FOLLOWBACK_ALERT_DAYS = 3
