@@ -118,24 +118,35 @@ body {
 }
 .tabs::-webkit-scrollbar { display: none; }
 .tab {
+  /* Anchor reset — these were buttons until tabs gained cmd-click new-tab
+     support. Anchors default to inline + underlined text, neither of
+     which we want; pin display, text-align, and decoration explicitly so
+     the markup change doesn't drift the layout. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
   flex: 1 0 auto;
+  /* Reserve the active 3px underline space at rest with a 3px transparent
+     bottom border. Without this, switching tabs shifted the row by 1px
+     because the active tab took 3px and the inactive ones only 2px. */
   padding: 12px 14px;
   background: transparent;
   border: 0;
-  border-bottom: 2px solid transparent;
+  border-bottom: 3px solid transparent;
   color: var(--muted);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
+  box-sizing: border-box;
 }
 .tab.active {
   color: var(--text);
   border-bottom-color: var(--accent);
-  border-bottom-width: 3px;
-  margin-bottom: -1px;
 }
 .tab:hover { color: var(--text); }
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; border-radius: 4px; }
 
 main {
   padding: 16px;
