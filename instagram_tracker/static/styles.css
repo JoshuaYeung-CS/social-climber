@@ -730,7 +730,7 @@ code {
 .diff-name { display: inline-block; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; margin: 2px 2px 0 0; font-size: 12px; }
 
 /* Activity log under History tab. Flat per-username feed, newest-first. */
-.activity-log { display: flex; flex-direction: column; gap: 0; max-height: 70vh; overflow-y: auto; padding-right: 4px; }
+.activity-log { display: flex; flex-direction: column; gap: 0; max-height: 80vh; overflow-y: auto; padding-right: 4px; }
 .activity-log .al-meta { padding: 4px 4px 8px; }
 .al-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 8px; position: sticky; top: 0; background: var(--bg-elev); z-index: 1; }
 .al-chip {
@@ -752,49 +752,50 @@ code {
   position: sticky;
   top: 36px;
   background: var(--bg-elev);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
-  padding: 8px 4px 4px;
-  margin-top: 4px;
+  padding: 12px 6px 6px;
+  margin-top: 6px;
   border-bottom: 1px solid var(--border);
 }
 .al-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   flex-wrap: wrap;
-  padding: 6px 4px;
+  padding: 12px 6px;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  font-size: 15px;
 }
 .al-row:last-child { border-bottom: 0; }
 .al-row.clickable { cursor: pointer; transition: background 100ms ease; }
 .al-row.clickable:hover { background: rgba(255, 255, 255, 0.04); }
-.al-row .al-name { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+.al-row .al-name { font-weight: 500; min-width: 0; overflow-wrap: anywhere; font-size: 15px; }
 .al-detail {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   min-width: 180px;
   flex: 1 1 220px;
 }
 .al-time-cell {
   font-variant-numeric: tabular-nums;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
-  min-width: 42px;
+  min-width: 52px;
   flex-shrink: 0;
 }
 .al-kind-pill {
-  font-size: 11px;
-  padding: 2px 8px;
+  font-size: 13px;
+  padding: 4px 12px;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--bg-elev-2);
   white-space: nowrap;
   flex-shrink: 0;
+  font-weight: 500;
 }
 .al-kind-pill.al-good  { color: var(--good); border-color: rgba(62, 207, 142, 0.35); background: rgba(62, 207, 142, 0.08); }
 .al-kind-pill.al-bad   { color: var(--bad);  border-color: rgba(255, 94, 122, 0.35); background: rgba(255, 94, 122, 0.08); }
@@ -940,14 +941,14 @@ code {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   border: 1px solid var(--border);
   color: var(--muted);
   background: transparent;
   text-decoration: none;
-  font-size: 11px;
+  font-size: 13px;
   flex-shrink: 0;
   transition: all 100ms ease;
 }
