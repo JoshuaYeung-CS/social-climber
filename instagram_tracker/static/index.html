@@ -218,6 +218,10 @@
           <button type="button" class="ghost-btn" id="lookup-clear">Clear</button>
         </div>
         <div id="lookup-result"></div>
+        <!-- Recent lookups strip — populated by app.js from localStorage.
+             Click a chip to re-run the lookup. Hidden until there's at
+             least one entry so first-time users don't see a stub. -->
+        <div id="recent-lookups" class="recent-lookups" hidden></div>
       </div>
 
       <div class="card">

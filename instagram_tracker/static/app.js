@@ -1166,6 +1166,80 @@ function bindCheckFlow({ inputId, buttonId, resultId, saveToQueue }) {
 }
 
 bindCheckFlow({ inputId: "lookup-input", buttonId: "lookup-go", resultId: "lookup-result", saveToQueue: false });
+
+// ---------- recent lookups history ----------
+//
+// Every successful single-account lookup appends the canonical username
+// to a localStorage list (newest first, deduped, capped at RECENT_CAP).
+// Rendered as a strip of chips under the Look-up card; click a chip to
+// re-run the lookup. Persists across reloads + reopened tabs because
+// localStorage survives both. Per-account dedup keeps the list a true
+// "recently checked" rather than a "every keystroke" log.
+const RECENT_LOOKUPS_KEY = "ig-tracker:recent-lookups";
+const RECENT_LOOKUPS_CAP = 30;
+
+function _loadRecentLookups() {
+  try {
+    const raw = localStorage.getItem(RECENT_LOOKUPS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((u) => typeof u === "string" && u) : [];
+  } catch { return []; }
+}
+function _saveRecentLookups(list) {
+  try { localStorage.setItem(RECENT_LOOKUPS_KEY, JSON.stringify(list)); } catch {}
+}
+function _recordRecentLookup(username) {
+  const u = String(username || "").trim();
+  if (!u) return;
+  const list = _loadRecentLookups();
+  const idx = list.indexOf(u);
+  if (idx !== -1) list.splice(idx, 1);  // dedupe — move to front
+  list.unshift(u);
+  if (list.length > RECENT_LOOKUPS_CAP) list.length = RECENT_LOOKUPS_CAP;
+  _saveRecentLookups(list);
+  _renderRecentLookups();
+}
+function _renderRecentLookups() {
+  const wrap = $("#recent-lookups");
+  if (!wrap) return;
+  const list = _loadRecentLookups();
+  if (!list.length) { wrap.hidden = true; wrap.innerHTML = ""; return; }
+  wrap.hidden = false;
+  const chips = list
+    .map((u) => `<button type="button" class="recent-lookup-chip" data-username="${escapeAttr(u)}" title="Re-look up @${escapeAttr(u)}">${escapeHtml(u)}</button>`)
+    .join("");
+  wrap.innerHTML = `
+    <div class="recent-lookups-head">
+      <span class="muted small">Recent lookups (${list.length})</span>
+      <button type="button" class="ghost-btn recent-lookups-clear" title="Clear lookup history">Clear</button>
+    </div>
+    <div class="recent-lookups-chips">${chips}</div>
+  `;
+  $$(".recent-lookup-chip", wrap).forEach((btn) =>
+    btn.addEventListener("click", (e) => {
+      const u = btn.dataset.username;
+      // Cmd/Ctrl-click → open the IG profile in a new tab; plain click
+      // re-runs the lookup in place. Mirrors the modifier-click pattern
+      // already used on list rows.
+      if (e.metaKey || e.ctrlKey || e.shiftKey) {
+        window.open(instagramUrl(u), "_blank", "noopener");
+        return;
+      }
+      const input = $("#lookup-input");
+      if (input) input.value = u;
+      openAccount(u, { resultId: "lookup-result", saveToQueue: false });
+    })
+  );
+  const clearBtn = wrap.querySelector(".recent-lookups-clear");
+  if (clearBtn) clearBtn.addEventListener("click", () => {
+    if (!confirm("Clear all recent lookups?")) return;
+    _saveRecentLookups([]);
+    _renderRecentLookups();
+  });
+}
+// First-paint render: surface anything saved from prior sessions.
+_renderRecentLookups();
 bindCheckFlow({ inputId: "queue-input",  buttonId: "queue-go",  resultId: "queue-result",  saveToQueue: true  });
 
 // One-click clear: empties the textarea + result panel and refocuses the
@@ -1403,6 +1477,11 @@ async function openAccount(account, { resultId = "lookup-result", saveToQueue = 
     loadArchivedMediaForModal(data.username);
     loadAccountNote(data.username);
     bindTagToggles(result, data.username, data.tags);
+    // Record on every successful lookup so the user can scroll back
+    // through accounts they've checked. Uses the resolved canonical
+    // username (data.username) rather than the raw input — handles
+    // pasted profile URLs, alias chains, and raw @-handles uniformly.
+    if (data.username) _recordRecentLookup(data.username);
 
     if (saveToQueue && data.found === false) {
       try {

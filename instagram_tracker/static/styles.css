@@ -1296,6 +1296,46 @@ code {
   color: white;
   box-shadow: 0 1px 4px rgba(79, 140, 255, 0.4);
 }
+
+/* Recent lookups strip — sits below the Lookup card's result block.
+   Stays out of the way until the user has done at least one lookup. */
+.recent-lookups {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.recent-lookups-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  gap: 8px;
+}
+.recent-lookups-clear {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+.recent-lookups-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.recent-lookup-chip {
+  appearance: none;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 100ms ease, color 100ms ease, background 100ms ease;
+}
+.recent-lookup-chip:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--accent-soft);
+}
 .kind-pill .kind-count {
   font-size: 11px;
   font-weight: 700;
