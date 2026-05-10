@@ -120,32 +120,69 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
         they_removed_you = left_following - curr.recently_unfollowed - bounced
         # (left_following & curr.recently_unfollowed) = you unfollowed them; not surfaced as an alert.
 
+        # Partial-export guard for the pending-list diff.
+        # IG occasionally emits an export with a dramatically truncated
+        # pending_follow_requests.json (observed: 1,492 → ~0 in a single
+        # 20-minute window). The set diff fires "rejected" for every
+        # missing username, which is wrong — they're still pending IG-
+        # side, the JSON just didn't include them this time.
+        # If more than half of the previous snapshot's pending list
+        # vanished in this transition, treat the whole pending diff as
+        # noise: don't emit reject/accept alerts for the missing
+        # accounts. Real reject/accept storms in a 20-min window
+        # are vanishingly rare; partial exports are common enough that
+        # this guard saves the user from a 1,000+ false-alert avalanche.
+        # The legitimate diff still fires next import once IG re-includes
+        # the pending list; bounce-collapse in the activity log handles
+        # those.
+        prev_pending_count = len(prev.pending)
+        curr_pending_count = len(curr.pending)
+        pending_partial_export = (
+            prev_pending_count >= 50
+            and curr_pending_count < prev_pending_count * 0.5
+        )
+
         # Outbound follow request disappeared without becoming a follow:
         # they declined, expired, or the user cancelled. We can't tell
         # which from snapshot data alone — frame as "request rejected/
         # withdrawn" in the alert message.
-        request_rejected_outbound = (
-            (prev.pending - curr.pending) - curr.following - suppressed
-        )
-        # Outbound follow request accepted (was pending, now in following).
-        # Of those, the subset who haven't followed you back yet AND
-        # aren't currently requesting to follow you. This is the moment
-        # of acceptance — distinct from the stateful 3-day overdue alert
-        # which catches the durable state. The diff alert fires once at
-        # acceptance, the stateful one keeps firing if they don't
-        # reciprocate within the threshold window.
-        request_accepted_outbound = (
-            (prev.pending - curr.pending) & curr.following
-        ) - suppressed
+        if pending_partial_export:
+            request_rejected_outbound = set()
+            request_accepted_outbound = set()
+        else:
+            request_rejected_outbound = (
+                (prev.pending - curr.pending) - curr.following - suppressed
+            )
+            # Outbound follow request accepted (was pending, now in
+            # following). Of those, the subset who haven't followed you
+            # back yet AND aren't currently requesting to follow you.
+            # This is the moment of acceptance — distinct from the
+            # stateful 3-day overdue alert which catches the durable
+            # state. The diff alert fires once at acceptance, the
+            # stateful one keeps firing if they don't reciprocate
+            # within the threshold window.
+            request_accepted_outbound = (
+                (prev.pending - curr.pending) & curr.following
+            ) - suppressed
         accepted_no_followback = (
             request_accepted_outbound - curr.followers - curr.incoming_requests
+        )
+        # Same partial-export guard for the inbound-request side.
+        prev_incoming_count = len(prev.incoming_requests)
+        curr_incoming_count = len(curr.incoming_requests)
+        incoming_partial_export = (
+            prev_incoming_count >= 50
+            and curr_incoming_count < prev_incoming_count * 0.5
         )
         # Inbound follow request disappeared without becoming a follow:
         # they withdrew, the user rejected, or it was auto-handled.
         # Same ambiguity, framed as "withdrew their request".
-        request_withdrawn_inbound = (
-            (prev.incoming_requests - curr.incoming_requests) - curr.followers - suppressed
-        )
+        if incoming_partial_export:
+            request_withdrawn_inbound = set()
+        else:
+            request_withdrawn_inbound = (
+                (prev.incoming_requests - curr.incoming_requests) - curr.followers - suppressed
+            )
 
         # Single privacy lookup covering every account that could end up
         # in a diff alert. Includes all new mutuals so we can fire the

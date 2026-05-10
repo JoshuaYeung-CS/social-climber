@@ -1570,32 +1570,56 @@ def _activity_log_compute():
                 # snapshot S+1. Without the latest-snapshot fallback, S→S+1
                 # gets labeled as a withdrawal even though you actually
                 # accepted.
-                pending_left = prev_sd.pending - curr_sd.pending
-                for u in sorted(pending_left):
-                    if u in curr_sd.following or u in latest_following_set:
-                        # The accept-event time = the IG follow timestamp
-                        # on this user's row in the `following` table.
-                        # Prefer the current snapshot's row; fall back to
-                        # the latest snapshot's if curr doesn't have it
-                        # yet (transition split across snapshots). Without
-                        # this, all accepts were tagged with the snapshot's
-                        # taken_at — producing the 17-people-at-the-exact-
-                        # same-minute clusters Joshua reported.
-                        accept_ts = (ts_following.get(s.id, {}).get(u)
-                                  or (ts_following.get(latest, {}).get(u) if latest is not None else None))
-                        emit(events, "they_accepted", u, s.id, curr_ts, accept_ts)
-                    else:
-                        # No precise IG timestamp for "request didn't
-                        # become a follow" — IG just removes the row.
-                        # Bound between prev and curr snapshot times.
-                        emit(events, "pending_withdrawn", u, s.id, curr_ts,
-                             time_lower_bound=prev_ts,
-                             time_upper_bound=curr_ts)
+                #
+                # Partial-export guard: if more than half of prev's pending
+                # list disappeared in this transition, IG truncated the
+                # export — don't emit pending-resolution events for the
+                # missing accounts. Same scenario produced 1,492 false
+                # "rejected" alerts in one snapshot before this guard.
+                # Real reject/accept storms in a 20-min window are
+                # vanishingly rare; partial pending exports are common.
+                prev_pending_n = len(prev_sd.pending)
+                curr_pending_n = len(curr_sd.pending)
+                pending_partial = (
+                    prev_pending_n >= 50
+                    and curr_pending_n < prev_pending_n * 0.5
+                )
+                if not pending_partial:
+                    pending_left = prev_sd.pending - curr_sd.pending
+                    for u in sorted(pending_left):
+                        if u in curr_sd.following or u in latest_following_set:
+                            # The accept-event time = the IG follow timestamp
+                            # on this user's row in the `following` table.
+                            # Prefer the current snapshot's row; fall back to
+                            # the latest snapshot's if curr doesn't have it
+                            # yet (transition split across snapshots). Without
+                            # this, all accepts were tagged with the snapshot's
+                            # taken_at — producing the 17-people-at-the-exact-
+                            # same-minute clusters Joshua reported.
+                            accept_ts = (ts_following.get(s.id, {}).get(u)
+                                      or (ts_following.get(latest, {}).get(u) if latest is not None else None))
+                            emit(events, "they_accepted", u, s.id, curr_ts, accept_ts)
+                        else:
+                            # No precise IG timestamp for "request didn't
+                            # become a follow" — IG just removes the row.
+                            # Bound between prev and curr snapshot times.
+                            emit(events, "pending_withdrawn", u, s.id, curr_ts,
+                                 time_lower_bound=prev_ts,
+                                 time_upper_bound=curr_ts)
 
                 # ---------- incoming events: only if both sides have data ----------
                 # Suppresses the phantom 'every request resolved' flood that
                 # happens when one snapshot lacks parsed incoming-requests.
-                if s.id in snaps_with_incoming and prev_id in snaps_with_incoming:
+                # Same partial-export guard as the pending side.
+                prev_incoming_n = len(prev_sd.incoming_requests)
+                curr_incoming_n = len(curr_sd.incoming_requests)
+                incoming_partial = (
+                    prev_incoming_n >= 50
+                    and curr_incoming_n < prev_incoming_n * 0.5
+                )
+                if (s.id in snaps_with_incoming
+                        and prev_id in snaps_with_incoming
+                        and not incoming_partial):
                     for u in sorted(curr_sd.incoming_requests - prev_sd.incoming_requests):
                         emit(events, "new_incoming_request", u, s.id, curr_ts,
                              (ts_incoming.get(s.id, {})).get(u))
