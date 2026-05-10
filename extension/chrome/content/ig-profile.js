@@ -3628,6 +3628,26 @@ if (_IS_RUNNER_TAB) {
     onLocationMaybeChanged();
   }, 500);
 
+  // Profile-path drift poll. After certain IG flows (most notably the
+  // export wizard finishing — it can mutate session cookies + silently
+  // re-render the SPA shell) the URL has changed but our pushState /
+  // replaceState / popstate hook didn't see the change. The overlay
+  // stays stuck on the previous profile's username, or disappears
+  // entirely if the URL drifted to a non-profile path. This poll
+  // detects the gap between `isProfilePath(location)` and `_lastUsername`
+  // and fires onLocationMaybeChanged to re-sync. Ignored when
+  // _archiveAllInFlight (we're between auto-clicks and an interim
+  // mismatch is expected). Same 500ms cadence as the story poll —
+  // cheap, two regex tests per tick.
+  setInterval(() => {
+    if (_archiveAllInFlight) return;
+    const path = window.location.pathname;
+    const observedUser = isProfilePath(path);
+    if (observedUser !== _lastUsername) {
+      onLocationMaybeChanged();
+    }
+  }, 500);
+
   // Initial pass.
   setTimeout(onLocationMaybeChanged, 200);
 
