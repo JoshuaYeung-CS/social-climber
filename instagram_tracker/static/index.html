@@ -38,7 +38,12 @@
     <a class="tab" data-view="check" href="#check" role="tab">Check</a>
     <a class="tab" data-view="history" href="#history" role="tab">History</a>
     <a class="tab" data-view="activity" href="#activity" role="tab">Activity</a>
-    <a class="tab" data-view="snapshots" href="#snapshots" role="tab">Imports</a>
+    <!-- Archived media gets its own top-level page (the standalone /archive
+         view that already exists). Anchor with no data-view so the SPA
+         router doesn't try to swap views — browser does a real navigation,
+         which is what we want for this view (it has its own search, sort,
+         and bulk-select that don't need to live inside the SPA shell). -->
+    <a class="tab" href="/archive" role="tab">Archived</a>
   </nav>
 
   <main id="main">
@@ -133,12 +138,17 @@
         <div id="request-rejected-users" class="notes-users"></div>
       </div>
 
-      <div class="card" id="archive-card" hidden>
-        <a class="notes-card-head" href="/archive" target="_blank" rel="noopener" title="Open all archived media on a full page">
-          <h2>📦 Archived media <span class="archive-open-hint">↗</span></h2>
-        </a>
-        <p class="muted small" id="archive-summary"></p>
-        <div id="archive-users" class="notes-users"></div>
+      <!-- Imports moved here from its own tab (swapped with Archived
+           media which is now a top-level page). Same loader as the
+           snapshots view — list of imports, newest first, with delete
+           buttons. Hidden until at least one snapshot exists so the
+           empty-state on a fresh install isn't ugly. -->
+      <div class="card" id="imports-card" hidden>
+        <div class="card-header">
+          <h2>📦 Imports <span class="count-pill" id="imports-count">0</span></h2>
+        </div>
+        <p class="muted small">All imported snapshots, newest first by export timestamp. Delete to remove a snapshot from history.</p>
+        <ul id="snapshot-list" class="snapshot-list"></ul>
       </div>
 
       <div class="card" id="archive-queue-card" hidden>
@@ -280,14 +290,6 @@
       </div>
     </section>
 
-    <!-- Snapshots view -->
-    <section class="view" data-view="snapshots">
-      <div class="card">
-        <h2>Imports</h2>
-        <p class="muted">All snapshots, newest first. Listed by export timestamp (taken_at) — chronological, not import order.</p>
-        <ul id="snapshot-list" class="snapshot-list"></ul>
-      </div>
-    </section>
   </main>
 
   <!-- Account detail modal -->

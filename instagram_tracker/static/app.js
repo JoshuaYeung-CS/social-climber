@@ -198,10 +198,13 @@ window.addEventListener("keydown", (e) => {
 // ---------- view switching ----------
 
 function showView(name, push = true) {
+  // "snapshots" used to be its own view but moved to a home card.
+  // Redirect any lingering links / bookmarks to home so the imports
+  // list still surfaces (now on home as #imports-card).
+  if (name === "snapshots") name = "home";
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === name));
   $$(".view").forEach((v) => v.classList.toggle("active", v.dataset.view === name));
   if (name === "lists") loadLists();
-  if (name === "snapshots") loadSnapshots();
   if (name === "check") loadQueue();
   if (name === "history") loadHistory();
   if (name === "activity") loadActivityLog();
@@ -493,8 +496,12 @@ async function loadHome() {
       ]
     );
 
-    loadArchiveCard();
     loadArchiveQueueCard();
+    // Imports moved from its own tab to a home card (swapped slots
+    // with the archive-media card, which is now its own top-level
+    // page). loadSnapshots also handles count-pill + show/hide of
+    // the card based on whether any imports exist.
+    loadSnapshots();
     // Home page is shorter than lists but a long Notes / archive
     // queue can still push it taller than the viewport — restore the
     // saved scroll if we have one.
@@ -752,8 +759,9 @@ function _startLiveRefresh() {
     if (document.hidden) return;
     if (_renderedView !== "home") return;
     try {
-      // Refresh just the archive card — cheap, no scroll impact.
-      await loadArchiveCard();
+      // Refresh just the imports card — cheap, no scroll impact.
+      // (Archive card moved to its own top-level page.)
+      await loadSnapshots();
       // Also refresh the home summary's bucket counts (notes count
       // changes when you add/edit notes from the modal). Skip the
       // top-of-card spinner so the UI doesn't flash.
@@ -1870,11 +1878,10 @@ window.addEventListener("popstate", (e) => {
       select.value = goingToListKind;
     }
     loadLists();
-  } else if (goingToView === "snapshots") loadSnapshots();
-  else if (goingToView === "check") loadQueue();
+  } else if (goingToView === "check") loadQueue();
   else if (goingToView === "activity") loadActivityLog();
   else if (goingToView === "history") loadHistory();
-  else if (goingToView === "home") loadHome();
+  else if (goingToView === "home" || goingToView === "snapshots") loadHome();
   modalTaggedDirty = false;
 });
 
@@ -4410,6 +4417,11 @@ async function loadSnapshots() {
   try {
     const list = await api.get("/api/snapshots");
     const ul = $("#snapshot-list");
+    const card = $("#imports-card");
+    const countPill = $("#imports-count");
+    if (!ul) return;
+    if (countPill) countPill.textContent = String(list.length);
+    if (card) card.hidden = list.length === 0;
     if (list.length === 0) {
       ul.innerHTML = `<li class="muted">No imports yet.</li>`;
       return;
