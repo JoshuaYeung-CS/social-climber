@@ -278,30 +278,15 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "ts": latest_ts,
             })
 
-        # Acceptance event: they accepted your follow request AND didn't
-        # follow you back AND aren't currently requesting to follow you.
-        # This is the per-import notification at the moment of accept;
-        # the stateful private_no_followback_overdue keeps surfacing them
-        # past the 3-day threshold. Fires for ALL privacy types — public
-        # accounts can also end up here when a request resolves to a
-        # follow without reciprocation (rare but possible).
-        for u in sorted(accepted_no_followback & favorites):
-            diff_alerts.append({
-                "kind": "favorite_accepted_no_followback",
-                "username": u,
-                "severity": "high",
-                "message": f"★ Favorite {u} ({_badge(u)}) accepted your follow — they haven't followed back or requested.",
-                "ts": latest_ts,
-            })
-
-        for u in sorted(accepted_no_followback - favorites):
-            diff_alerts.append({
-                "kind": "accepted_no_followback",
-                "username": u,
-                "severity": "normal",
-                "message": f"✓ {u} ({_badge(u)}) accepted your follow — they haven't followed back or requested.",
-                "ts": latest_ts,
-            })
+        # NOTE: previously emitted diff alerts for "they accepted but
+        # haven't followed back" (kinds: accepted_no_followback /
+        # favorite_accepted_no_followback) — disabled per user request
+        # because these resolve fast (private accepts often follow back
+        # within hours) and were filling the alerts panel with state
+        # that's about to change. The set `accepted_no_followback` is
+        # still computed above so future re-enablement is a one-line
+        # restore. The /api/lists "private_accepted_no_follow_back"
+        # surface remains the durable view of this state.
 
         # New mutuals this snapshot — accounts that joined your followers
         # AND that you're already following.
@@ -460,85 +445,19 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "ts": int(followed_at.timestamp()),
             })
 
-    # Stateful: private-no-followback (auto). Fires for every private
-    # account you've been following PRIVATE_NO_FOLLOWBACK_ALERT_DAYS+
-    # without them following back, regardless of any tag. Mirrors the
-    # private-side want_remove threshold but doesn't require the manual
-    # ✦ tag, so requests you sent and forgot about still surface.
-    #
-    # Skips accounts that the user has already actively classified:
-    #   want_remove → handled by want_remove_overdue (higher signal).
-    #   watchlist   → handled by waitback_overdue (user-controlled wait).
-    #   suppressed  → user already said "this isn't a real candidate"
-    #                  (disabled / unavailable / random_request).
-    # And skips:
-    #   * accounts in your incoming requests (they ARE trying to follow
-    #     back, just bouncing through approval flow on either side).
-    #   * accounts not currently in your following at all (you haven't
-    #     followed them; nothing to wait on).
-    #   * accounts you don't have a private signal on (only fire when
-    #     we have positive evidence they're private — likely_private or
-    #     manually-marked now_public is the explicit override case and
-    #     belongs to the public threshold path).
-    private_following_users = [u for u in curr.following if u not in curr.followers]
-    if private_following_users:
-        # Reuse already-loaded suppressed set + favorites.
-        # Pull existing tag-based skip-sets in one pass each.
-        already_handled: set[str] = set()
-        for entry in list_with_flag(conn, "want_remove"):
-            already_handled.add(entry["username"])
-        for entry in list_with_flag(conn, "watchlist"):
-            already_handled.add(entry["username"])
-        # Privacy + now_public overlay for the candidate set.
-        priv_filtered = [u for u in private_following_users if u not in already_handled and u not in suppressed]
-        if priv_filtered:
-            pn_privacy = privacy_status_bulk(conn, priv_filtered)
-            ph = ",".join("?" * len(priv_filtered))
-            pn_now_public: set[str] = set()
-            for r in conn.execute(
-                f"SELECT username FROM profile_tags WHERE now_public = 1 AND username IN ({ph})",
-                priv_filtered,
-            ).fetchall():
-                pn_now_public.add(r["username"])
-            # Follow-timestamps in one bulk query.
-            pn_follow_ts: dict[str, int] = {}
-            for r in conn.execute(
-                f"SELECT username, MAX(export_timestamp) AS ts FROM following "
-                f"WHERE username IN ({ph}) AND export_timestamp IS NOT NULL "
-                f"GROUP BY username",
-                priv_filtered,
-            ).fetchall():
-                if r["ts"] is not None:
-                    pn_follow_ts[r["username"]] = int(r["ts"])
-            now_utc_pn = datetime.now(timezone.utc)
-            cutoff_pn = now_utc_pn - timedelta(days=PRIVATE_NO_FOLLOWBACK_ALERT_DAYS)
-            for u in priv_filtered:
-                if u in curr.incoming_requests:
-                    continue  # they're requesting back; don't nag yet
-                status = pn_privacy.get(u, "unknown")
-                if u in pn_now_public:
-                    continue  # they're public per user override; not "private no follow back"
-                if status != "likely_private":
-                    continue  # only fire when we have positive private evidence
-                ts = pn_follow_ts.get(u)
-                if ts is None:
-                    continue
-                followed_at = datetime.fromtimestamp(ts, tz=timezone.utc)
-                if followed_at > cutoff_pn:
-                    continue  # under threshold
-                days = (now_utc_pn - followed_at).days
-                is_fav = u in favorites
-                prefix = "★🔒" if is_fav else "🔒"
-                fav_label = "★ Favorite " if is_fav else ""
-                stateful.append({
-                    "kind": "private_no_followback_overdue",
-                    "username": u,
-                    "severity": "high" if is_fav else "normal",
-                    "message": f"{prefix} {fav_label}{u} (🔒 private) accepted but hasn't followed you back in {days} days.",
-                    "days": days,
-                    "privacy": "likely_private",
-                    "ts": int(followed_at.timestamp()),
-                })
+    # NOTE: stateful "private_no_followback_overdue" alert removed
+    # per user request. It fired 3+ days after a private account
+    # accepted without following back, but private accept→follow-back
+    # often takes longer than the threshold for benign reasons (they
+    # check back when active, etc.) and the panel got cluttered with
+    # state about to flip on its own. The user's explicit-action paths
+    # still cover this:
+    #   ★ Favorite + want_remove → want_remove_overdue (3d / 7d split)
+    #   ↺ watchlist → waitback_overdue (7d uniform)
+    #   /api/lists "private_accepted_no_follow_back" → durable view of
+    #     this state without alert pressure.
+    # PRIVATE_NO_FOLLOWBACK_ALERT_DAYS still lives in config so re-
+    # enabling is a one-block restore.
 
     # Stateful: recent unfollows. Surfaces every account whose last
     # appearance in your followers was within the past
