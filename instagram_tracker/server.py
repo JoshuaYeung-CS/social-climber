@@ -1702,6 +1702,58 @@ def _activity_log_compute():
             deduped.append(e)
         events = deduped
 
+        # Bounce-collapse for disappearance kinds. Some accounts flicker
+        # in and out of the followers/following/pending/incoming sets
+        # across consecutive exports — IG drops a row briefly, then
+        # re-includes it on the very next snapshot. Each bounce-out
+        # produces a fresh disappearance event, so a single real-world
+        # "they removed me" can show up as 3+ events all within an hour.
+        # The user-visible result was @reynaphan, @amyxtrann, etc.
+        # appearing 3× at 1:47 / 1:54 / 2:43 on the same morning.
+        #
+        # Keep only the FIRST event in each (kind, username) cluster
+        # where consecutive events are within BOUNCE_WINDOW_S of each
+        # other. Real re-removals (account is stably in your following
+        # for days, then disappears again) are preserved because they
+        # fall outside the bounce window.
+        BOUNCE_WINDOW_S = 24 * 3600  # 24 hours
+        BOUNCE_PRONE_KINDS = {
+            "removed_you", "unfollowed_you",
+            "pending_withdrawn", "incoming_withdrawn",
+        }
+        from datetime import datetime as _dt
+        def _ev_epoch(e: dict) -> float:
+            ts = e.get("actual_event_at") or e.get("time_lower_bound") or e.get("timestamp")
+            if not ts:
+                return 0.0
+            try:
+                return _dt.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+            except (ValueError, TypeError):
+                return 0.0
+        # Bucket bounce-prone events by (kind, username). Sort each
+        # bucket chronologically and walk it forward, dropping any
+        # event whose distance from the previous KEPT event is below
+        # the threshold. Non-bounce-prone events pass through unchanged.
+        bucketed: dict[tuple, list[dict]] = {}
+        passthrough: list[dict] = []
+        for e in events:
+            if e.get("kind") in BOUNCE_PRONE_KINDS:
+                key = (e["kind"], e["username"])
+                bucketed.setdefault(key, []).append(e)
+            else:
+                passthrough.append(e)
+        kept_bounces: list[dict] = []
+        for key, group in bucketed.items():
+            group.sort(key=_ev_epoch)
+            last_kept_ts: float | None = None
+            for e in group:
+                ts = _ev_epoch(e)
+                if last_kept_ts is not None and (ts - last_kept_ts) < BOUNCE_WINDOW_S:
+                    continue  # bounce flicker — suppress
+                kept_bounces.append(e)
+                last_kept_ts = ts
+        events = passthrough + kept_bounces
+
         # Filter out events involving accounts the user has tagged as
         # ✕ unavailable, ⚠ disabled, or 🎲 random_request. The user has
         # already declared "this account is gone / spam," so surfacing
