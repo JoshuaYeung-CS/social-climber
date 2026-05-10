@@ -3635,6 +3635,7 @@ function renderActivityStats() {
         <div class="stats-row"><span>Accepted</span><strong>${req_accepted.toLocaleString()} <span class="stats-pct">${pct(req_accepted, req_interacted)} of interacted</span></strong></div>
         <div class="stats-row"><span>Rejected / withdrew</span><strong>${req_rejected.toLocaleString()} <span class="stats-pct">${pct(req_rejected, req_interacted)} of interacted</span></strong></div>
         <div class="stats-row"><span>Of accepted, followed back</span><strong>${accepted_back.toLocaleString()} <span class="stats-pct">${pct(accepted_back, req_accepted)}</span></strong></div>
+        <div class="stats-row"><span>Of interacted, followed back</span><strong>${accepted_back.toLocaleString()} <span class="stats-pct">${pct(accepted_back, req_interacted)} of interacted</span></strong></div>
         <div class="stats-row stats-row-emph"><span>End-to-end mutual rate</span><strong>${accepted_back.toLocaleString()} <span class="stats-pct">${pct(accepted_back, req_sent)} of all sent</span></strong></div>
       </div>
 
@@ -3651,7 +3652,8 @@ function renderActivityStats() {
         <div class="stats-row"><span>Interacted (resolved)</span><strong>${inbound_interacted.toLocaleString()} <span class="stats-pct">${pct(inbound_interacted, inbound_received)}</span></strong></div>
         <div class="stats-row"><span>You accepted</span><strong>${inbound_accepted.toLocaleString()} <span class="stats-pct">${pct(inbound_accepted, inbound_interacted)} of interacted</span></strong></div>
         <div class="stats-row"><span>Dropped / withdrawn</span><strong>${inbound_dropped.toLocaleString()} <span class="stats-pct">${pct(inbound_dropped, inbound_interacted)} of interacted</span></strong></div>
-        <div class="stats-row stats-row-emph"><span>Of accepted, you followed back</span><strong>${inbound_followed_back.toLocaleString()} <span class="stats-pct">${pct(inbound_followed_back, inbound_accepted)}</span></strong></div>
+        <div class="stats-row"><span>Of accepted, you followed back</span><strong>${inbound_followed_back.toLocaleString()} <span class="stats-pct">${pct(inbound_followed_back, inbound_accepted)}</span></strong></div>
+        <div class="stats-row stats-row-emph"><span>Of interacted, mutual</span><strong>${inbound_followed_back.toLocaleString()} <span class="stats-pct">${pct(inbound_followed_back, inbound_interacted)} of interacted</span></strong></div>
       </div>
 
       <div class="stats-card">
