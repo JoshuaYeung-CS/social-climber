@@ -1905,6 +1905,7 @@ async function _archiveAllVisiblePostsImpl(username, categories) {
       // clicking it opens the story viewer at slide 1, and the per-
       // item archiver walks through.
       const storyPrefix = `/stories/${username}/`;
+      let storyAddedFromDom = 0;
       for (const a of document.querySelectorAll(`a[href^="${storyPrefix}"]`)) {
         const href = a.getAttribute("href");
         if (!href || seenHref.has(href)) continue;
@@ -1913,6 +1914,21 @@ async function _archiveAllVisiblePostsImpl(username, categories) {
         if (href.includes("/highlights/")) continue;
         seenHref.add(href);
         collectedItems.push({ href, el: a, source: `${sourceLabel} (story)` });
+        added += 1;
+        storyAddedFromDom += 1;
+      }
+      // Fallback: IG sometimes renders the story-ring profile pic as a
+      // <button> / <div> with a click handler instead of a real <a>
+      // — our selector misses those, and Story silently got skipped.
+      // If we didn't find ANY story link on the profile page,
+      // queue the entry URL `/stories/<user>/` directly. The per-item
+      // archive flow's entry-URL fallback (manifest lookup +
+      // DOM-walk + URL specialization retry) handles "no active story"
+      // gracefully (one give-up log) so this fallback is safe to fire
+      // unconditionally when Story is selected.
+      if (storyAddedFromDom === 0 && !seenHref.has(storyPrefix)) {
+        seenHref.add(storyPrefix);
+        collectedItems.push({ href: storyPrefix, el: null, source: `${sourceLabel} (story-fallback)` });
         added += 1;
       }
     }
