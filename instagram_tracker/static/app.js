@@ -3517,9 +3517,18 @@ function renderActivityStats() {
   }
   const has = (u, k) => userKinds.get(u)?.has(k);
 
-  // Outbound funnel: you sent a request → either accepted (you're now
-  // following them) or rejected/withdrawn.
-  let req_sent = 0, req_accepted = 0, req_rejected = 0;
+  // Outbound funnel: you sent a request (= private account, since
+  // public profiles auto-accept without a request gate). Resolution
+  // is one of:
+  //   - they_accepted → they approved; you're now following them
+  //   - pending_withdrawn → request disappeared without becoming a
+  //     follow (rejected / expired / you cancelled — IG doesn't tell
+  //     us which)
+  //   - still pending → request hasn't resolved yet
+  // The kind names here MUST match server.py:_activity_log_compute's
+  // emit() call sites — using the wrong names gave us 0% rejected
+  // even though pending_withdrawn fires 50+ times per import.
+  let req_sent = 0, req_accepted = 0, req_rejected = 0, req_still_pending = 0;
   // Of the accepted ones, how many followed back?
   let accepted_back = 0;
   // Direct follow (public → no request gate, you just follow).
@@ -3527,12 +3536,15 @@ function renderActivityStats() {
   for (const [u, kinds] of userKinds) {
     if (kinds.has("you_requested")) {
       req_sent += 1;
-      if (kinds.has("they_accepted") || kinds.has("you_followed")) {
+      const resolved_accepted = kinds.has("they_accepted") || kinds.has("you_followed");
+      const resolved_rejected = kinds.has("pending_withdrawn");
+      if (resolved_accepted) {
         req_accepted += 1;
         if (kinds.has("new_follower")) accepted_back += 1;
-      }
-      if (kinds.has("my_request_rejected") || kinds.has("you_unrequested")) {
+      } else if (resolved_rejected) {
         req_rejected += 1;
+      } else {
+        req_still_pending += 1;
       }
     } else if (kinds.has("you_followed")) {
       // Followed without a request event = public-account direct follow.
@@ -3541,20 +3553,24 @@ function renderActivityStats() {
     }
   }
 
-  // Inbound funnel: they requested → either you accepted (they're now
-  // your follower) or the request went away.
-  let inbound_received = 0, inbound_accepted = 0, inbound_dropped = 0;
+  // Inbound funnel: they sent YOU a request (which means YOU are
+  // private — the request gate fires on the receiver's side). Same
+  // resolution shape as outbound, mirrored.
+  let inbound_received = 0, inbound_accepted = 0, inbound_dropped = 0, inbound_pending = 0;
   // Of those you accepted, how many did you follow back?
   let inbound_followed_back = 0;
   for (const [u, kinds] of userKinds) {
-    if (kinds.has("they_requested")) {
+    if (kinds.has("new_incoming_request")) {
       inbound_received += 1;
-      if (kinds.has("you_accepted") || kinds.has("new_follower")) {
+      const resolved_accepted = kinds.has("you_accepted") || kinds.has("new_follower");
+      const resolved_dropped = kinds.has("incoming_withdrawn");
+      if (resolved_accepted) {
         inbound_accepted += 1;
         if (kinds.has("you_followed")) inbound_followed_back += 1;
-      }
-      if (kinds.has("removed_their_request") || kinds.has("they_unrequested")) {
+      } else if (resolved_dropped) {
         inbound_dropped += 1;
+      } else {
+        inbound_pending += 1;
       }
     }
   }
@@ -3580,10 +3596,13 @@ function renderActivityStats() {
     }
   }
 
-  // Net follower change.
+  // Net follower change. Kind names per server.py:_activity_log_compute:
+  //   new_follower    — they followed you
+  //   unfollowed_you  — they unfollowed
+  //   removed_you     — they removed you as a follower (left following too)
   const new_followers = kindCounts.new_follower || 0;
   const lost_followers = (kindCounts.unfollowed_you || 0)
-                       + (kindCounts.you_removed_as_follower || 0);
+                       + (kindCounts.removed_you || 0);
   const net = new_followers - lost_followers;
 
   // Activity volume: events per day, last 30 days.
@@ -3604,10 +3623,11 @@ function renderActivityStats() {
   wrap.innerHTML = `
     <div class="stats-grid">
       <div class="stats-card">
-        <div class="stats-card-h">📤 Outbound funnel</div>
-        <div class="stats-row"><span>Requests sent</span><strong>${req_sent.toLocaleString()}</strong></div>
+        <div class="stats-card-h">🔒 Private requests (you sent)</div>
+        <div class="stats-row"><span>Total sent</span><strong>${req_sent.toLocaleString()}</strong></div>
         <div class="stats-row"><span>Accepted</span><strong>${req_accepted.toLocaleString()} <span class="stats-pct">${pct(req_accepted, req_sent)}</span></strong></div>
         <div class="stats-row"><span>Rejected / withdrew</span><strong>${req_rejected.toLocaleString()} <span class="stats-pct">${pct(req_rejected, req_sent)}</span></strong></div>
+        <div class="stats-row"><span>Still pending</span><strong>${req_still_pending.toLocaleString()} <span class="stats-pct">${pct(req_still_pending, req_sent)}</span></strong></div>
         <div class="stats-row stats-row-emph"><span>Of accepted, followed back</span><strong>${accepted_back.toLocaleString()} <span class="stats-pct">${pct(accepted_back, req_accepted)}</span></strong></div>
       </div>
 
@@ -3618,10 +3638,11 @@ function renderActivityStats() {
       </div>
 
       <div class="stats-card">
-        <div class="stats-card-h">📥 Inbound funnel</div>
-        <div class="stats-row"><span>Requests received</span><strong>${inbound_received.toLocaleString()}</strong></div>
+        <div class="stats-card-h">📥 Inbound requests (they sent)</div>
+        <div class="stats-row"><span>Total received</span><strong>${inbound_received.toLocaleString()}</strong></div>
         <div class="stats-row"><span>You accepted</span><strong>${inbound_accepted.toLocaleString()} <span class="stats-pct">${pct(inbound_accepted, inbound_received)}</span></strong></div>
         <div class="stats-row"><span>Dropped / withdrawn</span><strong>${inbound_dropped.toLocaleString()} <span class="stats-pct">${pct(inbound_dropped, inbound_received)}</span></strong></div>
+        <div class="stats-row"><span>Still pending</span><strong>${inbound_pending.toLocaleString()} <span class="stats-pct">${pct(inbound_pending, inbound_received)}</span></strong></div>
         <div class="stats-row stats-row-emph"><span>Of accepted, you followed back</span><strong>${inbound_followed_back.toLocaleString()} <span class="stats-pct">${pct(inbound_followed_back, inbound_accepted)}</span></strong></div>
       </div>
 
