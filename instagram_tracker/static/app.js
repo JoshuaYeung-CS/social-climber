@@ -3628,7 +3628,8 @@ function renderActivityStats() {
         <div class="stats-row"><span>Accepted</span><strong>${req_accepted.toLocaleString()} <span class="stats-pct">${pct(req_accepted, req_sent)}</span></strong></div>
         <div class="stats-row"><span>Rejected / withdrew</span><strong>${req_rejected.toLocaleString()} <span class="stats-pct">${pct(req_rejected, req_sent)}</span></strong></div>
         <div class="stats-row"><span>Still pending</span><strong>${req_still_pending.toLocaleString()} <span class="stats-pct">${pct(req_still_pending, req_sent)}</span></strong></div>
-        <div class="stats-row stats-row-emph"><span>Of accepted, followed back</span><strong>${accepted_back.toLocaleString()} <span class="stats-pct">${pct(accepted_back, req_accepted)}</span></strong></div>
+        <div class="stats-row"><span>Of accepted, followed back</span><strong>${accepted_back.toLocaleString()} <span class="stats-pct">${pct(accepted_back, req_accepted)}</span></strong></div>
+        <div class="stats-row stats-row-emph"><span>End-to-end mutual rate</span><strong>${accepted_back.toLocaleString()} <span class="stats-pct">${pct(accepted_back, req_sent)} of all sent</span></strong></div>
       </div>
 
       <div class="stats-card">
