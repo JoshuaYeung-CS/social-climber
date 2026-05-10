@@ -1336,6 +1336,88 @@ code {
   color: var(--text);
   background: var(--accent-soft);
 }
+
+/* Activity analytics — funnel + reciprocity grid above the activity log. */
+.activity-stats {
+  margin-top: 8px;
+}
+.activity-stats .stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+.stats-card {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.stats-card-wide {
+  grid-column: 1 / -1;
+}
+.stats-card-h {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.stats-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.stats-row strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.stats-row-emph {
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.stats-pct {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  margin-left: 4px;
+}
+.stats-good { color: var(--good); }
+.stats-bad { color: var(--bad); }
+.stats-spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  margin-top: 6px;
+  height: 110px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.spark-col {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 28px;
+}
+.spark-bar {
+  width: 18px;
+  background: var(--accent);
+  border-radius: 3px 3px 0 0;
+  transition: opacity 100ms ease;
+}
+.spark-col:hover .spark-bar { opacity: 0.7; }
+.spark-label {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
 .kind-pill .kind-count {
   font-size: 11px;
   font-weight: 700;

@@ -204,6 +204,7 @@ function showView(name, push = true) {
   if (name === "snapshots") loadSnapshots();
   if (name === "check") loadQueue();
   if (name === "history") loadHistory();
+  if (name === "activity") loadActivityLog();
   if (push) {
     const state = history.state || {};
     if (state.view !== name || state.listKind) {
@@ -1871,6 +1872,8 @@ window.addEventListener("popstate", (e) => {
     loadLists();
   } else if (goingToView === "snapshots") loadSnapshots();
   else if (goingToView === "check") loadQueue();
+  else if (goingToView === "activity") loadActivityLog();
+  else if (goingToView === "history") loadHistory();
   else if (goingToView === "home") loadHome();
   modalTaggedDirty = false;
 });
@@ -3476,9 +3479,172 @@ async function loadActivityLog(force = false) {
       _activityData = data.events || [];
     }
     renderActivityLog();
+    renderActivityStats();
   } catch (e) {
     out.innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
   }
+}
+
+// Activity analytics — pure client-side reduction of _activityData.
+// Conversion funnels and follow-back ratios are computed by joining
+// events at the username level: each unique username's set of event
+// kinds tells us whether a request became a follow, whether they
+// followed back, etc. No new server endpoint needed in v1.
+function renderActivityStats() {
+  const wrap = $("#activity-stats");
+  if (!wrap || !_activityData) return;
+  const events = _activityData;
+  if (!events.length) {
+    wrap.innerHTML = `<div class="muted">No events yet. Import a few snapshots to populate analytics.</div>`;
+    return;
+  }
+  // Per-username kind set: { username -> Set<kind> }. Lets us answer
+  // "did THIS user ever transition X → Y?" without a SQL pass.
+  const userKinds = new Map();
+  const kindCounts = {};
+  for (const e of events) {
+    if (!e || !e.username) continue;
+    if (!userKinds.has(e.username)) userKinds.set(e.username, new Set());
+    userKinds.get(e.username).add(e.kind);
+    kindCounts[e.kind] = (kindCounts[e.kind] || 0) + 1;
+  }
+  const has = (u, k) => userKinds.get(u)?.has(k);
+
+  // Outbound funnel: you sent a request → either accepted (you're now
+  // following them) or rejected/withdrawn.
+  let req_sent = 0, req_accepted = 0, req_rejected = 0;
+  // Of the accepted ones, how many followed back?
+  let accepted_back = 0;
+  // Direct follow (public → no request gate, you just follow).
+  let direct_follow = 0, direct_follow_back = 0;
+  for (const [u, kinds] of userKinds) {
+    if (kinds.has("you_requested")) {
+      req_sent += 1;
+      if (kinds.has("they_accepted") || kinds.has("you_followed")) {
+        req_accepted += 1;
+        if (kinds.has("new_follower")) accepted_back += 1;
+      }
+      if (kinds.has("my_request_rejected") || kinds.has("you_unrequested")) {
+        req_rejected += 1;
+      }
+    } else if (kinds.has("you_followed")) {
+      // Followed without a request event = public-account direct follow.
+      direct_follow += 1;
+      if (kinds.has("new_follower")) direct_follow_back += 1;
+    }
+  }
+
+  // Inbound funnel: they requested → either you accepted (they're now
+  // your follower) or the request went away.
+  let inbound_received = 0, inbound_accepted = 0, inbound_dropped = 0;
+  // Of those you accepted, how many did you follow back?
+  let inbound_followed_back = 0;
+  for (const [u, kinds] of userKinds) {
+    if (kinds.has("they_requested")) {
+      inbound_received += 1;
+      if (kinds.has("you_accepted") || kinds.has("new_follower")) {
+        inbound_accepted += 1;
+        if (kinds.has("you_followed")) inbound_followed_back += 1;
+      }
+      if (kinds.has("removed_their_request") || kinds.has("they_unrequested")) {
+        inbound_dropped += 1;
+      }
+    }
+  }
+
+  // Reciprocity: total mutuals seen, partitioned by who acted first.
+  // Without per-user timestamps, we approximate by checking whether
+  // new_follower's earliest event predates you_followed's earliest.
+  let mutuals_total = 0, you_first = 0, they_first = 0;
+  for (const [u, kinds] of userKinds) {
+    if (kinds.has("new_follower") && kinds.has("you_followed")) {
+      mutuals_total += 1;
+      // Find earliest timestamp for each side
+      let theirTs = null, yourTs = null;
+      for (const e of events) {
+        if (e.username !== u) continue;
+        if (e.kind === "new_follower" && (!theirTs || e.timestamp < theirTs)) theirTs = e.timestamp;
+        if (e.kind === "you_followed" && (!yourTs || e.timestamp < yourTs)) yourTs = e.timestamp;
+      }
+      if (theirTs && yourTs) {
+        if (theirTs < yourTs) they_first += 1;
+        else if (yourTs < theirTs) you_first += 1;
+      }
+    }
+  }
+
+  // Net follower change.
+  const new_followers = kindCounts.new_follower || 0;
+  const lost_followers = (kindCounts.unfollowed_you || 0)
+                       + (kindCounts.you_removed_as_follower || 0);
+  const net = new_followers - lost_followers;
+
+  // Activity volume: events per day, last 30 days.
+  const dayCounts = new Map();
+  const today = new Date();
+  const oldest = new Date(today.getTime() - 30 * 86400 * 1000);
+  for (const e of events) {
+    const day = (e.timestamp || "").slice(0, 10);
+    if (!day) continue;
+    if (new Date(day) < oldest) continue;
+    dayCounts.set(day, (dayCounts.get(day) || 0) + 1);
+  }
+  const days = [...dayCounts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const maxDay = Math.max(1, ...days.map((d) => d[1]));
+
+  const pct = (num, den) => den ? `${Math.round((num / den) * 100)}%` : "—";
+
+  wrap.innerHTML = `
+    <div class="stats-grid">
+      <div class="stats-card">
+        <div class="stats-card-h">📤 Outbound funnel</div>
+        <div class="stats-row"><span>Requests sent</span><strong>${req_sent.toLocaleString()}</strong></div>
+        <div class="stats-row"><span>Accepted</span><strong>${req_accepted.toLocaleString()} <span class="stats-pct">${pct(req_accepted, req_sent)}</span></strong></div>
+        <div class="stats-row"><span>Rejected / withdrew</span><strong>${req_rejected.toLocaleString()} <span class="stats-pct">${pct(req_rejected, req_sent)}</span></strong></div>
+        <div class="stats-row stats-row-emph"><span>Of accepted, followed back</span><strong>${accepted_back.toLocaleString()} <span class="stats-pct">${pct(accepted_back, req_accepted)}</span></strong></div>
+      </div>
+
+      <div class="stats-card">
+        <div class="stats-card-h">🌐 Public direct-follows</div>
+        <div class="stats-row"><span>You followed (no request)</span><strong>${direct_follow.toLocaleString()}</strong></div>
+        <div class="stats-row stats-row-emph"><span>Followed you back</span><strong>${direct_follow_back.toLocaleString()} <span class="stats-pct">${pct(direct_follow_back, direct_follow)}</span></strong></div>
+      </div>
+
+      <div class="stats-card">
+        <div class="stats-card-h">📥 Inbound funnel</div>
+        <div class="stats-row"><span>Requests received</span><strong>${inbound_received.toLocaleString()}</strong></div>
+        <div class="stats-row"><span>You accepted</span><strong>${inbound_accepted.toLocaleString()} <span class="stats-pct">${pct(inbound_accepted, inbound_received)}</span></strong></div>
+        <div class="stats-row"><span>Dropped / withdrawn</span><strong>${inbound_dropped.toLocaleString()} <span class="stats-pct">${pct(inbound_dropped, inbound_received)}</span></strong></div>
+        <div class="stats-row stats-row-emph"><span>Of accepted, you followed back</span><strong>${inbound_followed_back.toLocaleString()} <span class="stats-pct">${pct(inbound_followed_back, inbound_accepted)}</span></strong></div>
+      </div>
+
+      <div class="stats-card">
+        <div class="stats-card-h">🤝 Mutual reciprocity</div>
+        <div class="stats-row"><span>Mutuals seen (lifetime)</span><strong>${mutuals_total.toLocaleString()}</strong></div>
+        <div class="stats-row"><span>🪄 They followed first</span><strong>${they_first.toLocaleString()} <span class="stats-pct">${pct(they_first, mutuals_total)}</span></strong></div>
+        <div class="stats-row"><span>🪄 You followed first</span><strong>${you_first.toLocaleString()} <span class="stats-pct">${pct(you_first, mutuals_total)}</span></strong></div>
+      </div>
+
+      <div class="stats-card">
+        <div class="stats-card-h">📈 Follower change</div>
+        <div class="stats-row"><span>New followers (lifetime)</span><strong>${new_followers.toLocaleString()}</strong></div>
+        <div class="stats-row"><span>Lost followers</span><strong>${lost_followers.toLocaleString()}</strong></div>
+        <div class="stats-row stats-row-emph"><span>Net</span><strong class="${net >= 0 ? 'stats-good' : 'stats-bad'}">${net >= 0 ? '+' : ''}${net.toLocaleString()}</strong></div>
+      </div>
+
+      <div class="stats-card stats-card-wide">
+        <div class="stats-card-h">📅 Last 30 days · events / day</div>
+        <div class="stats-spark">
+          ${days.length ? days.map(([d, c]) => `
+            <div class="spark-col" title="${escapeAttr(d)}: ${c} events">
+              <div class="spark-bar" style="height: ${Math.max(2, Math.round((c / maxDay) * 80))}px"></div>
+              <div class="spark-label">${escapeHtml(d.slice(5))}</div>
+            </div>
+          `).join("") : `<div class="muted small">No events in the last 30 days.</div>`}
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 // Per-kind label and color for the flat activity feed.

@@ -37,6 +37,7 @@
     <a class="tab" data-view="lists" href="#lists" role="tab">Lists</a>
     <a class="tab" data-view="check" href="#check" role="tab">Check</a>
     <a class="tab" data-view="history" href="#history" role="tab">History</a>
+    <a class="tab" data-view="activity" href="#activity" role="tab">Activity</a>
     <a class="tab" data-view="snapshots" href="#snapshots" role="tab">Imports</a>
   </nav>
 
@@ -255,6 +256,18 @@
         <div id="history-series" class="history-series"></div>
         <div id="history-chart" class="history-chart"></div>
         <div id="history-detail" class="history-detail"></div>
+      </div>
+
+    </section>
+
+    <!-- Activity view — chronological feed + analytics -->
+    <section class="view" data-view="activity">
+      <div class="card">
+        <div class="card-header">
+          <h2>📊 Activity analytics</h2>
+        </div>
+        <p class="muted">Conversion rates and follow-back patterns derived from your full activity history. Recomputes whenever the activity log refreshes.</p>
+        <div id="activity-stats" class="activity-stats"></div>
       </div>
 
       <div class="card">
