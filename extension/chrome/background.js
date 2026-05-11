@@ -432,6 +432,14 @@ const RUNNER_BUDGET_PREFIX = "runner-budget-";
 // downloads slides missed in the first.
 const ARCHIVE_RUNNER_TAB_BUDGET_MIN = 10;
 
+// Tabs we've already advanced from via the close-my-tab fast-path.
+// When tabs.onRemoved fires for these tabs (15s later when the old
+// tab actually closes), skip the advance — already done. Manual
+// closes (user cmd+w on a tab without close-my-tab having fired)
+// don't go through this set, so the onRemoved-driven advance still
+// works for them.
+const _vscoAdvancedFromCloseMsg = new Set();
+
 // Persistent ring-buffer of SW log lines for VSCO chain diagnostics.
 // User shouldn't need to open chrome://extensions → Inspect SW just
 // to share a log; the popup reads this same key and can copy/clear.
@@ -1156,13 +1164,20 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
   if (_debuggerTabs.has(tabId)) {
     _debuggerTabs.delete(tabId);
   }
+  // If close-my-tab already advanced the chain for this tab, skip —
+  // otherwise we'd double-advance (open another URL when we should
+  // be sitting on the just-opened one).
+  if (_vscoAdvancedFromCloseMsg.has(tabId)) {
+    _vscoAdvancedFromCloseMsg.delete(tabId);
+    return;
+  }
   // Skip if the whole window is closing (user aborted the sweep)
   if (removeInfo && removeInfo.isWindowClosing) {
     _swLog(`VSCO: tab ${tabId} removed, window closing — skip advance`);
     return;
   }
   if (removeInfo && removeInfo.windowId != null) {
-    _swLog(`VSCO: tab ${tabId} removed in window ${removeInfo.windowId}, trying advance`);
+    _swLog(`VSCO: tab ${tabId} removed (manual?) in window ${removeInfo.windowId}, trying advance`);
     await _vscoSweepAdvance(removeInfo.windowId);
   }
 });
@@ -1382,22 +1397,35 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // closed (content scripts can't close their own tab directly).
   if (msg.type === "close-my-tab") {
     const tabId = sender?.tab?.id;
-    if (tabId != null) {
-      // 15-second grace — enough time to read the overlay summary
-      // and trigger a copy, not so long that a 5-profile sweep
-      // sits there for minutes between profiles. Cmd+W still works
-      // as a manual skip via the tabs.onRemoved listener path.
-      // Using setTimeout (not chrome.alarms) because 15s is well
-      // under the SW's idle-eviction threshold.
+    const windowId = sender?.tab?.windowId;
+    (async () => {
+      if (tabId == null) {
+        sendResponse({ ok: false });
+        return;
+      }
+      // CRITICAL: open the next sweep URL in the same window BEFORE
+      // we close the current tab. Sequential sweep means each window
+      // typically has just one sweep tab — if we close it first,
+      // Chrome auto-closes the window (no tabs left), then the chain
+      // can't advance because chrome.tabs.create({windowId}) errors
+      // with 'No window with id: <id>'. Verified from user's SW log:
+      //   VSCO advance: chrome.tabs.create FAILED for ...: No window
+      //   with id: 2103511747
+      // By opening next-URL first, the window always has >=1 tab.
+      // The 15s grace then just delays closing the OLD tab (lets the
+      // user read the summary / copy log) without blocking chain
+      // progression.
+      _vscoAdvancedFromCloseMsg.add(tabId);
+      await _vscoSweepAdvance(windowId);
       _swLog(`VSCO close-my-tab: scheduling close of tab ${tabId} in 15s`);
       setTimeout(() => {
         chrome.tabs.remove(tabId).catch((e) => {
           console.log(`[IG Tracker] VSCO: tab ${tabId} close failed (likely already gone):`, e?.message);
         });
       }, 15000);
-    }
-    sendResponse({ ok: true });
-    return false;
+      sendResponse({ ok: true });
+    })();
+    return true;
   }
   // Trusted-click dispatch via chrome.debugger. Content script sends
   // viewport coords (rounded ints); SW attaches the debugger if not
