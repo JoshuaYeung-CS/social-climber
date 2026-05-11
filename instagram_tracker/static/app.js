@@ -221,10 +221,14 @@ function showView(name, push = true) {
 // Tabs are anchors so the browser handles cmd/ctrl/shift-click and
 // middle-click natively (opens a new tab pointing at #<view> — the
 // receiving tab's bootstrapHistory routes to that view on load).
-// Plain click: intercept and SPA-route in place.
+// Plain click: intercept and SPA-route in place — EXCEPT for tabs
+// that don't carry a data-view (the Archived tab is a real link to
+// /archive, not a SPA view). Letting those through avoids the
+// "showView(undefined) → #undefined" bug.
 $$(".tab").forEach((t) =>
   t.addEventListener("click", (e) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+    if (!t.dataset.view) return;  // real navigation; let browser handle it
     e.preventDefault();
     showView(t.dataset.view);
   })

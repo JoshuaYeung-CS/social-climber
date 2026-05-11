@@ -1802,6 +1802,18 @@ textarea#queue-input::-webkit-scrollbar { display: none; }
 .result-list { background: var(--bg-elev-2); border-radius: 8px; padding: 8px; max-height: 240px; overflow-y: auto; }
 .result-list .item { padding: 6px 8px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
 
+/* Imports card was rendering hundreds of rows inline and dwarfing the
+   rest of Home. Wrap in a fixed-height scroller so the card stays
+   compact — the user wheels through history without having to scroll
+   the whole page past it. */
+.snapshot-list-scroll {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.15);
+}
 .snapshot-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
 .snapshot-list li {
   display: flex;

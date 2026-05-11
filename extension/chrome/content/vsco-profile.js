@@ -252,40 +252,68 @@
     return { ok: true, saved, failed, skipped, total: items.length };
   }
 
-  // Find a visible "Load more" pagination button on the current page.
-  // VSCO renders profiles in batches (~15 tiles); after each scroll-to-
-  // bottom the user has to click this button to fetch the next page.
-  // Match the exact phrase to avoid catching strings like "Load more
-  // posts" mid-string, and skip our own overlay elements.
+  // Find a "Load more" pagination button. VSCO's gallery sometimes
+  // renders the button as a <button>, sometimes as a <div role=button>,
+  // and the visible-only check that used to be here failed when the
+  // button was offscreen (rect 0×0) — which is the common case for
+  // long galleries. New strategy: scan everything that looks
+  // button-shaped, match exact "load more" text (case-insensitive),
+  // ignore visibility, and let the caller scrollIntoView before
+  // clicking. Skip our own overlay.
   function _findLoadMoreButton() {
-    for (const el of document.querySelectorAll('button, a, [role="button"]')) {
+    const candidates = document.querySelectorAll(
+      'button, a, [role="button"], [data-testid*="load"], [class*="LoadMore"], [class*="loadmore"]'
+    );
+    for (const el of candidates) {
       const text = (el.textContent || "").trim().toLowerCase();
-      if (text !== "load more") continue;
+      if (text !== "load more" && text !== "load more posts") continue;
       if (el.closest("#vsco-archive-btn, #vsco-archive-progress")) continue;
-      const r = el.getBoundingClientRect();
-      if (r.width <= 0 || r.height <= 0) continue;
       return el;
     }
     return null;
   }
 
-  // Exhaust the gallery: scroll to bottom, click "Load more" if present,
-  // repeat until neither produces new content for two passes in a row.
-  // Two exit signals because VSCO can be slow to mount the next batch
-  // and a single "no growth" pass can be a false negative. Hard ceiling
-  // of 80 passes (~2 min) so a pathological profile can't lock us up.
+  // Some VSCO layouts mount the gallery inside a scroll container that's
+  // not the document body. window.scrollTo(document.body.scrollHeight)
+  // doesn't reach the actual bottom in that case, so the Load More
+  // button never enters the viewport. Walk every overflow-y:auto
+  // descendant and scroll each one to its own bottom too — covers both
+  // the document-scroll and container-scroll layouts.
+  function _scrollEverything() {
+    window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
+    try {
+      const all = document.querySelectorAll("*");
+      for (const el of all) {
+        if (el.scrollHeight > el.clientHeight + 4) {
+          // Skip absurd inputs / tiny widgets — only count tall ones
+          // big enough to plausibly be the gallery container.
+          const r = el.getBoundingClientRect();
+          if (r.height < 200) continue;
+          el.scrollTop = el.scrollHeight;
+        }
+      }
+    } catch (_) { /* DOM transient, retry next pass */ }
+  }
+
+  // Exhaust the gallery: scroll every plausible container to its
+  // bottom, click "Load more" if present (after scrolling it into
+  // view), repeat until neither produces new content for two passes
+  // in a row. Hard ceiling of 80 passes (~2 min).
   async function _scrollAllImagesIntoView() {
     const MAX_PASSES = 80;
     let lastHeight = 0;
     let stable = 0;
     for (let i = 0; i < MAX_PASSES; i++) {
-      window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
+      _scrollEverything();
       await new Promise((r) => setTimeout(r, 700));
       const btn = _findLoadMoreButton();
       if (btn) {
         _updateProgress(`Loading more (pass ${i + 1})…`, 0, 0, 0);
-        try { btn.click(); } catch (_) { /* button still bound, ignore */ }
-        // Pagination fetch + render — give VSCO ~1.5s before re-probing.
+        try {
+          btn.scrollIntoView({ behavior: "instant", block: "center" });
+          await new Promise((r) => setTimeout(r, 200));
+          btn.click();
+        } catch (_) { /* button gone between probe + click, retry */ }
         await new Promise((r) => setTimeout(r, 1500));
         stable = 0;
         lastHeight = document.body.scrollHeight;
