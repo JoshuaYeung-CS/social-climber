@@ -231,19 +231,45 @@
     return { ok: true, saved, failed, skipped, total: items.length };
   }
 
-  // Scroll the profile gallery to the bottom in passes so VSCO's
-  // intersection-observer kicks in and renders the lazy-loaded images.
-  // Bounded by a max pass count + a "scrollHeight stable twice" exit
-  // condition so we don't loop forever on very long profiles. After we
-  // hit the bottom we scroll back to the top so the page looks
-  // untouched if the user inspects it later.
+  // Find a visible "Load more" pagination button on the current page.
+  // VSCO renders profiles in batches (~15 tiles); after each scroll-to-
+  // bottom the user has to click this button to fetch the next page.
+  // Match the exact phrase to avoid catching strings like "Load more
+  // posts" mid-string, and skip our own overlay elements.
+  function _findLoadMoreButton() {
+    for (const el of document.querySelectorAll('button, a, [role="button"]')) {
+      const text = (el.textContent || "").trim().toLowerCase();
+      if (text !== "load more") continue;
+      if (el.closest("#vsco-archive-btn, #vsco-archive-progress")) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) continue;
+      return el;
+    }
+    return null;
+  }
+
+  // Exhaust the gallery: scroll to bottom, click "Load more" if present,
+  // repeat until neither produces new content for two passes in a row.
+  // Two exit signals because VSCO can be slow to mount the next batch
+  // and a single "no growth" pass can be a false negative. Hard ceiling
+  // of 80 passes (~2 min) so a pathological profile can't lock us up.
   async function _scrollAllImagesIntoView() {
+    const MAX_PASSES = 80;
     let lastHeight = 0;
     let stable = 0;
-    const MAX_PASSES = 40;  // ~40 * 600ms = 24s ceiling
     for (let i = 0; i < MAX_PASSES; i++) {
       window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, 700));
+      const btn = _findLoadMoreButton();
+      if (btn) {
+        _updateProgress(`Loading more (pass ${i + 1})…`, 0, 0, 0);
+        try { btn.click(); } catch (_) { /* button still bound, ignore */ }
+        // Pagination fetch + render — give VSCO ~1.5s before re-probing.
+        await new Promise((r) => setTimeout(r, 1500));
+        stable = 0;
+        lastHeight = document.body.scrollHeight;
+        continue;
+      }
       const h = document.body.scrollHeight;
       if (h === lastHeight) {
         stable += 1;
@@ -254,8 +280,6 @@
       }
     }
     window.scrollTo({ top: 0, behavior: "instant" });
-    // Give a beat for any final renders / decode after the snap-back
-    // so the DOM walk catches the full <img src> set.
     await new Promise((r) => setTimeout(r, 400));
   }
 
