@@ -20,6 +20,32 @@
 (function () {
   if (window.__VscoArchive) return;  // re-injection guard
 
+  // API-captured media URLs from vsco-network-interceptor.js (runs in
+  // MAIN world at document_start, sniffs VSCO's gRPC-Web responses
+  // for CDN URLs). The interceptor dispatches a custom event for
+  // each capture; we listen and merge into this map. When archiving,
+  // we prefer these URLs over what we DOM-scrape because:
+  //   - canonical (im.vsco.co/aws-us-west-2/...) URLs are the
+  //     ORIGINAL uploaded files, not the resizer's lossy 2400px
+  //     re-encode — way higher quality
+  //   - The interceptor sees every media item the API returned,
+  //     even ones the DOM never rendered (virtualization eviction)
+  // Keyed by media_id.
+  const _capturedFromApi = new Map();
+  window.addEventListener("vsco-tracker:media", (e) => {
+    const d = e && e.detail;
+    if (!d || !d.id || !d.url) return;
+    const prev = _capturedFromApi.get(d.id);
+    // Upgrade in place if the new entry is canonical and the old
+    // wasn't — keeps the best URL we've seen per id.
+    if (!prev || (d.canonical && !prev.canonical)) {
+      _capturedFromApi.set(d.id, { url: d.url, canonical: !!d.canonical });
+    }
+  });
+  // Ask the interceptor to replay anything captured before this
+  // listener attached (it loaded at document_start; we're document_idle).
+  try { window.dispatchEvent(new Event("vsco-tracker:request-replay")); } catch (_) {}
+
   // Username comes from the URL: vsco.co/<user>/gallery, vsco.co/<user>,
   // vsco.co/<user>/journal etc. We only archive when the path's first
   // segment looks like a real username — reserves like /m/, /spaces/,
@@ -205,13 +231,26 @@
       console.log("[VSCO Archive] not on a profile page");
       return { ok: false, error: "not a profile page" };
     }
-    // Prefer the mid-scroll accumulator if it's populated — it dedups
-    // virtualization-evicted tiles that a single end-of-scroll walk
-    // would miss. Falls back to a fresh DOM walk when called directly
-    // from the on-page button (no scroll-and-harvest preceded it).
-    const items = (_collectedMedia && _collectedMedia.size > 0)
+    // Item set: union of API-captured URLs (highest quality, complete
+    // coverage from gRPC responses) and DOM-scrape (defensive fallback
+    // for anything the API didn't return). API entries take precedence
+    // when both saw the same media_id — canonical aws-us-west-2 URLs
+    // beat the i.vsco.co resizer every time.
+    const itemMap = new Map();
+    for (const [id, info] of _capturedFromApi) {
+      itemMap.set(id, {
+        media_id: id,
+        url: info.url,
+        ext: _extFromUrl(info.url),
+      });
+    }
+    const domItems = (_collectedMedia && _collectedMedia.size > 0)
       ? Array.from(_collectedMedia.values())
       : _collectMediaUrls();
+    for (const d of domItems) {
+      if (!itemMap.has(d.media_id)) itemMap.set(d.media_id, d);
+    }
+    const items = Array.from(itemMap.values());
     if (!items.length) {
       console.log("[VSCO Archive] no media found on page");
       await _appendArchiveLog({

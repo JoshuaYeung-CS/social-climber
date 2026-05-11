@@ -1182,15 +1182,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "fetch-vsco-bytes") {
     (async () => {
       try {
-        // Upgrade VSCO CDN thumbnails to highest resolution. The DOM
-        // exposes `?w=300` / `?w=600` thumbnails; VSCO's CDN happily
-        // serves the same media_id at `?w=2400` (the max desktop
-        // display size on vsco.co). c=1 is a crop flag — drop it so
-        // we get uncropped originals when available.
+        // Upgrade VSCO CDN URLs to the highest available quality:
+        //   - i.vsco.co/<id>?w=300        → ?w=2400 (resizer endpoint;
+        //                                    re-encoded JPEG, ~500KB)
+        //   - im.vsco.co/aws-us-west-2/...→ leave untouched (original
+        //                                    upload, multi-MB, lossless)
+        // The canonical AWS path comes from the API interceptor and
+        // already points at the original — adding ?w=2400 to it would
+        // be ignored at best, 400'd at worst.
         let fetchUrl = msg.url;
         try {
           const u = new URL(msg.url);
-          if (/^(?:i|im)\.vsco\.co$/i.test(u.hostname)) {
+          const isResizer = u.searchParams.has("w") || u.searchParams.has("c");
+          if (/^i\.vsco\.co$/i.test(u.hostname) || isResizer) {
             u.searchParams.set("w", "2400");
             u.searchParams.delete("h");
             u.searchParams.delete("c");
