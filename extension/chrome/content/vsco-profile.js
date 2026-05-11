@@ -367,7 +367,11 @@
   async function _scrollAllImagesIntoView() {
     _collectedMedia = new Map();
     _harvestVisibleMedia();
-    const MAX_PASSES = 120;
+    // Tight cap per user preference. One Load More click + a handful
+    // of scroll passes covers the typical VSCO gallery; if a profile
+    // is too deep for this, raise the cap (or click Load More more
+    // than once).
+    const MAX_PASSES = 5;
     let lastHeight = 0;
     let stable = 0;
     let loadMoreClicks = 0;
