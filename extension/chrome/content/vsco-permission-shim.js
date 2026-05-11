@@ -66,6 +66,31 @@
     }
   } catch (_) { /* old browser, ignore */ }
 
+  // Page Visibility override. Chrome throttles JS in unfocused tabs:
+  // setTimeout floors rise, IntersectionObservers slow, etc. The
+  // incognito sweep runs 5+ tabs in parallel and only one is ever
+  // foregrounded, so the rest get throttled and the gallery never
+  // hydrates more than the initial visible batch. Override
+  // document.hidden / visibilityState to always read "visible" so
+  // VSCO's lazy-load guards (which check these) keep firing.
+  //
+  // Note: this alone doesn't bypass Chrome's V8-level throttling —
+  // that requires chrome.debugger attached. The shim handles the
+  // page-visibility-guarded code paths; the SW handles throttling
+  // via the keep-tab-active message in background.js.
+  try {
+    const docProto = Object.getPrototypeOf(document);
+    const fakeVisible = { get: () => false, configurable: false };
+    const fakeState = { get: () => "visible", configurable: false };
+    Object.defineProperty(docProto, "hidden", fakeVisible);
+    Object.defineProperty(docProto, "visibilityState", fakeState);
+    Object.defineProperty(docProto, "webkitHidden", fakeVisible);
+    Object.defineProperty(docProto, "webkitVisibilityState", fakeState);
+    log("visibility override installed (always visible)");
+  } catch (e) {
+    log("visibility override failed", e && e.message);
+  }
+
   // VSCO declares a PWA manifest at <link rel="manifest" href="...">.
   // Chrome's incognito mode reads that manifest's protocol_handlers /
   // url_handlers fields on the fly and prompts the user — "Access

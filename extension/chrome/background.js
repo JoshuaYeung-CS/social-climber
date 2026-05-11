@@ -1195,6 +1195,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     })();
     return true;
   }
+  // Attach chrome.debugger to the calling tab so Chrome stops
+  // throttling it as a background tab. A debugger-attached tab runs
+  // its JS at full speed regardless of focus — exactly the property
+  // we need for the incognito sweep, where 5+ tabs run in parallel
+  // and only one can be foregrounded. No click is dispatched here;
+  // pure keep-alive.
+  if (msg.type === "keep-tab-active") {
+    (async () => {
+      const tabId = sender?.tab?.id;
+      if (tabId == null) {
+        sendResponse({ ok: false, error: "no tab id" });
+        return;
+      }
+      const attached = await _attachDebugger(tabId);
+      sendResponse({ ok: attached });
+    })();
+    return true;
+  }
   // Close the tab that sent this message. Used by the auto-archive
   // queue flow so each tab can finish its work and then ask to be
   // closed (content scripts can't close their own tab directly).

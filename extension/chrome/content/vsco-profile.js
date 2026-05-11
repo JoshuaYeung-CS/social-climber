@@ -554,6 +554,17 @@
     btn.dataset.running = "1";
     btn.textContent = "Auto-archiving…";
     try {
+      // Ask the SW to attach chrome.debugger to this tab BEFORE we
+      // start scrolling. A debugger-attached tab is exempt from
+      // Chrome's background-throttling — without this, the tab's
+      // setTimeout floor rises and the scroll loop barely makes
+      // progress unless the user manually focuses the tab. User-
+      // observed: "they only load when i look at the tabs."
+      try {
+        await new Promise((resolve) => {
+          chrome.runtime.sendMessage({ type: "keep-tab-active" }, () => resolve());
+        });
+      } catch (_) { /* attach failed, continue anyway */ }
       _updateProgress("Loading gallery…", 0, 0, 0);
       await _scrollAllImagesIntoView();
       const r = await archiveCurrentProfile();
