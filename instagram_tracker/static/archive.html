@@ -214,20 +214,24 @@
 
       let users = [];
 
+      // Promote to GB once we're past ~1 GB so the header stops
+      // reading '21977.0 MB' on multi-GB archives. KB/MB/GB scale by
+      // /1024 each tier. Hoisted out of the try block so renderCard
+      // (which lives at function scope below) can see it — previously
+      // const-scoped inside try{}, which silently broke every card
+      // render with a ReferenceError.
+      const fmtBytes = (n) => {
+        if (n >= 1024 * 1024 * 1024) return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+        if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+        if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
+        return `${n} B`;
+      };
+
       try {
         const r = await fetch("/api/media-overview");
         if (!r.ok) throw new Error("HTTP " + r.status);
         const data = await r.json();
         users = data.users || [];
-        // Promote to GB once we're past ~1 GB so the header stops
-        // reading '21977.0 MB' on multi-GB archives. KB/MB/GB scale
-        // by /1024 each tier; one decimal at MB+ tier is enough.
-        const fmtBytes = (n) => {
-          if (n >= 1024 * 1024 * 1024) return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
-          if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-          if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
-          return `${n} B`;
-        };
         stats.textContent = `${data.total_items} items across ${users.length} account${users.length === 1 ? "" : "s"} · ${data.total_groups} posts/albums · ${fmtBytes(data.total_bytes)}`;
       } catch (e) {
         stats.textContent = "Couldn't load archive: " + e.message;
