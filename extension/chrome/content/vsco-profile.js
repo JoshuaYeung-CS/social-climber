@@ -96,11 +96,20 @@
     const consider = (raw, areaEstimate, ext) => {
       if (!raw) return;
       if (!/^https?:\/\//.test(raw)) return;
+      // Reject VSCO's own UI assets — site logos, "powered by" footer,
+      // OneTrust banners etc. These all live under /assets/, /static/,
+      // or have human-readable filenames. Real gallery tiles ride the
+      // i.vsco.co / im.vsco.co CDN with opaque hex / UUID ids.
+      if (!/\b(i|im)\.vsco\.co\b/i.test(raw)) return;
+      if (/\/(assets|static|brand|footer|logos?)\b/i.test(raw)) return;
+      if (/(logo|powered[_-]by|favicon|sprite)/i.test(raw)) return;
       const id = _mediaIdFromUrl(raw);
       if (!id || id.length < 12) return;
-      // Skip obvious avatars — VSCO routes them through the same CDN
-      // with shorter ids. The length filter above handles most;
-      // belt-and-suspenders for paths that mention "avatar".
+      // Real VSCO media ids are either 24+ char lowercase hex
+      // (`674fee08cde8571de92cd93e`) or UUIDs with dashes
+      // (`2409B5D4-7676-4F9C-AF06-FA4683F7D70E`). Underscore-containing
+      // ids (`powered_by_logo`, `vsco_2024xxxx`) are asset filenames.
+      if (id.includes("_")) return;
       if (/\/avatar/i.test(raw)) return;
       const prev = found.get(id);
       if (!prev || areaEstimate > prev.area) {
@@ -299,28 +308,35 @@
     return null;
   }
 
-  // Scroll every plausible container to its bottom and dispatch a
-  // real scroll/wheel event after — some sites gate their lazy-load
-  // on user-style events, not programmatic .scrollTop assignment.
+  // Advance the page by one viewport instead of teleporting to the
+  // bottom. IntersectionObservers in React/Next galleries only fire
+  // when a sentinel element passes through the viewport — a single
+  // scrollTo(scrollHeight) jumps past every sentinel without ever
+  // intersecting them. Scrolling one viewport at a time gives every
+  // sentinel a frame to actually intersect.
+  //
+  // Also walks every plausible inner scroll container (overflow:auto
+  // descendants of significant height) and advances them too — covers
+  // VSCO layouts that scroll inside a nested container rather than
+  // the document body.
   function _scrollEverything() {
-    window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
+    const step = Math.max(400, Math.floor(window.innerHeight * 0.9));
+    window.scrollBy({ top: step, behavior: "instant" });
     try {
       for (const el of document.querySelectorAll("*")) {
         if (el.scrollHeight > el.clientHeight + 4) {
           const r = el.getBoundingClientRect();
           if (r.height < 200) continue;
-          el.scrollTop = el.scrollHeight;
+          el.scrollTop = Math.min(el.scrollHeight, el.scrollTop + step);
         }
       }
-      // Synthetic scroll + wheel at the document level so
-      // IntersectionObservers / scroll-event listeners see motion.
       window.dispatchEvent(new Event("scroll", { bubbles: true }));
       try {
         window.dispatchEvent(new WheelEvent("wheel", {
-          bubbles: true, cancelable: true, deltaY: 800,
+          bubbles: true, cancelable: true, deltaY: step,
         }));
-      } catch (_) { /* WheelEvent not constructible in some hosts, ignore */ }
-    } catch (_) { /* DOM transient, retry */ }
+      } catch (_) { /* WheelEvent not constructible in some hosts */ }
+    } catch (_) { /* DOM transient */ }
   }
 
   // Module-level accumulator used by archiveCurrentProfile. VSCO
@@ -341,20 +357,22 @@
     return added;
   }
 
-  // Exhaust the gallery: scroll every plausible container, harvest
-  // newly-rendered tiles into _collectedMedia each pass, click "Load
-  // more" if present, repeat until two consecutive passes produce no
-  // new tiles AND no scroll growth. Hard ceiling of 80 passes (~2min).
+  // Exhaust the gallery: advance one viewport per pass, harvest mid-
+  // scroll, click "Load more" if present. Exit when we're at the
+  // actual bottom AND no new tiles harvested for 3 consecutive passes
+  // AND scrollHeight hasn't grown — that's the clearest signal the
+  // gallery has run out, not just a brief lazy-load pause. Ceiling at
+  // 120 passes (~2 min worst case).
   async function _scrollAllImagesIntoView() {
     _collectedMedia = new Map();
-    _harvestVisibleMedia();  // first pass: whatever's already on screen
-    const MAX_PASSES = 80;
+    _harvestVisibleMedia();
+    const MAX_PASSES = 120;
     let lastHeight = 0;
     let stable = 0;
     let loadMoreClicks = 0;
     for (let i = 0; i < MAX_PASSES; i++) {
       _scrollEverything();
-      await new Promise((r) => setTimeout(r, 700));
+      await new Promise((r) => setTimeout(r, 600));
       const harvested = _harvestVisibleMedia();
       const btn = _findLoadMoreButton();
       if (btn) {
@@ -372,9 +390,11 @@
         continue;
       }
       const h = document.body.scrollHeight;
-      if (h === lastHeight && harvested === 0) {
+      const atBottom = (window.scrollY + window.innerHeight + 4) >= h;
+      _updateProgress(`Scrolling (${_collectedMedia.size} tiles, pass ${i + 1})…`, 0, 0, 0);
+      if (h === lastHeight && harvested === 0 && atBottom) {
         stable += 1;
-        if (stable >= 2) break;
+        if (stable >= 3) break;
       } else {
         stable = 0;
         lastHeight = h;
