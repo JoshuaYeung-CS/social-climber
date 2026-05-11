@@ -2090,7 +2090,7 @@ const LIST_GROUPS = [
   { label: "Current",  kinds: ["everyone", "all_followers", "all_following", "mutuals", "public_mutuals", "they_followed_first", "you_followed_first", "private_accepted_no_follow_back", "not_following_you_back", "feeder_accounts", "pending", "incoming_requests", "renamed"] },
   { label: "History",  kinds: ["ever_unfollowed_you", "rats", "mutual_break_you_first", "mutual_break_they_first", "ever_removed_you_as_follower", "you_unfollowed_ever", "still_follow_after_drop"] },
   { label: "Requests", kinds: ["ever_incoming_requests", "real_requests", "incoming_request_dropped", "ever_requested_outgoing", "request_dropped"] },
-  { label: "Tags",     kinds: ["favorite", "star", "want_remove", "watchlist", "to_follow", "disabled", "unavailable", "random_request", "now_public"] },
+  { label: "Tags",     kinds: ["favorite", "star", "want_remove", "watchlist", "to_follow", "disabled", "unavailable", "random_request", "now_public", "with_notes"] },
 ];
 
 // Cross-list intersection: cmd/ctrl+click (or long-press on touch) a pill
