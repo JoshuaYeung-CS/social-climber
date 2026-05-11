@@ -532,43 +532,51 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       }
       const head = document.createElement("div");
-      head.innerHTML = `<strong>${log.length} recent run${log.length === 1 ? "" : "s"}</strong> (newest first)`;
+      head.innerHTML = `<strong>${log.length} recent run${log.length === 1 ? "" : "s"}</strong> <span class="muted small">(newest first)</span>`;
       result.appendChild(head);
       const body = document.createElement("div");
-      body.style.cssText = "margin-top:6px; max-height:300px; overflow-y:auto; font-size:11px; line-height:1.45;";
+      body.className = "vsco-log-scroll";
+      // Compact one-line-per-run rendering — was three lines + a
+      // padded box per run, which pushed the Copy JSON button off the
+      // bottom for any log >5 entries. Now: time @user N/T saved · F
+      // fail · S dup [↘ collected]. Errors collapse into a small dim
+      // line below only when present.
       for (const r of log) {
-        const block = document.createElement("div");
-        block.style.cssText = "margin-bottom:8px; padding:6px 8px; border:1px solid var(--border); border-radius:6px; background:var(--bg-elev);";
-        const t = new Date(r.ts || 0).toLocaleString();
-        const status = r.failed > 0 ? "⚠" : (r.saved > 0 ? "✓" : "—");
-        const head2 = document.createElement("div");
-        head2.innerHTML = `<strong>${status} @${r.username || "?"}</strong> · ${r.saved}/${r.total} saved · ${r.failed} failed · ${r.skipped || 0} dup`;
-        block.appendChild(head2);
-        const ts = document.createElement("div");
-        ts.className = "muted small";
-        ts.textContent = t;
-        block.appendChild(ts);
+        const row = document.createElement("div");
+        row.className = "vsco-log-row";
+        const status = r.failed > 0 ? "⚠" : (r.saved > 0 ? "✓" : "·");
+        const time = new Date(r.ts || 0).toLocaleTimeString([], {
+          hour: "numeric", minute: "2-digit",
+        });
+        const colParts = [
+          `<span class="vsco-log-status">${status}</span>`,
+          `<span class="vsco-log-time">${time}</span>`,
+          `<span class="vsco-log-user">@${r.username || "?"}</span>`,
+          `<span class="vsco-log-counts">${r.saved}/${r.total}<span class="muted"> saved</span>`
+            + (r.failed ? ` · <span class="vsco-log-fail">${r.failed} fail</span>` : "")
+            + (r.skipped ? ` · <span class="muted">${r.skipped} dup</span>` : "")
+            + (r.collected != null && r.collected !== r.total ? ` · <span class="muted">${r.collected} scanned</span>` : "")
+            + `</span>`,
+        ];
+        row.innerHTML = colParts.join("");
         if (Array.isArray(r.errors) && r.errors.length) {
-          const errs = document.createElement("div");
-          errs.style.cssText = "margin-top:4px; font-family: ui-monospace, monospace; font-size:10px; color:#ffb4b4;";
           const seen = new Map();
           for (const e of r.errors) {
             const key = e.error || "unknown";
             seen.set(key, (seen.get(key) || 0) + 1);
           }
-          for (const [msg, count] of seen) {
-            const line = document.createElement("div");
-            line.textContent = `${count}× ${msg}`;
-            errs.appendChild(line);
-          }
-          block.appendChild(errs);
+          const errLine = document.createElement("div");
+          errLine.className = "vsco-log-errors";
+          errLine.textContent = Array.from(seen.entries())
+            .map(([msg, c]) => `${c}× ${msg}`).join(" · ");
+          row.appendChild(errLine);
         }
-        body.appendChild(block);
+        body.appendChild(row);
       }
       result.appendChild(body);
       const copyBtn = document.createElement("button");
       copyBtn.className = "secondary";
-      copyBtn.style.marginTop = "6px";
+      copyBtn.style.marginTop = "8px";
       copyBtn.textContent = "Copy log JSON";
       copyBtn.addEventListener("click", async () => {
         try {
