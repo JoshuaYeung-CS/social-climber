@@ -631,17 +631,16 @@
       if (!v || (now - v) > QUEUE_TTL_MS) delete queue[k];
     }
     try { await chrome.storage.local.set({ vscoAutoArchiveQueue: queue }); } catch (_) {}
+    // From the dequeue onward, this tab is committed to the sweep —
+    // we MUST send close-my-tab on every exit path (success, error,
+    // exception) so the chain never stalls. Move the message into a
+    // finally block.
     await new Promise((r) => setTimeout(r, 800));
     const btn = _ensureButton();
     btn.dataset.running = "1";
     btn.textContent = "Auto-archiving…";
+    let archiveResult = null;
     try {
-      // Ask the SW to attach chrome.debugger to this tab BEFORE we
-      // start scrolling. A debugger-attached tab is exempt from
-      // Chrome's background-throttling — without this, the tab's
-      // setTimeout floor rises and the scroll loop barely makes
-      // progress unless the user manually focuses the tab. User-
-      // observed: "they only load when i look at the tabs."
       try {
         await new Promise((resolve) => {
           chrome.runtime.sendMessage({ type: "keep-tab-active" }, () => resolve());
@@ -649,17 +648,9 @@
       } catch (_) { /* attach failed, continue anyway */ }
       _updateProgress("Loading gallery…", 0, 0, 0);
       await _scrollAllImagesIntoView();
-      const r = await archiveCurrentProfile();
-      // Visible countdown on the in-page overlay so the user can tell
-      // the system is alive between profiles. Updates every second
-      // until the SW's grace timer fires.
-      _startCountdownOverlay(r);
-      // Remove the just-finished handle from the popup-facing queue
-      // (vscoQueue is the user's persistent staging list; the auto
-      // archive queue used by the sweep chain is dequeued separately
-      // at start-of-run). On clean success only — if archive failed,
-      // leave it in the queue so the user can retry.
-      if (r && r.ok && (r.saved > 0 || r.total === 0)) {
+      archiveResult = await archiveCurrentProfile();
+      _startCountdownOverlay(archiveResult);
+      if (archiveResult && archiveResult.ok && (archiveResult.saved > 0 || archiveResult.total === 0)) {
         try {
           const s = await chrome.storage.local.get(["vscoQueue"]);
           if (Array.isArray(s.vscoQueue)) {
@@ -671,12 +662,15 @@
           }
         } catch (_) { /* best-effort */ }
       }
-      // Always close + advance the sweep chain — even on partial
-      // failure. The structured log in chrome.storage.local
-      // (vscoArchiveLog, viewable via the popup's '📋 View VSCO
-      // archive log' button) preserves per-error details.
-      try { chrome.runtime.sendMessage({ type: "close-my-tab" }); } catch (_) {}
+    } catch (e) {
+      console.warn("[VSCO Archive] _maybeAutoArchive threw:", e?.message || e);
     } finally {
+      // Always advance the chain — even if archive threw, even if
+      // archive returned ok=false, even if the page is mid-loading
+      // when we hit this. The SW's close-my-tab handler schedules a
+      // 15s grace then closes the tab, which fires tabs.onRemoved →
+      // _vscoSweepAdvance → opens the next URL.
+      try { chrome.runtime.sendMessage({ type: "close-my-tab" }); } catch (_) {}
       btn.dataset.running = "0";
       btn.textContent = "📥 Archive to IG Tracker";
     }

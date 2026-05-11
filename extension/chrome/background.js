@@ -480,7 +480,25 @@ async function _vscoSweepAdvance(windowId) {
     }
     if (nextUrl) {
       _swLog(`VSCO advance: opening ${nextUrl} in window ${windowId} (${Object.keys(queue).length} remaining, ${staleCount} stale)`);
-      await chrome.tabs.create({ windowId, url: nextUrl, active: true });
+      try {
+        const newTab = await chrome.tabs.create({ windowId, url: nextUrl, active: true });
+        _swLog(`VSCO advance: new tab id=${newTab.id} created`);
+        // Safety timeout — if the new tab doesn't send close-my-tab
+        // within 3 minutes (content script never ran, page hung,
+        // exception, etc.), force-close it so the chain advances.
+        // The close-my-tab path schedules its own 15s grace; this
+        // timer only fires when that path is never reached.
+        setTimeout(() => {
+          chrome.tabs.get(newTab.id).then((t) => {
+            if (t) {
+              _swLog(`VSCO advance: tab ${newTab.id} watchdog (3min) — force-closing (no close-my-tab received)`);
+              chrome.tabs.remove(newTab.id).catch(() => {});
+            }
+          }).catch(() => { /* already gone, fine */ });
+        }, 3 * 60 * 1000);
+      } catch (e) {
+        _swLog(`VSCO advance: chrome.tabs.create FAILED for ${nextUrl}: ${e?.message}`);
+      }
     } else {
       _swLog(`VSCO advance: queue exhausted (${staleCount} stale entries)`);
       await chrome.storage.local.set({ vscoSweepWindowId: null });
@@ -1318,7 +1336,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           url: urls[0],
         });
         await chrome.storage.local.set({ vscoSweepWindowId: win.id });
-        _swLog(`VSCO sweep started: window ${win.id}, ${urls.length} URLs queued`);
+        _swLog(`VSCO sweep started: window ${win.id}, ${urls.length} URLs queued, first tab id=${win.tabs?.[0]?.id}`);
+        // Same 3-min watchdog as the chain-advance path so the first
+        // tab also gets force-closed if its content script never
+        // sends close-my-tab.
+        const firstTabId = win.tabs?.[0]?.id;
+        if (firstTabId != null) {
+          setTimeout(() => {
+            chrome.tabs.get(firstTabId).then((t) => {
+              if (t) {
+                _swLog(`VSCO sweep: first tab ${firstTabId} watchdog (3min) — force-closing`);
+                chrome.tabs.remove(firstTabId).catch(() => {});
+              }
+            }).catch(() => {});
+          }, 3 * 60 * 1000);
+        }
         sendResponse({ ok: true, windowId: win.id });
       } catch (e) {
         console.warn("[IG Tracker] VSCO sweep start failed:", e?.message || e);
