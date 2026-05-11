@@ -264,6 +264,48 @@ async function _setVscoQueue(list) {
   await chrome.storage.local.set({ vscoQueue: list }).catch(() => {});
 }
 
+// Auto-run: any time something gets added to the queue, either start
+// a sweep (if none is running) or append the new URLs to the running
+// sweep's auto-archive queue so the chain picks them up on its next
+// advance. Lets the user fire-and-forget — no manual ▶ click needed
+// after every add.
+async function _ensureVscoSweepRunning(newHandles) {
+  if (!newHandles || !newHandles.length) return;
+  const newUrls = newHandles.map((h) => `https://vsco.co/${h}/gallery`);
+  let useIncognito = !!el("vsco-queue-incognito")?.checked;
+  const s = await chrome.storage.local.get([
+    "vscoSweepWindowId", "vscoAutoArchiveQueue",
+  ]).catch(() => ({}));
+  // Probe the recorded sweep window — if it's still alive, the sweep
+  // is in progress and we just need to extend its queue.
+  let sweepLive = false;
+  if (s.vscoSweepWindowId != null) {
+    try { await chrome.windows.get(s.vscoSweepWindowId); sweepLive = true; }
+    catch (_) { /* window closed, treat as no-sweep */ }
+  }
+  if (sweepLive) {
+    const q = (s.vscoAutoArchiveQueue && typeof s.vscoAutoArchiveQueue === "object")
+      ? s.vscoAutoArchiveQueue : {};
+    const ts = Date.now();
+    for (const u of newUrls) q[u] = ts;
+    try { await chrome.storage.local.set({ vscoAutoArchiveQueue: q }); } catch (_) {}
+  } else {
+    // No active sweep — start one. Use the FULL current queue so any
+    // staged-but-not-yet-archived handles (added earlier) get picked
+    // up too. SW handles window create + state writes atomically.
+    const queue = await _getVscoQueue();
+    if (!queue.length) return;
+    const urls = queue.map((h) => `https://vsco.co/${h}/gallery`);
+    try {
+      chrome.runtime.sendMessage({
+        type: "start-vsco-sweep",
+        urls,
+        incognito: useIncognito,
+      });
+    } catch (_) { /* SW message failed, user can click Run manually */ }
+  }
+}
+
 async function renderVscoQueue() {
   const list = await _getVscoQueue();
   const ul = el("vsco-queue-list");
@@ -304,16 +346,20 @@ function initVscoQueueControls() {
     const queue = await _getVscoQueue();
     const seen = new Set(queue.map((h) => h.toLowerCase()));
     let added = 0;
+    const newHandles = [];
     for (const r of raws) {
       const h = _vscoParseHandle(r);
       if (h && !seen.has(h.toLowerCase())) {
         queue.push(h);
         seen.add(h.toLowerCase());
+        newHandles.push(h);
         added += 1;
       }
     }
     await _setVscoQueue(queue);
     renderVscoQueue();
+    // Fire-and-forget auto-run — no need to wait on this.
+    if (newHandles.length) _ensureVscoSweepRunning(newHandles);
     return added;
   }
 
@@ -621,9 +667,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     return matches;
   }
 
-  // Pull every open VSCO tab into the persistent queue without
-  // running anything. Lets the user review / trim / add usernames
-  // before hitting Run.
+  // Pull every open VSCO tab into the queue. Auto-runs the sweep
+  // since the queue is configured to auto-run on add.
   el("grab-tabs-to-queue").addEventListener("click", async () => {
     const btn = el("grab-tabs-to-queue");
     const orig = btn.textContent;
@@ -635,17 +680,18 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     const queue = await _getVscoQueue();
     const lowerSet = new Set(queue.map((h) => h.toLowerCase()));
-    let added = 0;
+    const newHandles = [];
     for (const m of matches) {
       if (!lowerSet.has(m.handle.toLowerCase())) {
         queue.push(m.handle);
         lowerSet.add(m.handle.toLowerCase());
-        added += 1;
+        newHandles.push(m.handle);
       }
     }
     await _setVscoQueue(queue);
     renderVscoQueue();
-    btn.textContent = `Added ${added} (${matches.length - added} dup)`;
+    if (newHandles.length) _ensureVscoSweepRunning(newHandles);
+    btn.textContent = `Added ${newHandles.length} (${matches.length - newHandles.length} dup)`;
     setTimeout(() => { btn.textContent = orig; }, 1800);
   });
 
