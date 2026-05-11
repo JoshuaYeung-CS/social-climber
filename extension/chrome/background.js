@@ -920,15 +920,32 @@ async function _maybeMigrateRunnerState() {
   await chrome.storage.local.set({ runnerStateMigrationVersion: RUNNER_STATE_MIGRATION_VERSION });
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+// Reloading the extension at chrome://extensions fires onInstalled
+// (same event as fresh installs and version updates). Previously this
+// unconditionally called refreshExportAlarm + refreshArchiveRunnerAlarm,
+// which clear + recreate the alarm with a fresh random delay — so a
+// 25-min schedule restarted from 0 every reload. Preserve existing
+// alarms across reloads/updates; only arm when actually missing.
+chrome.runtime.onInstalled.addListener(async () => {
   _maybeMigrateRunnerState();
-  refreshExportAlarm();
-  refreshArchiveRunnerAlarm();
+  const [sched, runner] = await Promise.all([
+    chrome.alarms.get(SCHEDULE_ALARM).catch(() => null),
+    chrome.alarms.get(ARCHIVE_RUNNER_ALARM).catch(() => null),
+  ]);
+  if (!sched) refreshExportAlarm();
+  if (!runner) refreshArchiveRunnerAlarm();
 });
-chrome.runtime.onStartup.addListener(() => {
+chrome.runtime.onStartup.addListener(async () => {
   _maybeMigrateRunnerState();
-  refreshExportAlarm();
-  refreshArchiveRunnerAlarm();
+  // Browser-restart path. chrome.alarms persists across browser
+  // restarts, so existing alarms should already be there. Only arm
+  // if something's missing.
+  const [sched, runner] = await Promise.all([
+    chrome.alarms.get(SCHEDULE_ALARM).catch(() => null),
+    chrome.alarms.get(ARCHIVE_RUNNER_ALARM).catch(() => null),
+  ]);
+  if (!sched) refreshExportAlarm();
+  if (!runner) refreshArchiveRunnerAlarm();
 });
 
 (async function _ensureAlarmsArmed() {
