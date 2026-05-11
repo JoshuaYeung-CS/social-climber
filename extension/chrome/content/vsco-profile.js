@@ -367,11 +367,12 @@
   async function _scrollAllImagesIntoView() {
     _collectedMedia = new Map();
     _harvestVisibleMedia();
-    // Tight cap per user preference. One Load More click + a handful
-    // of scroll passes covers the typical VSCO gallery; if a profile
-    // is too deep for this, raise the cap (or click Load More more
-    // than once).
-    const MAX_PASSES = 5;
+    // 20 passes ≈ 7-10s with the fast cadence. Enough to scroll
+    // through ~250 tiles after one Load More click before bailing.
+    // Galleries deeper than that are rare; for the few that are
+    // truly massive, bump this. Previously 5 — turned out to be too
+    // tight on chloee-fan-sized profiles (~200 photos).
+    const MAX_PASSES = 20;
     let lastHeight = 0;
     let stable = 0;
     let loadMoreClicks = 0;
