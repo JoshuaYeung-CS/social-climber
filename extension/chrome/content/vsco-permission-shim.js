@@ -1,33 +1,68 @@
 // VSCO permission-prompt shim. Runs in the page's MAIN world at
-// document_start so we land before VSCO's app bundle executes. Two
-// reasons this exists:
+// document_start so we land before VSCO's app bundle executes. The
+// goal: silently no-op any API call that would raise Chrome's
+// "Access other apps and services on this device" prompt (or any
+// other permission prompt VSCO triggers on every gallery load —
+// incognito doesn't persist permission state so each new sweep
+// surfaces them again).
 //
-//   1. VSCO calls navigator.registerProtocolHandler() to register
-//      itself as the default handler for "web+vsco:" links. Chrome
-//      surfaces that as an "Access other apps and services on this
-//      device" prompt at the top of the page. Annoying once, but in
-//      incognito (where the archive flow runs) permission state isn't
-//      persisted — the prompt re-appears on every gallery load and
-//      obscures content while it's up.
+// Override strategy: defineProperty with a getter and a no-op setter,
+// configurable:false. This survives any later reassignment by VSCO's
+// bundle (a plain assignment fails silently in non-strict mode and
+// throws in strict — both fine for our purposes).
 //
-//   2. The override is a no-op replacement, not a refusal. We don't
-//      want a thrown error to abort VSCO's bootstrap; we just want
-//      the call to silently succeed without producing UI.
-//
-// MAIN world is required because content scripts otherwise run in an
-// isolated world — Navigator.prototype patches don't reach the page's
-// own JS realm.
+// Logging: every blocked call goes to console with [VSCO shim] prefix
+// so we can confirm from devtools that the shim actually fired (and
+// know which API VSCO is calling, in case it's something we missed).
 (function () {
+  const tag = "[VSCO shim]";
+  // Log to both console.log AND console.warn so it survives any
+  // console.clear() VSCO might call after their app boots.
+  const log = (...a) => { try { console.log(tag, ...a); } catch (_) {} };
+  log("loaded at", document.readyState, "url:", location.href);
+
+  function noop() { /* swallowed */ }
+
+  function override(target, name) {
+    if (!target) return;
+    try {
+      const existed = !!target[name];
+      Object.defineProperty(target, name, {
+        get: () => function () {
+          try { log("blocked", name, "args:", Array.from(arguments)); } catch (_) {}
+          return undefined;
+        },
+        set: () => { try { log("attempted re-define of", name); } catch (_) {} },
+        configurable: false,
+      });
+      log("installed override for", name, existed ? "(replaced existing)" : "(was undefined)");
+    } catch (e) {
+      log("override failed for", name, e && e.message);
+    }
+  }
+
+  // Candidate APIs that can raise the "Access other apps and services"
+  // family of prompts. Override aggressively; harmless if VSCO never
+  // calls a given one.
+  if (typeof Navigator !== "undefined" && Navigator.prototype) {
+    override(Navigator.prototype, "registerProtocolHandler");
+    override(Navigator.prototype, "unregisterProtocolHandler");
+    // Web Share — triggers a system share sheet in some browsers and
+    // an analog permission UI elsewhere. We don't want VSCO surfacing
+    // any of these mid-archive.
+    override(Navigator.prototype, "share");
+  }
+
+  // Stub Permissions API .request so any speculative permission grant
+  // by VSCO returns "denied" without surfacing UI. Safe because we
+  // don't want any of these granted in incognito anyway.
   try {
-    const proto = (typeof Navigator !== "undefined") ? Navigator.prototype : null;
-    if (proto && proto.registerProtocolHandler) {
-      proto.registerProtocolHandler = function () { /* swallow */ };
+    if (navigator.permissions && navigator.permissions.request) {
+      const origRequest = navigator.permissions.request.bind(navigator.permissions);
+      navigator.permissions.request = function () {
+        log("Permissions.request blocked", Array.from(arguments));
+        return Promise.resolve({ state: "denied" });
+      };
     }
-    // Belt-and-suspenders: VSCO may also try unregisterProtocolHandler
-    // (no-prompt) or the older window.external.AddSearchProvider; null
-    // those out too so the page can't trigger any other permission UI.
-    if (proto && proto.unregisterProtocolHandler) {
-      proto.unregisterProtocolHandler = function () { /* swallow */ };
-    }
-  } catch (_) { /* ignore — non-fatal */ }
+  } catch (_) { /* old browser, ignore */ }
 })();

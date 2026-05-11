@@ -514,6 +514,77 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
+  // Render the persisted VSCO archive log so the user can see what
+  // failed even after the incognito tab auto-closed. Reads
+  // chrome.storage.local.vscoArchiveLog (most recent first), shows the
+  // summary + the first few errors per run. Also offers a "copy to
+  // clipboard" hand-off so they can paste into a debug ticket.
+  el("view-vsco-log").addEventListener("click", async () => {
+    const result = el("vsco-tabs-result");
+    result.style.display = "block";
+    result.textContent = "loading…";
+    try {
+      const s = await chrome.storage.local.get(["vscoArchiveLog"]);
+      const log = Array.isArray(s.vscoArchiveLog) ? s.vscoArchiveLog : [];
+      result.innerHTML = "";
+      if (!log.length) {
+        result.textContent = "no archive runs recorded yet.";
+        return;
+      }
+      const head = document.createElement("div");
+      head.innerHTML = `<strong>${log.length} recent run${log.length === 1 ? "" : "s"}</strong> (newest first)`;
+      result.appendChild(head);
+      const body = document.createElement("div");
+      body.style.cssText = "margin-top:6px; max-height:300px; overflow-y:auto; font-size:11px; line-height:1.45;";
+      for (const r of log) {
+        const block = document.createElement("div");
+        block.style.cssText = "margin-bottom:8px; padding:6px 8px; border:1px solid var(--border); border-radius:6px; background:var(--bg-elev);";
+        const t = new Date(r.ts || 0).toLocaleString();
+        const status = r.failed > 0 ? "⚠" : (r.saved > 0 ? "✓" : "—");
+        const head2 = document.createElement("div");
+        head2.innerHTML = `<strong>${status} @${r.username || "?"}</strong> · ${r.saved}/${r.total} saved · ${r.failed} failed · ${r.skipped || 0} dup`;
+        block.appendChild(head2);
+        const ts = document.createElement("div");
+        ts.className = "muted small";
+        ts.textContent = t;
+        block.appendChild(ts);
+        if (Array.isArray(r.errors) && r.errors.length) {
+          const errs = document.createElement("div");
+          errs.style.cssText = "margin-top:4px; font-family: ui-monospace, monospace; font-size:10px; color:#ffb4b4;";
+          const seen = new Map();
+          for (const e of r.errors) {
+            const key = e.error || "unknown";
+            seen.set(key, (seen.get(key) || 0) + 1);
+          }
+          for (const [msg, count] of seen) {
+            const line = document.createElement("div");
+            line.textContent = `${count}× ${msg}`;
+            errs.appendChild(line);
+          }
+          block.appendChild(errs);
+        }
+        body.appendChild(block);
+      }
+      result.appendChild(body);
+      const copyBtn = document.createElement("button");
+      copyBtn.className = "secondary";
+      copyBtn.style.marginTop = "6px";
+      copyBtn.textContent = "Copy log JSON";
+      copyBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(JSON.stringify(log, null, 2));
+          copyBtn.textContent = "Copied ✓";
+          setTimeout(() => { copyBtn.textContent = "Copy log JSON"; }, 1500);
+        } catch (e) {
+          copyBtn.textContent = `clipboard failed: ${e.message}`;
+        }
+      });
+      result.appendChild(copyBtn);
+    } catch (e) {
+      result.textContent = `failed: ${e?.message || e}`;
+    }
+  });
+
   el("copy-debug-log").addEventListener("click", async () => {
     // Pull the [IG Tracker] log out of the active tab's content
     // script. We don't know up front whether we're on instagram.com

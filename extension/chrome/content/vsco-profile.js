@@ -175,7 +175,21 @@
     }
   }
 
+  // Persist a structured per-run entry so the popup can show the log
+  // after the tab has been auto-closed by the queue runner. Capped at
+  // the last 30 runs so storage doesn't grow unbounded.
+  async function _appendArchiveLog(entry) {
+    try {
+      const s = await chrome.storage.local.get(["vscoArchiveLog"]);
+      const log = Array.isArray(s.vscoArchiveLog) ? s.vscoArchiveLog : [];
+      log.unshift(entry);
+      while (log.length > 30) log.pop();
+      await chrome.storage.local.set({ vscoArchiveLog: log });
+    } catch (_) { /* storage is best-effort */ }
+  }
+
   async function archiveCurrentProfile() {
+    const startedAt = Date.now();
     const username = _vscoUserFromPath();
     if (!username) {
       console.log("[VSCO Archive] not on a profile page");
@@ -184,6 +198,10 @@
     const items = _collectMediaUrls();
     if (!items.length) {
       console.log("[VSCO Archive] no media found on page");
+      await _appendArchiveLog({
+        ts: startedAt, username, total: 0, saved: 0, failed: 0, skipped: 0,
+        errors: [{ stage: "collect", error: "no media found in DOM" }],
+      });
       return { ok: false, error: "no media found" };
     }
     const trackerUrl = await _trackerUrl();
@@ -191,12 +209,14 @@
     let saved = 0;
     let failed = 0;
     let skipped = 0;
+    const errors = [];
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       _updateProgress(`Archiving ${i + 1}/${items.length} from @${username}…`, saved, failed, skipped);
       const fetched = await _fetchAsBase64(it.url);
       if (!fetched.ok) {
         failed += 1;
+        errors.push({ stage: "fetch", media_id: it.media_id, url: it.url, error: fetched.error });
         console.warn(`[VSCO Archive] fetch failed for ${it.media_id}: ${fetched.error}`);
         continue;
       }
@@ -214,7 +234,9 @@
         const body = await resp.json().catch(() => ({}));
         if (!resp.ok) {
           failed += 1;
-          console.warn(`[VSCO Archive] save failed for ${it.media_id}: ${body.detail || resp.statusText}`);
+          const errMsg = body.detail || resp.statusText;
+          errors.push({ stage: "save", media_id: it.media_id, error: errMsg });
+          console.warn(`[VSCO Archive] save failed for ${it.media_id}: ${errMsg}`);
         } else if (body.skipped === "duplicate") {
           skipped += 1;
           console.log(`[VSCO Archive] ${it.media_id}.${it.ext} (duplicate, skipped)`);
@@ -224,10 +246,16 @@
         }
       } catch (e) {
         failed += 1;
+        errors.push({ stage: "save", media_id: it.media_id, error: e?.message || String(e) });
         console.warn(`[VSCO Archive] POST error: ${e?.message || e}`);
       }
     }
     _updateProgress(`Done · ${saved} saved · ${skipped} dup · ${failed} failed`, saved, failed, skipped, /*done=*/true);
+    await _appendArchiveLog({
+      ts: startedAt, username, total: items.length, saved, failed, skipped,
+      durationMs: Date.now() - startedAt,
+      errors: errors.slice(0, 20),  // cap per-run error list
+    });
     return { ok: true, saved, failed, skipped, total: items.length };
   }
 
@@ -401,8 +429,18 @@
       _updateProgress("Loading gallery…", 0, 0, 0);
       await _scrollAllImagesIntoView();
       const r = await archiveCurrentProfile();
-      if (r && r.ok) {
+      // Only close if every item landed cleanly. Any failures, leave
+      // the tab open so the user can inspect — the in-page overlay
+      // shows the summary and devtools console has the per-item log.
+      // The structured log also lives in chrome.storage.local now so
+      // the popup can read it after this tab is gone.
+      if (r && r.ok && r.failed === 0 && r.saved > 0) {
         try { chrome.runtime.sendMessage({ type: "close-my-tab" }); } catch (_) {}
+      } else {
+        _updateProgress(
+          `Tab kept open — ${r ? (r.failed || 0) : "?"} failed. Check the popup's VSCO log.`,
+          r ? r.saved : 0, r ? r.failed : 0, r ? r.skipped : 0, /*done=*/true,
+        );
       }
     } finally {
       btn.dataset.running = "0";
