@@ -1166,6 +1166,7 @@ def _home_compute():
             "now_public": len(tags_mod.list_with_flag(conn, "now_public")),
             "need_archive": len(tags_mod.list_with_flag(conn, "need_archive")),
             "to_follow": len(tags_mod.list_with_flag(conn, "to_follow")),
+            "star": len(tags_mod.list_with_flag(conn, "star")),
             "with_notes": conn.execute(
                 "SELECT COUNT(*) AS c FROM profile_tags "
                 "WHERE notes IS NOT NULL AND TRIM(notes) != ''"

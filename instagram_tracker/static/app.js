@@ -380,8 +380,10 @@ async function loadHome() {
     }
 
     $("#count-favorite").textContent = data.bucket_counts.favorites;
+    $("#count-star").textContent = data.bucket_counts.star ?? 0;
     $("#count-want_remove").textContent = data.bucket_counts.want_remove;
     $("#count-watchlist").textContent = data.bucket_counts.watchlist;
+    $("#count-to_follow").textContent = data.bucket_counts.to_follow ?? 0;
     $("#count-disabled").textContent = data.bucket_counts.disabled ?? 0;
     $("#count-unavailable").textContent = data.bucket_counts.unavailable ?? 0;
     $("#count-random_request").textContent = data.bucket_counts.random_request ?? 0;
