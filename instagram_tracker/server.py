@@ -1126,13 +1126,33 @@ def _home_compute():
                         (latest_taken_at,),
                     ).fetchall()
                 }
+                # follow_back_available = "they follow you, you don't
+                # follow them back yet." Authoritative signal that
+                # they're a follower. Fresh observations are bridged
+                # into the Followers count the same way we bridge
+                # Following — handles the export-lag gap where IG's UI
+                # count includes new followers our latest export
+                # doesn't have yet. User-confirmed against IG UI:
+                # IG shows 2008, export has 2007, extension caught the
+                # +1 via this state.
+                _obs_follow_back = {
+                    r["username"] for r in conn.execute(
+                        "SELECT username FROM profile_observations "
+                        "WHERE follow_button_state = 'follow_back_available' "
+                        "AND observed_at > ?",
+                        (latest_taken_at,),
+                    ).fetchall()
+                }
             else:
                 _obs_following = set()
                 _obs_requested = set()
+                _obs_follow_back = set()
             ext_bridged_pending = _obs_requested - suppressed_home - active_pending - active_following
             ext_bridged_following = _obs_following - suppressed_home - active_following
+            ext_bridged_followers = _obs_follow_back - suppressed_home - active_followers
             active_pending = active_pending | ext_bridged_pending
             active_following = active_following | ext_bridged_following
+            active_followers = active_followers | ext_bridged_followers
 
             summary = {
                 "snapshot_id": latest,
