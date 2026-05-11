@@ -157,6 +157,33 @@ def delete_vsco_media(username: str, media_id: str, ext: str):
     return {"ok": True, "deleted": str(p.relative_to(DB_PATH.parent))}
 
 
+@router.delete("/api/vsco-profile/{username}")
+def delete_vsco_profile(username: str):
+    """Delete an entire archived VSCO profile — every file under
+    data/vsco_media/<username>/. Used by the /vsco page's per-profile
+    trash button. Same no-auth model as the per-file delete: localhost
+    only. Idempotent: 404 if the directory's already gone."""
+    if not _USER_RE.fullmatch(username or ""):
+        raise HTTPException(status_code=400, detail="Invalid VSCO username.")
+    d = _VSCO_DIR / username
+    if not d.is_dir():
+        raise HTTPException(status_code=404, detail="Profile not archived.")
+    removed = 0
+    for p in d.iterdir():
+        if p.is_file() and not p.name.startswith("."):
+            try:
+                p.unlink()
+                removed += 1
+            except OSError:
+                pass
+    try:
+        d.rmdir()
+    except OSError:
+        # Non-empty (hidden files, OS metadata) — leave the empty dir
+        pass
+    return {"ok": True, "username": username, "removed": removed}
+
+
 @router.get("/api/vsco-summary")
 def vsco_summary():
     """Aggregate across all archived VSCO users — total items, bytes,

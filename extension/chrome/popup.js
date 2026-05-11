@@ -492,13 +492,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       await chrome.storage.local.set({
         vscoAutoArchiveQueue: urls.reduce((o, u) => { o[u] = Date.now(); return o; }, {}),
       });
-      // Sequential — open ONLY the first URL. The SW's close-my-tab
-      // handler opens the next one from the queue in the same window
-      // each time the current tab finishes + closes. Parallel-open
-      // sounds faster but Chrome throttles every background tab and
-      // each one capped at the initial visible 15 tiles. Sequential =
-      // every tab runs foregrounded = no throttling.
-      await chrome.windows.create({ incognito: true, url: urls[0] });
+      // Sequential — open ONLY the first URL. The SW advances the
+      // chain when each tab closes (alarm-fired after 60s grace OR
+      // user closes manually). Storing the window ID lets the SW's
+      // tabs.onRemoved listener distinguish our sweep window from
+      // any other incognito window the user might have open.
+      const win = await chrome.windows.create({ incognito: true, url: urls[0] });
+      await chrome.storage.local.set({ vscoSweepWindowId: win.id });
       result.innerHTML = "";
       const head = document.createElement("div");
       head.innerHTML = `<strong>Archiving ${matches.length} profile${matches.length === 1 ? "" : "s"} in incognito.</strong>`;

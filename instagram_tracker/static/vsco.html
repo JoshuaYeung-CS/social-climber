@@ -19,12 +19,48 @@
     }
     .vsco-head h1 { margin: 0; font-size: 30px; font-weight: 700; }
     .vsco-head .stats { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+    /* Top nav row: 'Back to tracker' far left, 'all profiles' button
+       centered (only present when we're in the expanded view). Both
+       use the same .back-link visual but the all-profiles one is
+       slightly larger and pulled toward the middle for thumb reach. */
+    .vsco-head-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      width: 100%;
+      max-width: 1280px;
+      margin: 0 auto 4px;
+      gap: 12px;
+    }
+    .vsco-head-nav .nav-spacer { flex: 1; min-width: 0; }
     .vsco-head .back-link {
       color: var(--muted); text-decoration: none; font-size: 13px;
       padding: 6px 12px; border-radius: 6px;
       border: 1px solid var(--border); background: var(--bg-elev-2);
+      white-space: nowrap;
     }
     .vsco-head .back-link:hover { border-color: var(--accent); color: var(--accent); }
+    .vsco-head .all-profiles-btn {
+      /* Larger + more prominent than the corner Back-to-tracker chip;
+         primary nav action when you're viewing a single profile. */
+      font-size: 15px;
+      padding: 9px 18px;
+      border-radius: 8px;
+      font-weight: 500;
+      cursor: pointer;
+      background: var(--bg-elev-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      transition: border-color 120ms ease, color 120ms ease;
+      /* Pull toward middle a touch. justify-content: space-between on
+         the parent puts this on the right; a small negative margin
+         nudges it toward center without breaking the layout. */
+      margin-right: 14%;
+    }
+    .vsco-head .all-profiles-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
 
     .vsco-grid {
       max-width: 1280px; margin: 0 auto;
@@ -42,11 +78,17 @@
       margin: 0 0 6px 0; font-size: 16px; font-weight: 600;
       display: flex; align-items: center; gap: 6px;
     }
-    .vsco-user-card h3 a {
+    .vsco-user-card h3 .vsco-card-actions {
+      display: inline-flex; gap: 6px; margin-left: auto;
+      align-items: center;
+    }
+    .vsco-user-card h3 a, .vsco-user-card h3 button {
       color: var(--muted); font-size: 12px; text-decoration: none;
-      margin-left: auto;
+      background: transparent; border: 0; padding: 2px 4px;
+      cursor: pointer; border-radius: 4px;
     }
     .vsco-user-card h3 a:hover { color: var(--accent); }
+    .vsco-user-card h3 button.delete-profile:hover { color: var(--bad); }
     .vsco-user-card .meta {
       font-size: 12px; color: var(--muted);
       font-variant-numeric: tabular-nums;
@@ -80,12 +122,33 @@
       grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
       gap: 6px;
     }
-    .vsco-expanded-grid img,
-    .vsco-expanded-grid video {
-      width: 100%; aspect-ratio: 1 / 1; object-fit: cover;
-      border-radius: 6px; background: #111;
+    /* Per-tile card wrapping img/video so we can overlay a delete
+       button without disturbing the click-to-zoom behavior on the
+       media itself. */
+    .vsco-tile {
+      position: relative;
       cursor: zoom-in;
     }
+    .vsco-tile img, .vsco-tile video {
+      width: 100%; aspect-ratio: 1 / 1; object-fit: cover;
+      border-radius: 6px; background: #111;
+      display: block;
+    }
+    .vsco-tile .delete-tile {
+      position: absolute;
+      top: 6px; right: 6px;
+      width: 28px; height: 28px;
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.65);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      cursor: pointer;
+      font-size: 14px;
+      opacity: 0; transition: opacity 120ms ease;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .vsco-tile:hover .delete-tile { opacity: 1; }
+    .vsco-tile .delete-tile:hover { background: var(--bad); border-color: var(--bad); }
 
     /* Fullsize lightbox. */
     .vsco-lightbox {
@@ -107,7 +170,11 @@
 </head>
 <body>
   <header class="vsco-head">
-    <a href="/" class="back-link">← Back to tracker</a>
+    <div class="vsco-head-nav">
+      <a href="/" class="back-link">← Back to tracker</a>
+      <span class="nav-spacer"></span>
+      <button type="button" class="all-profiles-btn" id="all-profiles-btn" hidden>← All profiles</button>
+    </div>
     <h1>📷 VSCO archive</h1>
     <div class="stats" id="stats">loading…</div>
   </header>
@@ -125,6 +192,11 @@
     const root = document.getElementById("root");
     const statsEl = document.getElementById("stats");
     const lightbox = document.getElementById("lightbox");
+    const allProfilesBtn = document.getElementById("all-profiles-btn");
+    // Top-of-page "All profiles" button — hidden on the grid view,
+    // shown in the expanded per-profile view. Calls renderUserGrid
+    // which also takes care of toggling its own visibility.
+    allProfilesBtn.addEventListener("click", () => renderUserGrid());
 
     function fmtBytes(n) {
       if (n < 1024) return n + " B";
@@ -163,6 +235,7 @@
     async function renderUserGrid() {
       root.className = "vsco-grid";
       root.innerHTML = "";
+      allProfilesBtn.hidden = true;
       let data;
       try {
         const r = await fetch("/api/vsco-summary");
@@ -186,7 +259,9 @@
         card.className = "vsco-user-card";
         card.dataset.username = u.username;
         const head = document.createElement("h3");
-        head.textContent = "@" + u.username;
+        head.appendChild(document.createTextNode("@" + u.username));
+        const actions = document.createElement("span");
+        actions.className = "vsco-card-actions";
         const ext = document.createElement("a");
         ext.href = "https://vsco.co/" + u.username + "/gallery";
         ext.target = "_blank";
@@ -194,7 +269,25 @@
         ext.textContent = "↗";
         ext.title = "Open on VSCO";
         ext.addEventListener("click", (e) => e.stopPropagation());
-        head.appendChild(ext);
+        actions.appendChild(ext);
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "delete-profile";
+        del.textContent = "🗑";
+        del.title = "Delete every archived file for @" + u.username;
+        del.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          if (!confirm(`Delete every archived file for @${u.username}? (${u.count} files, ${fmtBytes(u.bytes || 0)})`)) return;
+          try {
+            const r = await fetch(`/api/vsco-profile/${encodeURIComponent(u.username)}`, { method: "DELETE" });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            card.remove();
+          } catch (err) {
+            alert(`Delete failed: ${err.message || err}`);
+          }
+        });
+        actions.appendChild(del);
+        head.appendChild(actions);
         card.appendChild(head);
         const meta = document.createElement("div");
         meta.className = "meta";
@@ -231,15 +324,17 @@
 
     async function renderUserGallery(u) {
       root.className = "vsco-expanded";
+      // No more inline 'back to all profiles' button — replaced by the
+      // top-nav button right next to 'Back to tracker' (bigger,
+      // easier to reach).
       root.innerHTML = `
         <div class="vsco-expanded-head">
           <h2>@${escapeText(u.username)}</h2>
           <span class="stats">${u.count} files · ${fmtBytes(u.bytes || 0)}</span>
-          <button class="close-btn" id="back-btn">← all profiles</button>
         </div>
         <div class="vsco-expanded-grid" id="grid"></div>
       `;
-      document.getElementById("back-btn").addEventListener("click", renderUserGrid);
+      allProfilesBtn.hidden = false;
       statsEl.textContent = `@${u.username} — ${u.count} files`;
       const grid = document.getElementById("grid");
       try {
@@ -252,11 +347,33 @@
         }
         for (const it of items) {
           const name = it.media_id + "." + it.ext;
-          const el = isVideo(name)
+          const tile = document.createElement("div");
+          tile.className = "vsco-tile";
+          const media = isVideo(name)
             ? Object.assign(document.createElement("video"), { src: it.url, muted: true, preload: "metadata" })
             : Object.assign(document.createElement("img"), { src: it.url, loading: "lazy" });
-          el.addEventListener("click", () => openLightbox(it.url, name));
-          grid.appendChild(el);
+          media.addEventListener("click", () => openLightbox(it.url, name));
+          tile.appendChild(media);
+          // Per-tile delete overlay. Stop propagation so clicking the
+          // trash doesn't open the lightbox underneath.
+          const del = document.createElement("button");
+          del.type = "button";
+          del.className = "delete-tile";
+          del.textContent = "🗑";
+          del.title = "Delete this file";
+          del.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            if (!confirm(`Delete ${name}?`)) return;
+            try {
+              const dr = await fetch(`/api/vsco-media/${encodeURIComponent(u.username)}/${encodeURIComponent(name)}`, { method: "DELETE" });
+              if (!dr.ok) throw new Error(`HTTP ${dr.status}`);
+              tile.remove();
+            } catch (err) {
+              alert(`Delete failed: ${err.message || err}`);
+            }
+          });
+          tile.appendChild(del);
+          grid.appendChild(tile);
         }
       } catch (e) {
         grid.innerHTML = `<div class="empty">Failed to load: ${escapeText(e.message)}</div>`;

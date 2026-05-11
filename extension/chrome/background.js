@@ -432,7 +432,50 @@ const RUNNER_BUDGET_PREFIX = "runner-budget-";
 // downloads slides missed in the first.
 const ARCHIVE_RUNNER_TAB_BUDGET_MIN = 10;
 
+// Helper used by both the grace-alarm fire path and the
+// tabs.onRemoved listener: when a sweep tab disappears, open the next
+// URL from the queue in the same window.
+async function _vscoSweepAdvance(windowId) {
+  if (windowId == null) return;
+  try {
+    const s = await chrome.storage.local.get(["vscoAutoArchiveQueue", "vscoSweepWindowId"]);
+    if (s.vscoSweepWindowId !== windowId) return;  // not our sweep window
+    const queue = s.vscoAutoArchiveQueue;
+    if (!queue || typeof queue !== "object") return;
+    const TTL = 10 * 60 * 1000;
+    const now = Date.now();
+    let nextUrl = null;
+    for (const [u, ts] of Object.entries(queue)) {
+      if (ts && (now - ts) <= TTL) { nextUrl = u; break; }
+    }
+    if (nextUrl) {
+      await chrome.tabs.create({ windowId, url: nextUrl, active: true });
+    } else {
+      // Queue empty — clear the marker so we don't try to advance
+      // again if some future event fires onRemoved for this window.
+      await chrome.storage.local.set({ vscoSweepWindowId: null });
+    }
+  } catch (_) { /* best-effort */ }
+}
+
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name.startsWith("vsco-tab-grace-")) {
+    const tabId = parseInt(alarm.name.slice("vsco-tab-grace-".length), 10);
+    if (!isNaN(tabId)) {
+      // Look up the window before removing so we can advance the
+      // sweep without depending on the tabs.onRemoved listener
+      // (which sees an undefined windowId on alarm-driven closes
+      // in some Chrome versions).
+      let windowId = null;
+      try {
+        const t = await chrome.tabs.get(tabId);
+        windowId = t?.windowId;
+      } catch (_) { /* tab already gone, fine */ }
+      try { await chrome.tabs.remove(tabId); } catch (_) {}
+      if (windowId != null) await _vscoSweepAdvance(windowId);
+    }
+    return;
+  }
   if (alarm.name === SCHEDULE_ALARM) {
     await _onScheduledExportFire();
     // Re-arm with a fresh random interval. We dropped periodInMinutes
@@ -1073,10 +1116,20 @@ chrome.debugger.onDetach.addListener(({ tabId }) => {
 });
 
 // Auto-detach on tab close, otherwise the session lingers until the
-// SW recycles. Harmless but messy.
-chrome.tabs.onRemoved.addListener((tabId) => {
+// SW recycles. Harmless but messy. Also doubles as the manual-close
+// path for VSCO sweep advancement: if the user closes a sweep tab
+// early (skipping the 60s grace), still open the next URL.
+chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
   if (_debuggerTabs.has(tabId)) {
     _debuggerTabs.delete(tabId);
+  }
+  // Skip if the whole window is closing (user aborted the sweep)
+  if (removeInfo && removeInfo.isWindowClosing) return;
+  // Cancel any pending grace alarm — tab's already gone so the alarm
+  // would be a no-op anyway, but cleaning up avoids alarm-spam.
+  try { await chrome.alarms.clear(`vsco-tab-grace-${tabId}`); } catch (_) {}
+  if (removeInfo && removeInfo.windowId != null) {
+    await _vscoSweepAdvance(removeInfo.windowId);
   }
 });
 
@@ -1218,33 +1271,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // closed (content scripts can't close their own tab directly).
   if (msg.type === "close-my-tab") {
     const tabId = sender?.tab?.id;
-    const windowId = sender?.tab?.windowId;
-    (async () => {
-      // Brief delay so the overlay's "Done" line is readable before
-      // the tab vanishes. Matches the wizard's post-finish UX.
-      await new Promise((r) => setTimeout(r, 1500));
-      if (tabId != null) {
-        try { await chrome.tabs.remove(tabId); } catch (_) {}
-      }
-      // VSCO sweep continuation: if there's another queued URL,
-      // open it in the same incognito window. Sequential = each
-      // tab runs foregrounded = no background-throttling.
-      try {
-        const s = await chrome.storage.local.get(["vscoAutoArchiveQueue"]);
-        const queue = s.vscoAutoArchiveQueue;
-        if (!queue || typeof queue !== "object") return;
-        const TTL = 10 * 60 * 1000;
-        const now = Date.now();
-        // Find the next fresh URL in insertion order
-        let nextUrl = null;
-        for (const [u, ts] of Object.entries(queue)) {
-          if (ts && (now - ts) <= TTL) { nextUrl = u; break; }
-        }
-        if (nextUrl && windowId != null) {
-          await chrome.tabs.create({ windowId, url: nextUrl, active: true });
-        }
-      } catch (_) { /* best-effort */ }
-    })();
+    if (tabId != null) {
+      // 60-second grace before the tab closes so the user can copy
+      // the log / inspect anything mid-flight. chrome.alarms survives
+      // SW eviction; plain setTimeout would die if the SW idles out.
+      // The actual sweep-advancement (open next URL) happens in the
+      // chrome.tabs.onRemoved listener — so manually closing the tab
+      // early also advances the chain.
+      chrome.alarms.create(`vsco-tab-grace-${tabId}`, { delayInMinutes: 1 });
+    }
     sendResponse({ ok: true });
     return false;
   }
