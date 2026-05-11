@@ -359,6 +359,61 @@ html, body {
 }
 .export-history::-webkit-scrollbar { display: none; }
 
+/* VSCO queue list — taller than the export-history default, visible
+   thin scrollbar (so the user knows it scrolls when overflowing),
+   no bottom fade. Each row is a username chip with a × remove
+   button on the right. */
+.vsco-queue-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 6px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.vsco-queue-list::-webkit-scrollbar { width: 6px; }
+.vsco-queue-list::-webkit-scrollbar-track { background: transparent; }
+.vsco-queue-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.vsco-queue-list::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+.vsco-queue-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--bg-elev);
+}
+.vsco-queue-list li:hover { background: var(--bg-elev-2); }
+.vsco-queue-list li span { flex: 1; color: var(--text); }
+.vsco-queue-list li button {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+.vsco-queue-list li button:hover { color: var(--bad); background: rgba(255, 94, 122, 0.08); }
+.vsco-queue-list:empty::before {
+  content: "Queue is empty";
+  color: var(--muted);
+  font-style: italic;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
 /* Compact VSCO archive log viewer. One row per run; errors fold
    into a dim line below only if present. Scrollbar styled thin +
    accent-on-hover so the user can read it without a chrome-default

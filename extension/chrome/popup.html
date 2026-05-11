@@ -91,15 +91,14 @@
       <span class="card-chevron" aria-hidden="true">▾</span>
     </button>
     <div class="card-body">
-      <p class="muted small">Sweep one or more VSCO profiles into your local archive. 'Archive now' grabs every open VSCO tab and runs immediately; 'Grab → queue' stages them so you can edit before running. The queue runs sequentially with a 10s grace per tab — close a tab early with cmd+w to skip ahead.</p>
-      <button class="secondary" id="archive-vsco" title="Grab every open vsco.co tab and start an incognito sweep right now.">🕶️ Archive all open tabs (incognito, now)</button>
-      <button class="secondary" id="grab-tabs-to-queue" style="margin-top:6px" title="Pull every open vsco.co tab into the queue below without running yet — lets you review or trim before hitting Run.">📥 Grab open tabs → queue</button>
+      <p class="muted small">Stage VSCO profiles in the queue, then hit ▶ Run. Each profile opens sequentially in a fresh tab (incognito or normal) and archives the full gallery before moving on. 60s grace per tab — cmd+w to skip ahead. Fully automatic once you hit Run.</p>
+      <button class="secondary" id="grab-tabs-to-queue" title="Pull every open vsco.co tab into the queue below — does NOT run, hit ▶ Run when you're ready.">📥 Grab open tabs → queue</button>
       <div class="archive-add-row" style="margin-top:8px; display:flex; gap:6px; align-items:center;">
         <input type="text" id="vsco-queue-add-input" placeholder="@username or vsco.co/<user>" style="flex:1" autocomplete="off" />
         <button class="secondary" id="vsco-queue-add-btn" style="white-space:nowrap;">Add</button>
       </div>
       <button class="secondary" id="vsco-queue-add-current" style="margin-top:6px" title="Pick up the VSCO profile URL from the currently-active tab.">📷 Add current VSCO tab</button>
-      <ul id="vsco-queue-list" class="export-history" style="margin-top:6px; max-height:140px;"></ul>
+      <ul id="vsco-queue-list" class="vsco-queue-list"></ul>
       <div class="schedule-row" style="margin-top:6px;">
         <label class="schedule-toggle">
           <input type="checkbox" id="vsco-queue-incognito" checked />
