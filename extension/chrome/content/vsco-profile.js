@@ -232,6 +232,75 @@
     return { ok: true, saved, failed, skipped, total: items.length };
   }
 
+  // Scroll the profile gallery to the bottom in passes so VSCO's
+  // intersection-observer kicks in and renders the lazy-loaded images.
+  // Bounded by a max pass count + a "scrollHeight stable twice" exit
+  // condition so we don't loop forever on very long profiles. After we
+  // hit the bottom we scroll back to the top so the page looks
+  // untouched if the user inspects it later.
+  async function _scrollAllImagesIntoView() {
+    let lastHeight = 0;
+    let stable = 0;
+    const MAX_PASSES = 40;  // ~40 * 600ms = 24s ceiling
+    for (let i = 0; i < MAX_PASSES; i++) {
+      window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
+      await new Promise((r) => setTimeout(r, 600));
+      const h = document.body.scrollHeight;
+      if (h === lastHeight) {
+        stable += 1;
+        if (stable >= 2) break;
+      } else {
+        stable = 0;
+        lastHeight = h;
+      }
+    }
+    window.scrollTo({ top: 0, behavior: "instant" });
+    // Give a beat for any final renders / decode after the snap-back
+    // so the DOM walk catches the full <img src> set.
+    await new Promise((r) => setTimeout(r, 400));
+  }
+
+  // Popup-triggered archive. Distinct from the on-page button so the
+  // popup can fan out across every open VSCO tab without the user
+  // having to visit each one. The `scrollFirst` flag is on by default
+  // for the popup path because tabs that have been idle won't have the
+  // full gallery hydrated.
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (!msg || msg.cmd !== "archive-vsco") return;
+    (async () => {
+      try {
+        if (!_vscoUserFromPath()) {
+          sendResponse({ ok: false, error: "not a profile page" });
+          return;
+        }
+        // Reuse the existing button if present so the user sees the
+        // same visual cue ("Archiving…") whether they triggered it
+        // here or via the popup.
+        const btn = _ensureButton();
+        if (btn.dataset.running === "1") {
+          sendResponse({ ok: false, error: "already running" });
+          return;
+        }
+        btn.dataset.running = "1";
+        btn.textContent = "Archiving…";
+        try {
+          if (msg.scrollFirst) {
+            _updateProgress("Loading gallery…", 0, 0, 0);
+            await _scrollAllImagesIntoView();
+          }
+          const r = await archiveCurrentProfile();
+          sendResponse(r);
+        } finally {
+          btn.dataset.running = "0";
+          btn.textContent = "📥 Archive to IG Tracker";
+        }
+      } catch (e) {
+        sendResponse({ ok: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;  // keep the message channel open for async sendResponse
+  });
+
   // ---------- minimal overlay ----------
   // Floating button bottom-right of the page. Visible only on profile
   // pages. Click → run archiveCurrentProfile() and show progress.

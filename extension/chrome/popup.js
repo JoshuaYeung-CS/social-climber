@@ -462,6 +462,80 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
+  // Fan out an archive command to every open vsco.co profile tab. Each
+  // tab's content script scrolls to the gallery bottom (to trigger
+  // lazy-loaded images), then archives in place. Fire-and-forget: the
+  // popup closes as soon as the messages dispatch — progress shows in
+  // each tab via the existing overlay.
+  el("archive-vsco-tabs").addEventListener("click", async () => {
+    const result = el("vsco-tabs-result");
+    result.style.display = "block";
+    result.textContent = "scanning tabs…";
+    try {
+      const tabs = await chrome.tabs.query({});
+      const RESERVED = new Set([
+        "m", "spaces", "studio", "feed", "search", "discover", "explore",
+        "settings", "account", "login", "join", "user", "users",
+        "membership", "about", "privacy", "terms", "help", "legal",
+        "ai-lab", "blog", "stories", "support", "company",
+        "products", "solutions", "resources", "downloads", "campaigns",
+      ]);
+      const seen = new Set();
+      const matches = [];
+      for (const t of tabs) {
+        const url = t.url || "";
+        const m = url.match(/^https?:\/\/(?:www\.)?vsco\.co\/([A-Za-z0-9._-]{1,40})(?:\/(?:gallery)?)?(?:\?|#|$)/i);
+        if (!m) continue;
+        const handle = m[1];
+        if (RESERVED.has(handle.toLowerCase())) continue;
+        if (seen.has(handle.toLowerCase())) continue;
+        seen.add(handle.toLowerCase());
+        matches.push({ tabId: t.id, handle });
+      }
+      if (!matches.length) {
+        result.textContent = "no vsco.co tabs open. Open some profile tabs first.";
+        return;
+      }
+      let dispatched = 0;
+      const failures = [];
+      for (const m of matches) {
+        try {
+          await chrome.tabs.sendMessage(m.tabId, {
+            cmd: "archive-vsco",
+            scrollFirst: true,
+          });
+          dispatched += 1;
+        } catch (e) {
+          // sendMessage rejects when the tab has no listener — most
+          // commonly because the user opened the tab before the content
+          // script's manifest entry was registered (fresh install) or
+          // because chrome://... blocks injection. We surface those
+          // separately from "successfully started".
+          failures.push({ handle: m.handle, error: e?.message || String(e) });
+        }
+      }
+      result.innerHTML = "";
+      const head = document.createElement("div");
+      const tip = dispatched ? " — watch each tab's bottom-right overlay for per-tab progress." : "";
+      head.textContent = `Started archive on ${dispatched}/${matches.length} VSCO tab${matches.length === 1 ? "" : "s"}${tip}`;
+      result.appendChild(head);
+      if (failures.length) {
+        const errList = document.createElement("div");
+        errList.style.cssText = "margin-top:6px; color:#b00; font-size:11px;";
+        errList.textContent = `${failures.length} tab(s) didn't accept the message — reload them and try again:`;
+        result.appendChild(errList);
+        for (const f of failures) {
+          const row = document.createElement("div");
+          row.textContent = `@${f.handle} — ${f.error}`;
+          row.style.cssText = "font-family: ui-monospace, monospace; font-size: 10px;";
+          result.appendChild(row);
+        }
+      }
+    } catch (e) {
+      result.textContent = `failed: ${e?.message || e}`;
+    }
+  });
+
   el("copy-debug-log").addEventListener("click", async () => {
     // Pull the [IG Tracker] log out of the active tab's content
     // script. We don't know up front whether we're on instagram.com
