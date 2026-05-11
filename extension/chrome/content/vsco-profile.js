@@ -589,26 +589,40 @@
   //   - 10-minute freshness window. Entries older than 10 min are
   //     ignored and pruned. If the user closes the window mid-sweep,
   //     stale entries can't lie in wait and ambush a future tab.
-  const QUEUE_TTL_MS = 10 * 60 * 1000;
+  // 30 min TTL matches the SW's _vscoSweepAdvance TTL. With a 60s
+  // grace per profile that's enough for ~25-profile sweeps.
+  const QUEUE_TTL_MS = 30 * 60 * 1000;
   async function _maybeAutoArchive() {
-    // Removed the prior 'incognito only' guard — the queue match
-    // itself is the primary gate, and we now support non-incognito
-    // archive flows (faster, no debugger infobar). The 10-min TTL
-    // ensures a stale queue entry can't ambush an unrelated tab
-    // weeks later.
     const user = _vscoUserFromPath();
-    if (!user) return;
+    if (!user) {
+      console.log("[VSCO Archive] _maybeAutoArchive: not on a profile page");
+      return;
+    }
     const canonical = `https://vsco.co/${user}/gallery`;
     const alt = `https://vsco.co/${user}`;
     let queue;
     try {
       const s = await chrome.storage.local.get(["vscoAutoArchiveQueue"]);
       queue = s.vscoAutoArchiveQueue;
-    } catch (_) { return; }
-    if (!queue || typeof queue !== "object") return;
+    } catch (e) {
+      console.log("[VSCO Archive] _maybeAutoArchive: storage read failed", e?.message);
+      return;
+    }
+    if (!queue || typeof queue !== "object") {
+      console.log(`[VSCO Archive] _maybeAutoArchive: no queue (this tab will not auto-archive)`);
+      return;
+    }
     const ts = queue[canonical] || queue[alt];
     const now = Date.now();
-    if (!ts || (now - ts) > QUEUE_TTL_MS) return;
+    if (!ts) {
+      console.log(`[VSCO Archive] _maybeAutoArchive: @${user} not in queue (${Object.keys(queue).length} entries) — not auto-archiving`);
+      return;
+    }
+    if ((now - ts) > QUEUE_TTL_MS) {
+      console.log(`[VSCO Archive] _maybeAutoArchive: @${user} queue entry stale (${Math.round((now-ts)/60000)}min old, TTL ${QUEUE_TTL_MS/60000}min)`);
+      return;
+    }
+    console.log(`[VSCO Archive] _maybeAutoArchive: @${user} matched, starting`);
     delete queue[canonical];
     delete queue[alt];
     // Also opportunistically prune any other expired entries so the

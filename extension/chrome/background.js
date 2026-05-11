@@ -1191,19 +1191,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (async () => {
       try {
         // Upgrade VSCO CDN URLs to the highest available quality:
-        //   - i.vsco.co/<id>?w=300        → ?w=2400 (resizer endpoint;
-        //                                    re-encoded JPEG, ~500KB)
-        //   - im.vsco.co/aws-us-west-2/...→ leave untouched (original
-        //                                    upload, multi-MB, lossless)
-        // The canonical AWS path comes from the API interceptor and
-        // already points at the original — adding ?w=2400 to it would
-        // be ignored at best, 400'd at worst.
+        //   - i.vsco.co/<id>?w=300            → ?w=2400 (resizer host;
+        //                                        REQUIRES a w= param)
+        //   - im.vsco.co/aws-us-west-2/.../   → strip w=/h=/c= entirely
+        //     vsco_xxx.jpg?w=480                so Cloudflare serves the
+        //                                       original file. The
+        //                                       API returns w=480
+        //                                       thumb URLs by default;
+        //                                       bumping to w=2400 on
+        //                                       canonical paths
+        //                                       returns 403 (Cloudflare
+        //                                       allowlist mismatch).
         let fetchUrl = msg.url;
         try {
           const u = new URL(msg.url);
-          const isResizer = u.searchParams.has("w") || u.searchParams.has("c");
-          if (/^i\.vsco\.co$/i.test(u.hostname) || isResizer) {
+          if (/^i\.vsco\.co$/i.test(u.hostname)) {
             u.searchParams.set("w", "2400");
+            u.searchParams.delete("h");
+            u.searchParams.delete("c");
+            fetchUrl = u.toString();
+          } else if (/^im\.vsco\.co$/i.test(u.hostname)) {
+            u.searchParams.delete("w");
             u.searchParams.delete("h");
             u.searchParams.delete("c");
             fetchUrl = u.toString();
