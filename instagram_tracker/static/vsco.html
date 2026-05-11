@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/styles.css?v=6" />
+  <title>VSCO archive — all profiles</title>
+  <style>
+    body { padding: 32px 24px 80px; }
+    .vsco-head {
+      max-width: 1280px;
+      margin: 0 auto 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      text-align: center;
+    }
+    .vsco-head h1 { margin: 0; font-size: 30px; font-weight: 700; }
+    .vsco-head .stats { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+    .vsco-head .back-link {
+      color: var(--muted); text-decoration: none; font-size: 13px;
+      padding: 6px 12px; border-radius: 6px;
+      border: 1px solid var(--border); background: var(--bg-elev-2);
+    }
+    .vsco-head .back-link:hover { border-color: var(--accent); color: var(--accent); }
+
+    .vsco-grid {
+      max-width: 1280px; margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 16px;
+    }
+    .vsco-user-card {
+      background: var(--bg-elev-2); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px; cursor: pointer;
+      transition: border-color 120ms ease, transform 120ms ease;
+    }
+    .vsco-user-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+    .vsco-user-card h3 {
+      margin: 0 0 6px 0; font-size: 16px; font-weight: 600;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .vsco-user-card h3 a {
+      color: var(--muted); font-size: 12px; text-decoration: none;
+      margin-left: auto;
+    }
+    .vsco-user-card h3 a:hover { color: var(--accent); }
+    .vsco-user-card .meta {
+      font-size: 12px; color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .vsco-thumb-strip {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px; margin-top: 10px;
+    }
+    .vsco-thumb-strip img {
+      width: 100%; aspect-ratio: 1 / 1; object-fit: cover;
+      border-radius: 4px; background: #111;
+    }
+
+    /* Expanded view — replaces the grid when a user is opened. */
+    .vsco-expanded { max-width: 1280px; margin: 0 auto; }
+    .vsco-expanded-head {
+      display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+    }
+    .vsco-expanded-head h2 { margin: 0; font-size: 22px; font-weight: 600; }
+    .vsco-expanded-head .stats { color: var(--muted); font-size: 13px; }
+    .vsco-expanded-head .close-btn {
+      margin-left: auto;
+      padding: 6px 12px; border-radius: 6px;
+      border: 1px solid var(--border); background: var(--bg-elev-2);
+      color: var(--text); cursor: pointer; font-size: 13px;
+    }
+    .vsco-expanded-head .close-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .vsco-expanded-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 6px;
+    }
+    .vsco-expanded-grid img,
+    .vsco-expanded-grid video {
+      width: 100%; aspect-ratio: 1 / 1; object-fit: cover;
+      border-radius: 6px; background: #111;
+      cursor: zoom-in;
+    }
+
+    /* Fullsize lightbox. */
+    .vsco-lightbox {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.92);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 1000; cursor: zoom-out;
+    }
+    .vsco-lightbox img, .vsco-lightbox video {
+      max-width: 92vw; max-height: 92vh; object-fit: contain;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+    }
+    .vsco-lightbox[hidden] { display: none; }
+
+    .empty {
+      text-align: center; color: var(--muted);
+      padding: 60px 20px; font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <header class="vsco-head">
+    <a href="/" class="back-link">← Back to tracker</a>
+    <h1>📷 VSCO archive</h1>
+    <div class="stats" id="stats">loading…</div>
+  </header>
+
+  <main id="root" class="vsco-grid"></main>
+  <div id="lightbox" class="vsco-lightbox" hidden></div>
+
+  <script>
+    // Self-contained VSCO archive browser. Three views (no router):
+    //   - Grid of user cards (default).
+    //   - Per-user gallery (when a card is clicked).
+    //   - Fullsize lightbox (when a gallery tile is clicked).
+    // Uses /api/vsco-summary + /api/vsco-list/<user> as the data source
+    // and /api/vsco-media/<user>/<file> as the actual image URL.
+    const root = document.getElementById("root");
+    const statsEl = document.getElementById("stats");
+    const lightbox = document.getElementById("lightbox");
+
+    function fmtBytes(n) {
+      if (n < 1024) return n + " B";
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+      if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + " MB";
+      return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+    }
+    function fmtMtime(secs) {
+      if (!secs) return "";
+      const d = new Date(secs * 1000);
+      return d.toLocaleString();
+    }
+    function escapeText(s) {
+      return String(s == null ? "" : s);
+    }
+
+    function isVideo(name) {
+      return /\.(mp4|mov|webm|m4v)$/i.test(name || "");
+    }
+
+    function openLightbox(url, name) {
+      lightbox.innerHTML = "";
+      const el = isVideo(name)
+        ? Object.assign(document.createElement("video"), { src: url, controls: true, autoplay: true })
+        : Object.assign(document.createElement("img"), { src: url, alt: name });
+      lightbox.appendChild(el);
+      lightbox.hidden = false;
+    }
+    lightbox.addEventListener("click", () => { lightbox.hidden = true; lightbox.innerHTML = ""; });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !lightbox.hidden) {
+        lightbox.hidden = true; lightbox.innerHTML = "";
+      }
+    });
+
+    async function renderUserGrid() {
+      root.className = "vsco-grid";
+      root.innerHTML = "";
+      let data;
+      try {
+        const r = await fetch("/api/vsco-summary");
+        data = await r.json();
+      } catch (e) {
+        root.innerHTML = `<div class="empty">Failed to load /api/vsco-summary: ${escapeText(e.message)}</div>`;
+        statsEl.textContent = "";
+        return;
+      }
+      const users = data.users || [];
+      if (!users.length) {
+        statsEl.textContent = "no profiles archived yet";
+        root.innerHTML = `<div class="empty">Run the extension's 🕶️ Archive all VSCO tabs command first — the saved files will show up here.</div>`;
+        return;
+      }
+      const totalFiles = users.reduce((a, u) => a + (u.count || 0), 0);
+      const totalBytes = users.reduce((a, u) => a + (u.bytes || 0), 0);
+      statsEl.textContent = `${users.length} profile${users.length === 1 ? "" : "s"} · ${totalFiles.toLocaleString()} files · ${fmtBytes(totalBytes)}`;
+      for (const u of users) {
+        const card = document.createElement("div");
+        card.className = "vsco-user-card";
+        card.dataset.username = u.username;
+        const head = document.createElement("h3");
+        head.textContent = "@" + u.username;
+        const ext = document.createElement("a");
+        ext.href = "https://vsco.co/" + u.username + "/gallery";
+        ext.target = "_blank";
+        ext.rel = "noopener";
+        ext.textContent = "↗";
+        ext.title = "Open on VSCO";
+        ext.addEventListener("click", (e) => e.stopPropagation());
+        head.appendChild(ext);
+        card.appendChild(head);
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = `${u.count} files · ${fmtBytes(u.bytes || 0)} · last ${fmtMtime(u.latest_mtime)}`;
+        card.appendChild(meta);
+        // Tease 3 thumbs lazily — fetch list, pick first three, attach.
+        const strip = document.createElement("div");
+        strip.className = "vsco-thumb-strip";
+        card.appendChild(strip);
+        fetch("/api/vsco-list/" + encodeURIComponent(u.username))
+          .then((r) => r.json())
+          .then((d) => {
+            const items = (d.items || []).slice(0, 3);
+            for (const it of items) {
+              const name = it.media_id + "." + it.ext;
+              if (isVideo(name)) {
+                const v = document.createElement("video");
+                v.src = it.url;
+                v.muted = true;
+                strip.appendChild(v);
+              } else {
+                const img = document.createElement("img");
+                img.loading = "lazy";
+                img.src = it.url;
+                strip.appendChild(img);
+              }
+            }
+          })
+          .catch(() => {});
+        card.addEventListener("click", () => renderUserGallery(u));
+        root.appendChild(card);
+      }
+    }
+
+    async function renderUserGallery(u) {
+      root.className = "vsco-expanded";
+      root.innerHTML = `
+        <div class="vsco-expanded-head">
+          <h2>@${escapeText(u.username)}</h2>
+          <span class="stats">${u.count} files · ${fmtBytes(u.bytes || 0)}</span>
+          <button class="close-btn" id="back-btn">← all profiles</button>
+        </div>
+        <div class="vsco-expanded-grid" id="grid"></div>
+      `;
+      document.getElementById("back-btn").addEventListener("click", renderUserGrid);
+      statsEl.textContent = `@${u.username} — ${u.count} files`;
+      const grid = document.getElementById("grid");
+      try {
+        const r = await fetch("/api/vsco-list/" + encodeURIComponent(u.username));
+        const d = await r.json();
+        const items = d.items || [];
+        if (!items.length) {
+          grid.innerHTML = `<div class="empty">No files saved yet for this profile.</div>`;
+          return;
+        }
+        for (const it of items) {
+          const name = it.media_id + "." + it.ext;
+          const el = isVideo(name)
+            ? Object.assign(document.createElement("video"), { src: it.url, muted: true, preload: "metadata" })
+            : Object.assign(document.createElement("img"), { src: it.url, loading: "lazy" });
+          el.addEventListener("click", () => openLightbox(it.url, name));
+          grid.appendChild(el);
+        }
+      } catch (e) {
+        grid.innerHTML = `<div class="empty">Failed to load: ${escapeText(e.message)}</div>`;
+      }
+    }
+
+    renderUserGrid();
+  </script>
+</body>
+</html>

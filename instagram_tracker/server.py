@@ -4640,6 +4640,15 @@ def archive_overview_page():
     return FileResponse(STATIC_DIR / "archive.html", headers=_NO_CACHE)
 
 
+@app.get("/vsco")
+def vsco_overview_page():
+    """VSCO archive browser — grid of every archived profile with
+    thumbnail tease, click-through to per-profile gallery + lightbox.
+    Reads from /api/vsco-summary and /api/vsco-list/<user>. Linked
+    from the home tab bar."""
+    return FileResponse(STATIC_DIR / "vsco.html", headers=_NO_CACHE)
+
+
 @app.get("/archive-queue")
 def archive_queue_page():
     """Standalone queue manager — full-screen view of the auto-archive
