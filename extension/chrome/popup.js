@@ -423,21 +423,32 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   });
 
-  // List + copy URLs of every open vsco.co tab across ALL windows.
-  // Filters to canonical profile/gallery shapes — vsco.co/<user> or
-  // vsco.co/<user>/gallery — so vsco.co/about / /spaces / /studio etc.
-  // are skipped. Output is one URL per line ready to paste into an
-  // incognito-window address bar (one paste per tab). Also lists the
-  // detected usernames inline in the popup so the user can sanity-check
-  // before pasting.
-  el("list-vsco-tabs").addEventListener("click", async () => {
+  // Single private-by-default VSCO archive flow:
+  //   1. Enumerate every open vsco.co/<user>/[gallery] tab across all
+  //      windows (regular + incognito).
+  //   2. Verify the user has flipped 'Allow in Incognito' on at
+  //      chrome://extensions — required so the content script runs
+  //      inside the new incognito window we're about to open.
+  //   3. Write the canonical URLs into chrome.storage.local as a queue.
+  //   4. Open one fresh incognito window containing all the URLs as
+  //      tabs (no cookies, no logged-in VSCO session, no carryover
+  //      Cloudflare state).
+  //   5. Each tab's content script picks itself out of the queue on
+  //      load, scrolls the gallery to render every lazy-loaded image,
+  //      runs the archive pipeline (background-SW fetches keep VSCO's
+  //      CORS / referer surface minimal), then asks the SW to close
+  //      the tab.
+  //
+  // Privacy ceiling: the only thing left that VSCO sees is your IP and
+  // the bare CDN GETs (no credentials, no referer beyond chrome-
+  // extension://). Pair with a VPN if IP-level anonymity matters —
+  // browsers can't hide IP from the server.
+  el("archive-vsco").addEventListener("click", async () => {
     const result = el("vsco-tabs-result");
     result.style.display = "block";
     result.textContent = "scanning tabs…";
     try {
       const tabs = await chrome.tabs.query({});
-      // Reserves match the content-script's RESERVED set so we don't
-      // treat e.g. vsco.co/studio as a profile.
       const RESERVED = new Set([
         "m", "spaces", "studio", "feed", "search", "discover", "explore",
         "settings", "account", "login", "join", "user", "users",
@@ -461,18 +472,33 @@ document.addEventListener("DOMContentLoaded", async () => {
         result.textContent = "no vsco.co tabs open. Open some profile tabs first.";
         return;
       }
-      const text = matches.map((m) => m.url).join("\n") + "\n";
-      try { await navigator.clipboard.writeText(text); }
-      catch (_) { /* clipboard may fail in some popup contexts */ }
-      // Handles can only contain [A-Za-z0-9._-] per the regex so HTML
-      // escaping isn't strictly needed, but textContent on a fresh
-      // <div> per row is the safe path either way.
+      let allowed = false;
+      try {
+        allowed = await chrome.extension.isAllowedIncognitoAccess();
+      } catch (_) { allowed = true; }
+      if (!allowed) {
+        result.innerHTML = "";
+        const msg = document.createElement("div");
+        msg.style.cssText = "color: var(--bad);";
+        msg.textContent = "Enable 'Allow in Incognito' for this extension, then re-click.";
+        result.appendChild(msg);
+        const hint = document.createElement("div");
+        hint.style.marginTop = "4px";
+        hint.textContent = "chrome://extensions → IG Tracker → Details → toggle 'Allow in Incognito' on.";
+        result.appendChild(hint);
+        return;
+      }
+      const urls = matches.map((m) => m.url);
+      await chrome.storage.local.set({
+        vscoAutoArchiveQueue: urls.reduce((o, u) => { o[u] = Date.now(); return o; }, {}),
+      });
+      await chrome.windows.create({ incognito: true, url: urls });
       result.innerHTML = "";
       const head = document.createElement("div");
-      head.innerHTML = `<strong>${matches.length} VSCO tab${matches.length === 1 ? "" : "s"}</strong> — URLs copied to clipboard.`;
+      head.innerHTML = `<strong>Archiving ${matches.length} profile${matches.length === 1 ? "" : "s"} in incognito.</strong>`;
       result.appendChild(head);
       const list = document.createElement("div");
-      list.style.cssText = "margin-top:6px; max-height:160px; overflow-y:auto; font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.5;";
+      list.style.cssText = "margin-top:6px; max-height:140px; overflow-y:auto; font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.5;";
       for (const m of matches) {
         const row = document.createElement("div");
         row.textContent = "@" + m.handle;
@@ -481,154 +507,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       result.appendChild(list);
       const hint = document.createElement("div");
       hint.style.marginTop = "6px";
-      hint.textContent = "Paste into an incognito window (one URL per tab) and click the 📥 Archive button on each.";
-      result.appendChild(hint);
-    } catch (e) {
-      result.textContent = `failed: ${e?.message || e}`;
-    }
-  });
-
-  // Fan out an archive command to every open vsco.co profile tab. Each
-  // tab's content script scrolls to the gallery bottom (to trigger
-  // lazy-loaded images), then archives in place. Fire-and-forget: the
-  // popup closes as soon as the messages dispatch — progress shows in
-  // each tab via the existing overlay.
-  el("archive-vsco-tabs").addEventListener("click", async () => {
-    const result = el("vsco-tabs-result");
-    result.style.display = "block";
-    result.textContent = "scanning tabs…";
-    try {
-      const tabs = await chrome.tabs.query({});
-      const RESERVED = new Set([
-        "m", "spaces", "studio", "feed", "search", "discover", "explore",
-        "settings", "account", "login", "join", "user", "users",
-        "membership", "about", "privacy", "terms", "help", "legal",
-        "ai-lab", "blog", "stories", "support", "company",
-        "products", "solutions", "resources", "downloads", "campaigns",
-      ]);
-      const seen = new Set();
-      const matches = [];
-      for (const t of tabs) {
-        const url = t.url || "";
-        const m = url.match(/^https?:\/\/(?:www\.)?vsco\.co\/([A-Za-z0-9._-]{1,40})(?:\/(?:gallery)?)?(?:\?|#|$)/i);
-        if (!m) continue;
-        const handle = m[1];
-        if (RESERVED.has(handle.toLowerCase())) continue;
-        if (seen.has(handle.toLowerCase())) continue;
-        seen.add(handle.toLowerCase());
-        matches.push({ tabId: t.id, handle });
-      }
-      if (!matches.length) {
-        result.textContent = "no vsco.co tabs open. Open some profile tabs first.";
-        return;
-      }
-      let dispatched = 0;
-      const failures = [];
-      for (const m of matches) {
-        try {
-          await chrome.tabs.sendMessage(m.tabId, {
-            cmd: "archive-vsco",
-            scrollFirst: true,
-          });
-          dispatched += 1;
-        } catch (e) {
-          // sendMessage rejects when the tab has no listener — most
-          // commonly because the user opened the tab before the content
-          // script's manifest entry was registered (fresh install) or
-          // because chrome://... blocks injection. We surface those
-          // separately from "successfully started".
-          failures.push({ handle: m.handle, error: e?.message || String(e) });
-        }
-      }
-      result.innerHTML = "";
-      const head = document.createElement("div");
-      const tip = dispatched ? " — watch each tab's bottom-right overlay for per-tab progress." : "";
-      head.textContent = `Started archive on ${dispatched}/${matches.length} VSCO tab${matches.length === 1 ? "" : "s"}${tip}`;
-      result.appendChild(head);
-      if (failures.length) {
-        const errList = document.createElement("div");
-        errList.style.cssText = "margin-top:6px; color:#b00; font-size:11px;";
-        errList.textContent = `${failures.length} tab(s) didn't accept the message — reload them and try again:`;
-        result.appendChild(errList);
-        for (const f of failures) {
-          const row = document.createElement("div");
-          row.textContent = `@${f.handle} — ${f.error}`;
-          row.style.cssText = "font-family: ui-monospace, monospace; font-size: 10px;";
-          result.appendChild(row);
-        }
-      }
-    } catch (e) {
-      result.textContent = `failed: ${e?.message || e}`;
-    }
-  });
-
-  // Fully-automated incognito flow: collect every open vsco.co profile
-  // URL, write them into a queue in chrome.storage.local, open one
-  // fresh incognito window with all of them as tabs, and let each tab's
-  // content script auto-archive on load and request close-after-done.
-  el("archive-vsco-incognito").addEventListener("click", async () => {
-    const result = el("vsco-tabs-result");
-    result.style.display = "block";
-    result.textContent = "scanning tabs…";
-    try {
-      // Need the user to opt in to incognito for this extension first —
-      // otherwise we can open the window but the content script won't
-      // load there and the tabs will just sit. Check + tell them.
-      let allowed = false;
-      try {
-        allowed = await chrome.extension.isAllowedIncognitoAccess();
-      } catch (_) { /* old Chrome lacks this API; assume true */ allowed = true; }
-      if (!allowed) {
-        result.innerHTML = "";
-        const msg = document.createElement("div");
-        msg.style.cssText = "color: var(--bad);";
-        msg.textContent = "Enable 'Allow in Incognito' for this extension first.";
-        result.appendChild(msg);
-        const hint = document.createElement("div");
-        hint.style.marginTop = "4px";
-        hint.textContent = "Open chrome://extensions → IG Tracker → Details → toggle 'Allow in Incognito' on.";
-        result.appendChild(hint);
-        return;
-      }
-      const tabs = await chrome.tabs.query({});
-      const RESERVED = new Set([
-        "m", "spaces", "studio", "feed", "search", "discover", "explore",
-        "settings", "account", "login", "join", "user", "users",
-        "membership", "about", "privacy", "terms", "help", "legal",
-        "ai-lab", "blog", "stories", "support", "company",
-        "products", "solutions", "resources", "downloads", "campaigns",
-      ]);
-      const seen = new Set();
-      const urls = [];
-      for (const t of tabs) {
-        const url = t.url || "";
-        const m = url.match(/^https?:\/\/(?:www\.)?vsco\.co\/([A-Za-z0-9._-]{1,40})(?:\/(?:gallery)?)?(?:\?|#|$)/i);
-        if (!m) continue;
-        const handle = m[1];
-        if (RESERVED.has(handle.toLowerCase())) continue;
-        if (seen.has(handle.toLowerCase())) continue;
-        seen.add(handle.toLowerCase());
-        urls.push(`https://vsco.co/${handle}/gallery`);
-      }
-      if (!urls.length) {
-        result.textContent = "no vsco.co tabs open. Open some profile tabs first.";
-        return;
-      }
-      // Write the queue. The content script checks this on load — when
-      // its URL matches an entry, it auto-archives and asks the SW to
-      // close the tab. Stored as a Set-equivalent dict so duplicate
-      // navigations don't trigger a second archive in the same window.
-      await chrome.storage.local.set({
-        vscoAutoArchiveQueue: urls.reduce((o, u) => { o[u] = Date.now(); return o; }, {}),
-      });
-      const win = await chrome.windows.create({ incognito: true, url: urls });
-      result.innerHTML = "";
-      const head = document.createElement("div");
-      head.innerHTML = `<strong>Opened ${urls.length} profile${urls.length === 1 ? "" : "s"} in incognito.</strong>`;
-      result.appendChild(head);
-      const hint = document.createElement("div");
-      hint.style.marginTop = "6px";
-      hint.textContent = "Each tab will scroll, archive, then close itself. The window stays open if any tab fails so you can inspect it.";
+      hint.textContent = "Each tab scrolls, archives, then closes itself. Tabs that hit problems stay open.";
       result.appendChild(hint);
     } catch (e) {
       result.textContent = `failed: ${e?.message || e}`;

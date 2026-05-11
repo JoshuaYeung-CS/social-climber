@@ -259,47 +259,6 @@
     await new Promise((r) => setTimeout(r, 400));
   }
 
-  // Popup-triggered archive. Distinct from the on-page button so the
-  // popup can fan out across every open VSCO tab without the user
-  // having to visit each one. The `scrollFirst` flag is on by default
-  // for the popup path because tabs that have been idle won't have the
-  // full gallery hydrated.
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (!msg || msg.cmd !== "archive-vsco") return;
-    (async () => {
-      try {
-        if (!_vscoUserFromPath()) {
-          sendResponse({ ok: false, error: "not a profile page" });
-          return;
-        }
-        // Reuse the existing button if present so the user sees the
-        // same visual cue ("Archiving…") whether they triggered it
-        // here or via the popup.
-        const btn = _ensureButton();
-        if (btn.dataset.running === "1") {
-          sendResponse({ ok: false, error: "already running" });
-          return;
-        }
-        btn.dataset.running = "1";
-        btn.textContent = "Archiving…";
-        try {
-          if (msg.scrollFirst) {
-            _updateProgress("Loading gallery…", 0, 0, 0);
-            await _scrollAllImagesIntoView();
-          }
-          const r = await archiveCurrentProfile();
-          sendResponse(r);
-        } finally {
-          btn.dataset.running = "0";
-          btn.textContent = "📥 Archive to IG Tracker";
-        }
-      } catch (e) {
-        sendResponse({ ok: false, error: e?.message || String(e) });
-      }
-    })();
-    return true;  // keep the message channel open for async sendResponse
-  });
-
   // ---------- minimal overlay ----------
   // Floating button bottom-right of the page. Visible only on profile
   // pages. Click → run archiveCurrentProfile() and show progress.
@@ -373,30 +332,43 @@
   setTimeout(_onLocationChange, 400);
 
   // Auto-archive-on-load handshake for the popup's "incognito sweep"
-  // flow. The popup wrote a queue of URLs to chrome.storage.local; if
-  // this tab's URL matches an entry, dequeue ourselves, scroll-and-
-  // archive, then ask the background SW to close us. Single-fire per
-  // tab (the queue entry is removed before archive starts).
+  // flow. The popup wrote a queue of URLs (with timestamps) to
+  // chrome.storage.local; if this tab's URL matches a fresh entry,
+  // dequeue ourselves, scroll-and-archive, then ask the background SW
+  // to close us.
+  //
+  // Two safety guards make this safe in adversarial conditions:
+  //   - Incognito only. The queue is only honored from incognito tabs;
+  //     a regular tab that happens to navigate to a queued URL never
+  //     fires. Guarantees the archive only ever happens in the no-
+  //     cookie window we explicitly opened.
+  //   - 10-minute freshness window. Entries older than 10 min are
+  //     ignored and pruned. If the user closes the window mid-sweep,
+  //     stale entries can't lie in wait and ambush a future tab.
+  const QUEUE_TTL_MS = 10 * 60 * 1000;
   async function _maybeAutoArchive() {
+    if (!chrome.extension?.inIncognitoContext) return;
     const user = _vscoUserFromPath();
     if (!user) return;
     const canonical = `https://vsco.co/${user}/gallery`;
+    const alt = `https://vsco.co/${user}`;
     let queue;
     try {
       const s = await chrome.storage.local.get(["vscoAutoArchiveQueue"]);
       queue = s.vscoAutoArchiveQueue;
     } catch (_) { return; }
     if (!queue || typeof queue !== "object") return;
-    // Match either the canonical /gallery form or the bare /<user>
-    // form — popup writes the canonical form but we tolerate either.
-    const hit = queue[canonical] || queue[`https://vsco.co/${user}`];
-    if (!hit) return;
-    // Dequeue both shapes before starting so a refresh of the tab
-    // doesn't double-archive.
+    const ts = queue[canonical] || queue[alt];
+    const now = Date.now();
+    if (!ts || (now - ts) > QUEUE_TTL_MS) return;
     delete queue[canonical];
-    delete queue[`https://vsco.co/${user}`];
+    delete queue[alt];
+    // Also opportunistically prune any other expired entries so the
+    // store doesn't grow unbounded if a sweep ever gets interrupted.
+    for (const [k, v] of Object.entries(queue)) {
+      if (!v || (now - v) > QUEUE_TTL_MS) delete queue[k];
+    }
     try { await chrome.storage.local.set({ vscoAutoArchiveQueue: queue }); } catch (_) {}
-    // Wait a beat for the SPA to render the gallery before we scroll.
     await new Promise((r) => setTimeout(r, 800));
     const btn = _ensureButton();
     btn.dataset.running = "1";
@@ -406,9 +378,6 @@
       await _scrollAllImagesIntoView();
       const r = await archiveCurrentProfile();
       if (r && r.ok) {
-        // Ask the SW to close us — content scripts can't close their
-        // own tab directly. Brief delay built into the SW handler so
-        // the user sees the final "Done" text.
         try { chrome.runtime.sendMessage({ type: "close-my-tab" }); } catch (_) {}
       }
     } finally {
@@ -416,8 +385,6 @@
       btn.textContent = "📥 Archive to IG Tracker";
     }
   }
-  // Defer to the next tick so the rest of the script (including the
-  // button creator) is initialized before the handler runs.
   setTimeout(_maybeAutoArchive, 600);
 
   // Public API
