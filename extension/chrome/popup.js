@@ -749,7 +749,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       head.innerHTML = `<strong>${log.length} log line${log.length === 1 ? "" : "s"}</strong> (newest at bottom)`;
       result.appendChild(head);
       const pre = document.createElement("pre");
-      pre.style.cssText = "margin-top:6px; max-height:200px; overflow:auto; font-family: ui-monospace, monospace; font-size: 10.5px; line-height: 1.4; padding: 8px; border:1px solid var(--border); border-radius:8px; background: rgba(0,0,0,0.2); white-space: pre-wrap;";
+      pre.className = "sw-log-pane";
       pre.textContent = log.join("\n");
       result.appendChild(pre);
       const row = document.createElement("div");

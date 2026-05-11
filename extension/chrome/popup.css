@@ -414,6 +414,35 @@ html, body {
   font-size: 11px;
 }
 
+/* SW chain log viewer — monospace pane with the same thin accent
+   scrollbar pattern used by the queue list and the VSCO archive log.
+   Removes the chrome-default grey scrollbar that clashed with the
+   dark popup theme. */
+.sw-log-pane {
+  margin-top: 6px;
+  max-height: 220px;
+  overflow: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+  white-space: pre-wrap;
+  word-break: break-word;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  color: var(--text);
+}
+.sw-log-pane::-webkit-scrollbar { width: 6px; height: 6px; }
+.sw-log-pane::-webkit-scrollbar-track { background: transparent; }
+.sw-log-pane::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.sw-log-pane::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
 /* Compact VSCO archive log viewer. One row per run; errors fold
    into a dim line below only if present. Scrollbar styled thin +
    accent-on-hover so the user can read it without a chrome-default
