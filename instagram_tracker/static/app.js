@@ -635,9 +635,16 @@ async function loadArchiveCard() {
     const data = await r.json();
     if (!data.users || data.users.length === 0) { card.hidden = true; return; }
     card.hidden = false;
-    const totalMb = (data.total_bytes / 1024 / 1024).toFixed(1);
+    // Promote to GB above 1024 MB so the header doesn't read
+    // '21977.0 MB' on multi-GB archives.
+    const fmtArchBytes = (n) => {
+      if (n >= 1024 * 1024 * 1024) return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+      if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+      if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
+      return `${n} B`;
+    };
     $("#archive-summary").textContent =
-      `${data.total_items} item${data.total_items === 1 ? "" : "s"} across ${data.users.length} account${data.users.length === 1 ? "" : "s"} · ${totalMb} MB`;
+      `${data.total_items} item${data.total_items === 1 ? "" : "s"} across ${data.users.length} account${data.users.length === 1 ? "" : "s"} · ${fmtArchBytes(data.total_bytes)}`;
     // List rows match the notes / public-followback / private-accepted
     // cards: username on the left, "<count> items · <size> · <when>"
     // on the right. Each row links to /media/<username> in a new tab
@@ -647,9 +654,7 @@ async function loadArchiveCard() {
     const users = (data.users || []).slice().sort(
       (a, b) => (b.latest_mtime || 0) - (a.latest_mtime || 0)
     );
-    const fmtSize = (bytes) => bytes >= 1024 * 1024
-      ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
-      : `${(bytes / 1024).toFixed(0)} KB`;
+    const fmtSize = fmtArchBytes;
     $("#archive-users").innerHTML = users.map((u) => {
       const size = fmtSize(u.bytes);
       const when = fmtMtimeAgo(u.latest_mtime);

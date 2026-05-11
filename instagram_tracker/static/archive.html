@@ -219,8 +219,16 @@
         if (!r.ok) throw new Error("HTTP " + r.status);
         const data = await r.json();
         users = data.users || [];
-        const totalMb = (data.total_bytes / 1024 / 1024).toFixed(1);
-        stats.textContent = `${data.total_items} items across ${users.length} account${users.length === 1 ? "" : "s"} · ${data.total_groups} posts/albums · ${totalMb} MB`;
+        // Promote to GB once we're past ~1 GB so the header stops
+        // reading '21977.0 MB' on multi-GB archives. KB/MB/GB scale
+        // by /1024 each tier; one decimal at MB+ tier is enough.
+        const fmtBytes = (n) => {
+          if (n >= 1024 * 1024 * 1024) return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+          if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+          if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
+          return `${n} B`;
+        };
+        stats.textContent = `${data.total_items} items across ${users.length} account${users.length === 1 ? "" : "s"} · ${data.total_groups} posts/albums · ${fmtBytes(data.total_bytes)}`;
       } catch (e) {
         stats.textContent = "Couldn't load archive: " + e.message;
         return;
@@ -275,10 +283,10 @@
           .sort((a, b) => b[1] - a[1])
           .map(([k, n]) => `<span class="kind-pill">${kindLabels[k] || k} ${n}</span>`)
           .join("");
-        const sizeKb = u.bytes / 1024;
-        const sizeLabel = sizeKb >= 1024
-          ? `${(sizeKb / 1024).toFixed(1)} MB`
-          : `${sizeKb.toFixed(0)} KB`;
+        // Per-account size — same scale-up rule. A handful of heavy
+        // archives hit the GB tier; rendering them as '1898.5 MB'
+        // looks worse than '1.9 GB'.
+        const sizeLabel = fmtBytes(u.bytes);
         // Always render 4 cells (pad with empties if preview < 4)
         const cells = [];
         for (let i = 0; i < 4; i++) cells.push(renderCell(u.preview[i]));
