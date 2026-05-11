@@ -1093,21 +1093,44 @@ def _home_compute():
             active_incoming = curr.incoming_requests - suppressed_home
 
             # Extension-bridged pending/following: union in the rows the
-            # extension recorded as "requested" / "following" but the
-            # snapshot hasn't caught up to yet. Auto-clears once the next
-            # export ingests them (they'll already be in active_pending).
-            ext_bridged_pending = {
-                r["username"] for r in conn.execute(
-                    "SELECT username FROM profile_observations "
-                    "WHERE follow_button_state = 'requested'"
-                ).fetchall()
-            } - suppressed_home - active_pending - active_following
-            ext_bridged_following = {
-                r["username"] for r in conn.execute(
-                    "SELECT username FROM profile_observations "
-                    "WHERE follow_button_state = 'following'"
-                ).fetchall()
-            } - suppressed_home - active_following
+            # extension recorded as "requested" / "following" that the
+            # latest export doesn't have yet — IG ships exports every
+            # ~25 min so anything you did in between needs to be
+            # reflected here.
+            #
+            # CRITICAL FRESHNESS GATE (added after a sanity-check
+            # showed Following inflating by ~55 stale entries on top
+            # of the export): only bridge observations made AFTER the
+            # latest snapshot was taken. Older observations are
+            # superseded by the export — if the export doesn't list
+            # them anymore, you've unfollowed them since and the
+            # observation is stale.
+            latest_taken_at = conn.execute(
+                "SELECT taken_at FROM snapshots WHERE id = ?", (latest,)
+            ).fetchone()
+            latest_taken_at = latest_taken_at["taken_at"] if latest_taken_at else None
+            if latest_taken_at:
+                _obs_following = {
+                    r["username"] for r in conn.execute(
+                        "SELECT username FROM profile_observations "
+                        "WHERE follow_button_state = 'following' "
+                        "AND observed_at > ?",
+                        (latest_taken_at,),
+                    ).fetchall()
+                }
+                _obs_requested = {
+                    r["username"] for r in conn.execute(
+                        "SELECT username FROM profile_observations "
+                        "WHERE follow_button_state = 'requested' "
+                        "AND observed_at > ?",
+                        (latest_taken_at,),
+                    ).fetchall()
+                }
+            else:
+                _obs_following = set()
+                _obs_requested = set()
+            ext_bridged_pending = _obs_requested - suppressed_home - active_pending - active_following
+            ext_bridged_following = _obs_following - suppressed_home - active_following
             active_pending = active_pending | ext_bridged_pending
             active_following = active_following | ext_bridged_following
 
