@@ -143,28 +143,27 @@
     }));
   }
 
+  // Fetch via the background service worker. Content scripts share
+  // origin with the host page so a direct fetch() of im.vsco.co
+  // triggers a CORS preflight; VSCO's CDN doesn't return the headers
+  // needed to pass it, so the request fails with "Failed to fetch".
+  // The SW runs in extension-origin context and the manifest's
+  // host_permissions for *.vsco.co/* let it bypass CORS — we just ask
+  // it to fetch on our behalf and hand us the bytes.
   async function _fetchAsBase64(url) {
-    try {
-      const r = await fetch(url, { credentials: "include", mode: "cors" });
-      if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
-      const blob = await r.blob();
-      if (blob.size > MAX_BYTES) {
-        return { ok: false, error: `too large (${blob.size} bytes)` };
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: "fetch-vsco-bytes", url }, (resp) => {
+          if (chrome.runtime.lastError) {
+            resolve({ ok: false, error: chrome.runtime.lastError.message });
+            return;
+          }
+          resolve(resp || { ok: false, error: "no response from background" });
+        });
+      } catch (e) {
+        resolve({ ok: false, error: e?.message || String(e) });
       }
-      const buf = await blob.arrayBuffer();
-      // Manual base64 encode — btoa requires a binary string;
-      // construct via Uint8Array chunks to avoid the spread-stack
-      // overflow on big files.
-      const bytes = new Uint8Array(buf);
-      let binary = "";
-      const CHUNK = 0x8000;
-      for (let i = 0; i < bytes.length; i += CHUNK) {
-        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
-      }
-      return { ok: true, body: btoa(binary), size: blob.size };
-    } catch (e) {
-      return { ok: false, error: e?.message || String(e) };
-    }
+    });
   }
 
   async function _trackerUrl() {
@@ -372,6 +371,54 @@
   // Initial pass — wait briefly for VSCO's hydration to finish so
   // gallery images are present in the DOM by the time we attach.
   setTimeout(_onLocationChange, 400);
+
+  // Auto-archive-on-load handshake for the popup's "incognito sweep"
+  // flow. The popup wrote a queue of URLs to chrome.storage.local; if
+  // this tab's URL matches an entry, dequeue ourselves, scroll-and-
+  // archive, then ask the background SW to close us. Single-fire per
+  // tab (the queue entry is removed before archive starts).
+  async function _maybeAutoArchive() {
+    const user = _vscoUserFromPath();
+    if (!user) return;
+    const canonical = `https://vsco.co/${user}/gallery`;
+    let queue;
+    try {
+      const s = await chrome.storage.local.get(["vscoAutoArchiveQueue"]);
+      queue = s.vscoAutoArchiveQueue;
+    } catch (_) { return; }
+    if (!queue || typeof queue !== "object") return;
+    // Match either the canonical /gallery form or the bare /<user>
+    // form — popup writes the canonical form but we tolerate either.
+    const hit = queue[canonical] || queue[`https://vsco.co/${user}`];
+    if (!hit) return;
+    // Dequeue both shapes before starting so a refresh of the tab
+    // doesn't double-archive.
+    delete queue[canonical];
+    delete queue[`https://vsco.co/${user}`];
+    try { await chrome.storage.local.set({ vscoAutoArchiveQueue: queue }); } catch (_) {}
+    // Wait a beat for the SPA to render the gallery before we scroll.
+    await new Promise((r) => setTimeout(r, 800));
+    const btn = _ensureButton();
+    btn.dataset.running = "1";
+    btn.textContent = "Auto-archiving…";
+    try {
+      _updateProgress("Loading gallery…", 0, 0, 0);
+      await _scrollAllImagesIntoView();
+      const r = await archiveCurrentProfile();
+      if (r && r.ok) {
+        // Ask the SW to close us — content scripts can't close their
+        // own tab directly. Brief delay built into the SW handler so
+        // the user sees the final "Done" text.
+        try { chrome.runtime.sendMessage({ type: "close-my-tab" }); } catch (_) {}
+      }
+    } finally {
+      btn.dataset.running = "0";
+      btn.textContent = "📥 Archive to IG Tracker";
+    }
+  }
+  // Defer to the next tick so the rest of the script (including the
+  // button creator) is initialized before the handler runs.
+  setTimeout(_maybeAutoArchive, 600);
 
   // Public API
   window.__VscoArchive = {

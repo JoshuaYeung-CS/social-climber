@@ -562,6 +562,79 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
+  // Fully-automated incognito flow: collect every open vsco.co profile
+  // URL, write them into a queue in chrome.storage.local, open one
+  // fresh incognito window with all of them as tabs, and let each tab's
+  // content script auto-archive on load and request close-after-done.
+  el("archive-vsco-incognito").addEventListener("click", async () => {
+    const result = el("vsco-tabs-result");
+    result.style.display = "block";
+    result.textContent = "scanning tabs…";
+    try {
+      // Need the user to opt in to incognito for this extension first —
+      // otherwise we can open the window but the content script won't
+      // load there and the tabs will just sit. Check + tell them.
+      let allowed = false;
+      try {
+        allowed = await chrome.extension.isAllowedIncognitoAccess();
+      } catch (_) { /* old Chrome lacks this API; assume true */ allowed = true; }
+      if (!allowed) {
+        result.innerHTML = "";
+        const msg = document.createElement("div");
+        msg.style.cssText = "color: var(--bad);";
+        msg.textContent = "Enable 'Allow in Incognito' for this extension first.";
+        result.appendChild(msg);
+        const hint = document.createElement("div");
+        hint.style.marginTop = "4px";
+        hint.textContent = "Open chrome://extensions → IG Tracker → Details → toggle 'Allow in Incognito' on.";
+        result.appendChild(hint);
+        return;
+      }
+      const tabs = await chrome.tabs.query({});
+      const RESERVED = new Set([
+        "m", "spaces", "studio", "feed", "search", "discover", "explore",
+        "settings", "account", "login", "join", "user", "users",
+        "membership", "about", "privacy", "terms", "help", "legal",
+        "ai-lab", "blog", "stories", "support", "company",
+        "products", "solutions", "resources", "downloads", "campaigns",
+      ]);
+      const seen = new Set();
+      const urls = [];
+      for (const t of tabs) {
+        const url = t.url || "";
+        const m = url.match(/^https?:\/\/(?:www\.)?vsco\.co\/([A-Za-z0-9._-]{1,40})(?:\/(?:gallery)?)?(?:\?|#|$)/i);
+        if (!m) continue;
+        const handle = m[1];
+        if (RESERVED.has(handle.toLowerCase())) continue;
+        if (seen.has(handle.toLowerCase())) continue;
+        seen.add(handle.toLowerCase());
+        urls.push(`https://vsco.co/${handle}/gallery`);
+      }
+      if (!urls.length) {
+        result.textContent = "no vsco.co tabs open. Open some profile tabs first.";
+        return;
+      }
+      // Write the queue. The content script checks this on load — when
+      // its URL matches an entry, it auto-archives and asks the SW to
+      // close the tab. Stored as a Set-equivalent dict so duplicate
+      // navigations don't trigger a second archive in the same window.
+      await chrome.storage.local.set({
+        vscoAutoArchiveQueue: urls.reduce((o, u) => { o[u] = Date.now(); return o; }, {}),
+      });
+      const win = await chrome.windows.create({ incognito: true, url: urls });
+      result.innerHTML = "";
+      const head = document.createElement("div");
+      head.innerHTML = `<strong>Opened ${urls.length} profile${urls.length === 1 ? "" : "s"} in incognito.</strong>`;
+      result.appendChild(head);
+      const hint = document.createElement("div");
+      hint.style.marginTop = "6px";
+      hint.textContent = "Each tab will scroll, archive, then close itself. The window stays open if any tab fails so you can inspect it.";
+      result.appendChild(hint);
+    } catch (e) {
+      result.textContent = `failed: ${e?.message || e}`;
+    }
+  });
+
   el("copy-debug-log").addEventListener("click", async () => {
     // Pull the [IG Tracker] log out of the active tab's content
     // script. We don't know up front whether we're on instagram.com

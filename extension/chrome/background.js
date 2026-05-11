@@ -1110,6 +1110,56 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: true, tabId: sender?.tab?.id ?? null });
     return false;
   }
+  // Fetch a VSCO CDN URL on behalf of the content script. Content
+  // scripts run in the page's origin and hit CORS when fetching
+  // im.vsco.co (no Access-Control-Allow-Origin returned), but the
+  // extension SW has host_permissions for *.vsco.co/* — Chrome treats
+  // that as same-origin-equivalent and skips the CORS preflight check.
+  // We return base64-encoded bytes so the content script can repost to
+  // the local tracker via its existing /api/vsco-media-bytes endpoint.
+  if (msg.type === "fetch-vsco-bytes") {
+    (async () => {
+      try {
+        // No credentials — we want a logged-out fetch so VSCO can't
+        // tie this to any account. CDN images are public anyway.
+        const r = await fetch(msg.url, { credentials: "omit" });
+        if (!r.ok) {
+          sendResponse({ ok: false, error: `HTTP ${r.status}` });
+          return;
+        }
+        const blob = await r.blob();
+        const MAX = 30 * 1024 * 1024;
+        if (blob.size > MAX) {
+          sendResponse({ ok: false, error: `too large (${blob.size} bytes)` });
+          return;
+        }
+        const buf = await blob.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let binary = "";
+        const CHUNK = 0x8000;
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+        }
+        sendResponse({ ok: true, body: btoa(binary), size: blob.size });
+      } catch (e) {
+        sendResponse({ ok: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+  // Close the tab that sent this message. Used by the auto-archive
+  // queue flow so each tab can finish its work and then ask to be
+  // closed (content scripts can't close their own tab directly).
+  if (msg.type === "close-my-tab") {
+    const tabId = sender?.tab?.id;
+    if (tabId != null) {
+      // Tiny delay so the user can see "Done" before the tab vanishes
+      // — same UX pattern as the wizard's post-finish close.
+      setTimeout(() => chrome.tabs.remove(tabId).catch(() => {}), 1500);
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
   // Trusted-click dispatch via chrome.debugger. Content script sends
   // viewport coords (rounded ints); SW attaches the debugger if not
   // already attached and dispatches mousePressed/Released. The
