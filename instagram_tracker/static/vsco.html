@@ -185,18 +185,31 @@
     }
     .vsco-user-card { position: relative; }  /* so ::after positions correctly */
 
-    /* Select / Cancel toggle in the page header. */
+    /* Select / Cancel toggle in the page header — sits below the
+       stats line (so it's "around VSCO length-wise") and above the
+       content grid. Pill-shaped, slightly larger than nav chips,
+       hovers a hairline accent ring. */
     .header-select-btn {
-      padding: 6px 12px;
-      border-radius: 6px;
+      align-self: center;
+      margin-top: 6px;
+      padding: 9px 22px;
+      border-radius: 999px;
       border: 1px solid var(--border);
       background: var(--bg-elev-2);
       color: var(--text);
       cursor: pointer;
-      font-size: 13px;
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+      transition: border-color 120ms ease, color 120ms ease, background 120ms ease, transform 80ms ease;
     }
-    .header-select-btn:hover,
-    .header-select-btn.active { border-color: var(--accent); color: var(--accent); }
+    .header-select-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .header-select-btn:active { transform: scale(0.97); }
+    .header-select-btn.active {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
 
     /* Floating action bar — appears at the bottom-center when one or
        more items are selected. Tap-targets sized for thumb reach. */
@@ -259,10 +272,10 @@
       <a href="/" class="back-link">← Back to tracker</a>
       <span class="nav-spacer"></span>
       <button type="button" class="all-profiles-btn" id="all-profiles-btn" hidden>← All profiles</button>
-      <button type="button" class="header-select-btn" id="select-toggle-btn">Select</button>
     </div>
     <h1>📷 VSCO archive</h1>
     <div class="stats" id="stats">loading…</div>
+    <button type="button" class="header-select-btn" id="select-toggle-btn">☐ Select</button>
   </header>
 
   <main id="root" class="vsco-grid"></main>
@@ -311,7 +324,7 @@
       selectMode = null;
       selectedKeys.clear();
       selectToggleBtn.classList.remove("active");
-      selectToggleBtn.textContent = "Select";
+      selectToggleBtn.textContent = "☐ Select";
       const grid = document.querySelector(".vsco-grid, .vsco-expanded-grid");
       if (grid) grid.classList.remove("select-mode");
       for (const sel of document.querySelectorAll(".selected")) sel.classList.remove("selected");
@@ -321,7 +334,7 @@
       selectMode = (root.className.includes("vsco-expanded")) ? "gallery" : "grid";
       selectedKeys.clear();
       selectToggleBtn.classList.add("active");
-      selectToggleBtn.textContent = "Cancel";
+      selectToggleBtn.textContent = "✕ Cancel";
       const grid = document.querySelector(".vsco-grid, .vsco-expanded-grid");
       if (grid) grid.classList.add("select-mode");
       _refreshSelectBar();
