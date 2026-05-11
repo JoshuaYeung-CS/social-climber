@@ -432,43 +432,49 @@ const RUNNER_BUDGET_PREFIX = "runner-budget-";
 // downloads slides missed in the first.
 const ARCHIVE_RUNNER_TAB_BUDGET_MIN = 10;
 
-// Helper used by both the grace-alarm fire path and the
+// Helper used by both the grace-timer fire path and the
 // tabs.onRemoved listener: when a sweep tab disappears, open the next
-// URL from the queue in the same window.
+// URL from the queue in the same window. Verbose logging because
+// every chain-stall the user has reported has been a different cause
+// (popup-await-killed, windowId-mismatch, TTL-expired) — the SW
+// console is the only way to tell them apart.
 async function _vscoSweepAdvance(windowId) {
-  if (windowId == null) return;
+  if (windowId == null) {
+    console.log("[IG Tracker] VSCO advance: skip, windowId null");
+    return;
+  }
   try {
     const s = await chrome.storage.local.get(["vscoAutoArchiveQueue", "vscoSweepWindowId"]);
-    if (s.vscoSweepWindowId !== windowId) return;  // not our sweep window
+    if (s.vscoSweepWindowId !== windowId) {
+      console.log(`[IG Tracker] VSCO advance: skip, windowId mismatch (got ${windowId}, expected ${s.vscoSweepWindowId})`);
+      return;
+    }
     const queue = s.vscoAutoArchiveQueue;
-    if (!queue || typeof queue !== "object") return;
-    const TTL = 10 * 60 * 1000;
+    if (!queue || typeof queue !== "object") {
+      console.log("[IG Tracker] VSCO advance: skip, queue empty/null");
+      return;
+    }
+    const TTL = 30 * 60 * 1000;  // 30 min — was 10, too tight for slow sweeps
     const now = Date.now();
     let nextUrl = null;
+    let staleCount = 0;
     for (const [u, ts] of Object.entries(queue)) {
       if (ts && (now - ts) <= TTL) { nextUrl = u; break; }
+      staleCount += 1;
     }
     if (nextUrl) {
+      console.log(`[IG Tracker] VSCO advance: opening ${nextUrl} in window ${windowId} (${Object.keys(queue).length} remaining, ${staleCount} stale)`);
       await chrome.tabs.create({ windowId, url: nextUrl, active: true });
     } else {
-      // Queue empty — clear the marker so we don't try to advance
-      // again if some future event fires onRemoved for this window.
+      console.log(`[IG Tracker] VSCO advance: queue exhausted (${staleCount} stale entries)`);
       await chrome.storage.local.set({ vscoSweepWindowId: null });
     }
-  } catch (_) { /* best-effort */ }
+  } catch (e) {
+    console.warn("[IG Tracker] VSCO advance failed:", e?.message || e);
+  }
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  // VSCO sweep tab grace timer fired — remove the tab. The
-  // tabs.onRemoved listener will then advance the chain. Tab might
-  // already be gone (user closed manually) which is fine.
-  if (alarm.name.startsWith("vsco-tab-grace-")) {
-    const tabId = parseInt(alarm.name.slice("vsco-tab-grace-".length), 10);
-    if (!isNaN(tabId)) {
-      try { await chrome.tabs.remove(tabId); } catch (_) {}
-    }
-    return;
-  }
   if (alarm.name === SCHEDULE_ALARM) {
     await _onScheduledExportFire();
     // Re-arm with a fresh random interval. We dropped periodInMinutes
@@ -1116,11 +1122,13 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
   if (_debuggerTabs.has(tabId)) {
     _debuggerTabs.delete(tabId);
   }
-  // Cancel any pending grace alarm for this tab — harmless if absent.
-  try { await chrome.alarms.clear(`vsco-tab-grace-${tabId}`); } catch (_) {}
   // Skip if the whole window is closing (user aborted the sweep)
-  if (removeInfo && removeInfo.isWindowClosing) return;
+  if (removeInfo && removeInfo.isWindowClosing) {
+    console.log(`[IG Tracker] VSCO: tab ${tabId} removed, window closing — skip advance`);
+    return;
+  }
   if (removeInfo && removeInfo.windowId != null) {
+    console.log(`[IG Tracker] VSCO: tab ${tabId} removed in window ${removeInfo.windowId}, trying advance`);
     await _vscoSweepAdvance(removeInfo.windowId);
   }
 });
@@ -1277,20 +1285,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
         const queue = urls.reduce((o, u) => { o[u] = Date.now(); return o; }, {});
-        // Write the run-state first; the window's first content script
-        // races against this. By the time the script hits document_idle
-        // and reads chrome.storage, this write is already committed.
         await chrome.storage.local.set({
           vscoAutoArchiveQueue: queue,
-          vscoSweepWindowId: null,  // cleared until we have a real id
+          vscoSweepWindowId: null,
         });
         const win = await chrome.windows.create({
           incognito: !!msg.incognito,
           url: urls[0],
         });
         await chrome.storage.local.set({ vscoSweepWindowId: win.id });
+        console.log(`[IG Tracker] VSCO sweep started: window ${win.id}, ${urls.length} URLs queued`);
         sendResponse({ ok: true, windowId: win.id });
       } catch (e) {
+        console.warn("[IG Tracker] VSCO sweep start failed:", e?.message || e);
         sendResponse({ ok: false, error: e?.message || String(e) });
       }
     })();
@@ -1320,12 +1327,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "close-my-tab") {
     const tabId = sender?.tab?.id;
     if (tabId != null) {
-      // 60-second grace per user preference — time to copy logs,
-      // scroll the page, etc. Use chrome.alarms instead of setTimeout
-      // because the SW can idle-evict after ~30s and a setTimeout in
-      // that case wouldn't fire. Cmd+W on the tab still advances the
-      // sweep immediately via the tabs.onRemoved listener.
-      chrome.alarms.create(`vsco-tab-grace-${tabId}`, { delayInMinutes: 1 });
+      // 15-second grace — enough time to read the overlay summary
+      // and trigger a copy, not so long that a 5-profile sweep
+      // sits there for minutes between profiles. Cmd+W still works
+      // as a manual skip via the tabs.onRemoved listener path.
+      // Using setTimeout (not chrome.alarms) because 15s is well
+      // under the SW's idle-eviction threshold.
+      console.log(`[IG Tracker] VSCO: scheduling close of tab ${tabId} in 15s`);
+      setTimeout(() => {
+        chrome.tabs.remove(tabId).catch((e) => {
+          console.log(`[IG Tracker] VSCO: tab ${tabId} close failed (likely already gone):`, e?.message);
+        });
+      }, 15000);
     }
     sendResponse({ ok: true });
     return false;

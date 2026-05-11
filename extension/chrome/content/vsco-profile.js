@@ -523,6 +523,32 @@
     }
   }
 
+  // Visible countdown after the archive finishes — keeps the user
+  // informed about the SW's pending tab-close timer so a 5-profile
+  // sweep doesn't feel like it's stalled between profiles. Updates
+  // every second; the actual tab close happens server-side.
+  function _startCountdownOverlay(result) {
+    let secsLeft = 15;
+    const summary = result
+      ? `Done · ${result.saved} saved · ${result.skipped} dup · ${result.failed} failed`
+      : "Done";
+    if (!_progressEl) {
+      _progressEl = document.createElement("div");
+      _progressEl.id = "vsco-archive-progress";
+      _progressEl.className = "vsco-archive-progress vsco-archive-done";
+      document.body.appendChild(_progressEl);
+    }
+    _progressEl.classList.add("vsco-archive-done");
+    const tick = () => {
+      if (!_progressEl) return;
+      _progressEl.textContent = `${summary} · closing in ${secsLeft}s (cmd+w to skip)`;
+      secsLeft -= 1;
+      if (secsLeft < 0) return;
+      setTimeout(tick, 1000);
+    };
+    tick();
+  }
+
   function _onLocationChange() {
     const user = _vscoUserFromPath();
     if (user) _ensureButton();
@@ -610,6 +636,10 @@
       _updateProgress("Loading gallery…", 0, 0, 0);
       await _scrollAllImagesIntoView();
       const r = await archiveCurrentProfile();
+      // Visible countdown on the in-page overlay so the user can tell
+      // the system is alive between profiles. Updates every second
+      // until the SW's grace timer fires.
+      _startCountdownOverlay(r);
       // Remove the just-finished handle from the popup-facing queue
       // (vscoQueue is the user's persistent staging list; the auto
       // archive queue used by the sweep chain is dequeued separately
