@@ -179,7 +179,13 @@
       console.log("[VSCO Archive] not on a profile page");
       return { ok: false, error: "not a profile page" };
     }
-    const items = _collectMediaUrls();
+    // Prefer the mid-scroll accumulator if it's populated — it dedups
+    // virtualization-evicted tiles that a single end-of-scroll walk
+    // would miss. Falls back to a fresh DOM walk when called directly
+    // from the on-page button (no scroll-and-harvest preceded it).
+    const items = (_collectedMedia && _collectedMedia.size > 0)
+      ? Array.from(_collectedMedia.values())
+      : _collectMediaUrls();
     if (!items.length) {
       console.log("[VSCO Archive] no media found on page");
       await _appendArchiveLog({
@@ -247,7 +253,10 @@
     await _appendArchiveLog({
       ts: startedAt, username, total: items.length, saved, failed, skipped,
       durationMs: Date.now() - startedAt,
-      errors: errors.slice(0, 20),  // cap per-run error list
+      // Diagnostics: tells us at-a-glance whether the scroll loop is
+      // pulling enough tiles and whether Load More is firing.
+      collected: _collectedMedia ? _collectedMedia.size : null,
+      errors: errors.slice(0, 20),
     });
     return { ok: true, saved, failed, skipped, total: items.length };
   }
@@ -273,54 +282,80 @@
     return null;
   }
 
-  // Some VSCO layouts mount the gallery inside a scroll container that's
-  // not the document body. window.scrollTo(document.body.scrollHeight)
-  // doesn't reach the actual bottom in that case, so the Load More
-  // button never enters the viewport. Walk every overflow-y:auto
-  // descendant and scroll each one to its own bottom too — covers both
-  // the document-scroll and container-scroll layouts.
+  // Scroll every plausible container to its bottom and dispatch a
+  // real scroll/wheel event after — some sites gate their lazy-load
+  // on user-style events, not programmatic .scrollTop assignment.
   function _scrollEverything() {
     window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
     try {
-      const all = document.querySelectorAll("*");
-      for (const el of all) {
+      for (const el of document.querySelectorAll("*")) {
         if (el.scrollHeight > el.clientHeight + 4) {
-          // Skip absurd inputs / tiny widgets — only count tall ones
-          // big enough to plausibly be the gallery container.
           const r = el.getBoundingClientRect();
           if (r.height < 200) continue;
           el.scrollTop = el.scrollHeight;
         }
       }
-    } catch (_) { /* DOM transient, retry next pass */ }
+      // Synthetic scroll + wheel at the document level so
+      // IntersectionObservers / scroll-event listeners see motion.
+      window.dispatchEvent(new Event("scroll", { bubbles: true }));
+      try {
+        window.dispatchEvent(new WheelEvent("wheel", {
+          bubbles: true, cancelable: true, deltaY: 800,
+        }));
+      } catch (_) { /* WheelEvent not constructible in some hosts, ignore */ }
+    } catch (_) { /* DOM transient, retry */ }
   }
 
-  // Exhaust the gallery: scroll every plausible container to its
-  // bottom, click "Load more" if present (after scrolling it into
-  // view), repeat until neither produces new content for two passes
-  // in a row. Hard ceiling of 80 passes (~2 min).
+  // Module-level accumulator used by archiveCurrentProfile. VSCO
+  // virtualizes its gallery — tiles scrolled past get unmounted from
+  // DOM, so a single end-of-scroll DOM walk only sees the bottom 15.
+  // We harvest mid-scroll into this Map (keyed by media_id) so every
+  // tile that ever materialized is captured.
+  let _collectedMedia = null;
+  function _harvestVisibleMedia() {
+    if (!_collectedMedia) return 0;
+    let added = 0;
+    for (const it of _collectMediaUrls()) {
+      if (!_collectedMedia.has(it.media_id)) {
+        _collectedMedia.set(it.media_id, it);
+        added += 1;
+      }
+    }
+    return added;
+  }
+
+  // Exhaust the gallery: scroll every plausible container, harvest
+  // newly-rendered tiles into _collectedMedia each pass, click "Load
+  // more" if present, repeat until two consecutive passes produce no
+  // new tiles AND no scroll growth. Hard ceiling of 80 passes (~2min).
   async function _scrollAllImagesIntoView() {
+    _collectedMedia = new Map();
+    _harvestVisibleMedia();  // first pass: whatever's already on screen
     const MAX_PASSES = 80;
     let lastHeight = 0;
     let stable = 0;
+    let loadMoreClicks = 0;
     for (let i = 0; i < MAX_PASSES; i++) {
       _scrollEverything();
       await new Promise((r) => setTimeout(r, 700));
+      const harvested = _harvestVisibleMedia();
       const btn = _findLoadMoreButton();
       if (btn) {
-        _updateProgress(`Loading more (pass ${i + 1})…`, 0, 0, 0);
+        _updateProgress(`Loading more (pass ${i + 1}, ${_collectedMedia.size} so far)…`, 0, 0, 0);
         try {
           btn.scrollIntoView({ behavior: "instant", block: "center" });
           await new Promise((r) => setTimeout(r, 200));
           btn.click();
+          loadMoreClicks += 1;
         } catch (_) { /* button gone between probe + click, retry */ }
         await new Promise((r) => setTimeout(r, 1500));
+        _harvestVisibleMedia();
         stable = 0;
         lastHeight = document.body.scrollHeight;
         continue;
       }
       const h = document.body.scrollHeight;
-      if (h === lastHeight) {
+      if (h === lastHeight && harvested === 0) {
         stable += 1;
         if (stable >= 2) break;
       } else {
@@ -330,6 +365,8 @@
     }
     window.scrollTo({ top: 0, behavior: "instant" });
     await new Promise((r) => setTimeout(r, 400));
+    console.log(`[VSCO Archive] scroll done: ${_collectedMedia.size} tiles collected, ${loadMoreClicks} Load More click(s)`);
+    return { collected: _collectedMedia.size, loadMoreClicks };
   }
 
   // ---------- minimal overlay ----------
