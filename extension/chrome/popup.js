@@ -330,6 +330,36 @@ function initVscoQueueControls() {
     if (e.key === "Enter") { e.preventDefault(); addBtn.click(); }
   });
 
+  // Bulk-add every open vsco.co profile tab into the queue without
+  // running. The user then clicks 'Run queue' below to actually
+  // start archiving — same incognito toggle, same sequential sweep.
+  const queueTabsBtn = el("archive-vsco-queue-tabs");
+  if (queueTabsBtn) {
+    queueTabsBtn.addEventListener("click", async () => {
+      try {
+        const tabs = await chrome.tabs.query({});
+        const handles = [];
+        for (const t of tabs) {
+          const h = _vscoParseHandle(t?.url || "");
+          if (h) handles.push(h);
+        }
+        if (!handles.length) {
+          queueTabsBtn.textContent = "No VSCO tabs open";
+          setTimeout(() => { queueTabsBtn.textContent = "📥 Queue all open VSCO tabs"; }, 1500);
+          return;
+        }
+        const added = await addHandles(handles);
+        const skipped = handles.length - added;
+        queueTabsBtn.textContent = added
+          ? `Added ${added}${skipped ? ` (${skipped} dup)` : ""} ✓`
+          : `Already queued ✓`;
+        setTimeout(() => { queueTabsBtn.textContent = "📥 Queue all open VSCO tabs"; }, 1800);
+      } catch (e) {
+        queueTabsBtn.textContent = `failed: ${e?.message || e}`;
+      }
+    });
+  }
+
   addCurrentBtn.addEventListener("click", async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const handle = _vscoParseHandle(tab?.url || "");
