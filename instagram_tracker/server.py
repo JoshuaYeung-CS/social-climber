@@ -1795,19 +1795,28 @@ def _activity_log_compute():
         }
         events = [e for e in events if e["username"] not in suppressed_users]
 
-        # Self-unfollow filter for inbound events. If the user has ever
-        # appeared in recently_unfollowed for this username, the user
-        # was at some point the initiator of the breakup. Showing
-        # 'unfollowed_you' or 'removed_you' for those accounts is
-        # misleading — even when IG's recently_unfollowed window has
-        # rolled over and the lag-based exclusion in the emit logic
-        # missed them. ever_self captures the cumulative outbound log
-        # so we can apply this filter retroactively.
+        # Self-unfollow filter for `removed_you` only. `removed_you`
+        # means "left your following list without you tapping Unfollow"
+        # — IG's `recently_unfollowed` is the ground truth for "you
+        # unfollowed." If the rolling window has aged out, we'd label
+        # a known self-unfollow as `removed_you` (misleading: "they
+        # blocked you / deactivated"). ever_self captures the
+        # cumulative outbound log to fix that retroactively.
+        #
+        # We do NOT apply this filter to `unfollowed_you`. That kind
+        # represents "they left your followers list" — independent of
+        # whether you also unfollowed them later. The user reported
+        # 25+ legitimate inbound unfollows missing from the activity
+        # log because they had ALSO unfollowed those accounts (e.g.
+        # helloangelmae left followers at snap #4275, user unfollowed
+        # them ~12h later at snap #4285 — both events are real but
+        # the filter stripped the inbound one). Keeping the
+        # `unfollowed_you` events surfaces the inbound action even
+        # when the user later reciprocated.
         ever_self = q.ever_self_unfollowed(conn)
-        INBOUND_KINDS = {"unfollowed_you", "removed_you"}
         events = [
             e for e in events
-            if not (e["kind"] in INBOUND_KINDS and e["username"] in ever_self)
+            if not (e["kind"] == "removed_you" and e["username"] in ever_self)
         ]
 
         # NOTE: previously this code applied a "came back" filter —
