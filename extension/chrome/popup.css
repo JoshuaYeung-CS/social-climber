@@ -339,7 +339,10 @@ html, body {
    gray block hogging the right edge. */
 .vsco-log-scroll {
   margin-top: 6px;
-  max-height: 220px;
+  /* Just enough for 2 rows by default — Copy JSON button sits right
+     below so it's always one click away. Rest of the runs scroll
+     inside this window. */
+  max-height: 44px;
   overflow-y: auto;
   font-size: 11px;
   line-height: 1.4;
