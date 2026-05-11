@@ -589,12 +589,22 @@
   //   - 10-minute freshness window. Entries older than 10 min are
   //     ignored and pruned. If the user closes the window mid-sweep,
   //     stale entries can't lie in wait and ambush a future tab.
+  // Forward content-script milestones to the SW so they land in the
+  // same diagnostic log the popup viewer shows. Lets chain stalls
+  // surface 'I started but never reached close-my-tab' without
+  // needing per-tab devtools.
+  function _csLog(line) {
+    try { chrome.runtime.sendMessage({ type: "cs-log", line }); } catch (_) {}
+  }
+
   // 30 min TTL matches the SW's _vscoSweepAdvance TTL. With a 60s
   // grace per profile that's enough for ~25-profile sweeps.
   const QUEUE_TTL_MS = 30 * 60 * 1000;
   async function _maybeAutoArchive() {
+    _csLog(`maybeAutoArchive: starting at ${location.href}`);
     const user = _vscoUserFromPath();
     if (!user) {
+      _csLog(`maybeAutoArchive: BAIL — not on a profile page (pathname=${location.pathname})`);
       console.log("[VSCO Archive] _maybeAutoArchive: not on a profile page");
       return;
     }
@@ -609,19 +619,23 @@
       return;
     }
     if (!queue || typeof queue !== "object") {
+      _csLog(`maybeAutoArchive: BAIL — no queue (this tab will not auto-archive)`);
       console.log(`[VSCO Archive] _maybeAutoArchive: no queue (this tab will not auto-archive)`);
       return;
     }
     const ts = queue[canonical] || queue[alt];
     const now = Date.now();
     if (!ts) {
+      _csLog(`maybeAutoArchive: BAIL — @${user} not in queue (${Object.keys(queue).length} other entries)`);
       console.log(`[VSCO Archive] _maybeAutoArchive: @${user} not in queue (${Object.keys(queue).length} entries) — not auto-archiving`);
       return;
     }
     if ((now - ts) > QUEUE_TTL_MS) {
+      _csLog(`maybeAutoArchive: BAIL — @${user} queue entry stale (${Math.round((now-ts)/60000)}min old)`);
       console.log(`[VSCO Archive] _maybeAutoArchive: @${user} queue entry stale (${Math.round((now-ts)/60000)}min old, TTL ${QUEUE_TTL_MS/60000}min)`);
       return;
     }
+    _csLog(`maybeAutoArchive: @${user} matched, starting`);
     console.log(`[VSCO Archive] _maybeAutoArchive: @${user} matched, starting`);
     delete queue[canonical];
     delete queue[alt];
@@ -647,8 +661,11 @@
         });
       } catch (_) { /* attach failed, continue anyway */ }
       _updateProgress("Loading gallery…", 0, 0, 0);
+      _csLog(`@${user}: scrolling`);
       await _scrollAllImagesIntoView();
+      _csLog(`@${user}: archiving`);
       archiveResult = await archiveCurrentProfile();
+      _csLog(`@${user}: archive done · saved=${archiveResult?.saved} failed=${archiveResult?.failed} skipped=${archiveResult?.skipped}`);
       _startCountdownOverlay(archiveResult);
       if (archiveResult && archiveResult.ok && (archiveResult.saved > 0 || archiveResult.total === 0)) {
         try {
@@ -663,13 +680,10 @@
         } catch (_) { /* best-effort */ }
       }
     } catch (e) {
+      _csLog(`_maybeAutoArchive THREW: ${e?.message || e}`);
       console.warn("[VSCO Archive] _maybeAutoArchive threw:", e?.message || e);
     } finally {
-      // Always advance the chain — even if archive threw, even if
-      // archive returned ok=false, even if the page is mid-loading
-      // when we hit this. The SW's close-my-tab handler schedules a
-      // 15s grace then closes the tab, which fires tabs.onRemoved →
-      // _vscoSweepAdvance → opens the next URL.
+      _csLog(`@${user}: sending close-my-tab`);
       try { chrome.runtime.sendMessage({ type: "close-my-tab" }); } catch (_) {}
       btn.dataset.running = "0";
       btn.textContent = "📥 Archive to IG Tracker";

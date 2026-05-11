@@ -499,7 +499,7 @@ async function _vscoSweepAdvance(windowId) {
         setTimeout(() => {
           chrome.tabs.get(newTab.id).then((t) => {
             if (t) {
-              _swLog(`VSCO advance: tab ${newTab.id} watchdog (3min) — force-closing (no close-my-tab received)`);
+              _swLog(`VSCO advance: tab ${newTab.id} watchdog (3min) — force-closing (no close-my-tab received) url=${t.url} title="${(t.title || "").slice(0, 80)}"`);
               chrome.tabs.remove(newTab.id).catch(() => {});
             }
           }).catch(() => { /* already gone, fine */ });
@@ -1360,7 +1360,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           setTimeout(() => {
             chrome.tabs.get(firstTabId).then((t) => {
               if (t) {
-                _swLog(`VSCO sweep: first tab ${firstTabId} watchdog (3min) — force-closing`);
+                _swLog(`VSCO sweep: first tab ${firstTabId} watchdog (3min) — force-closing url=${t.url} title="${(t.title || "").slice(0, 80)}"`);
                 chrome.tabs.remove(firstTabId).catch(() => {});
               }
             }).catch(() => {});
@@ -1373,6 +1373,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
     })();
     return true;
+  }
+  // Content-script log forwarder. Lets the VSCO content script
+  // surface its lifecycle milestones into the same SW log buffer
+  // ('started', 'queue match', 'archive done', etc.) so a chain
+  // stall shows up alongside the SW-side events instead of needing
+  // a separate devtools session per tab.
+  if (msg.type === "cs-log") {
+    const tabId = sender?.tab?.id;
+    _swLog(`[tab ${tabId}] ${msg.line || "(empty)"}`);
+    sendResponse({ ok: true });
+    return false;
   }
   // Attach chrome.debugger to the calling tab so Chrome stops
   // throttling it as a background tab. A debugger-attached tab runs
