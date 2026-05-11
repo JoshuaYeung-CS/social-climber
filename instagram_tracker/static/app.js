@@ -3845,6 +3845,17 @@ function renderActivityLog() {
   const limit = Math.min(filtered.length, _activityVisibleCap);
   const slice = filtered.slice(0, limit);
 
+  // Pre-tally per-day event counts so the day headers can show
+  // "Today · 4" / "Sat, May 9 · 9" without recounting per row.
+  // Counts the FILTERED set (which respects the kind chip + username
+  // filter) so the totals match what the user is actually seeing.
+  const dayCounts = new Map();
+  for (const e of filtered) {
+    const d = (e.timestamp || "").slice(0, 10);
+    if (!d) continue;
+    dayCounts.set(d, (dayCounts.get(d) || 0) + 1);
+  }
+
   let lastDay = "";
   const rowHtml = slice.map((e) => {
     const meta = ACTIVITY_KIND_META[e.kind] || { label: e.kind, cls: "muted" };
@@ -3855,7 +3866,9 @@ function renderActivityLog() {
     let header = "";
     if (day !== lastDay) {
       lastDay = day;
-      header = `<div class="al-day">${escapeHtml(dayLabel(t))}</div>`;
+      const count = dayCounts.get(day) || 0;
+      const countLabel = count === 1 ? "1 event" : `${count.toLocaleString()} events`;
+      header = `<div class="al-day"><span>${escapeHtml(dayLabel(t))}</span><span class="al-day-count">${escapeHtml(countLabel)}</span></div>`;
     }
     return header + `
       <div class="al-row clickable" data-username="${escapeAttr(e.username)}" title="Click for full account history">
