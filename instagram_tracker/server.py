@@ -22,6 +22,7 @@ from . import ingest as ingest_mod
 from . import queries as q
 from . import routes_followup
 from . import routes_profiles
+from . import routes_vsco
 from . import tags as tags_mod
 from . import watcher as watcher_mod
 from .config import DB_PATH, STATIC_DIR
@@ -56,6 +57,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 # rather than recreate them. See routes_*.py module docstrings.
 app.include_router(routes_followup.router)
 app.include_router(routes_profiles.router)
+app.include_router(routes_vsco.router)
 
 
 # In-process cache for the heavy read endpoints. Two version counters

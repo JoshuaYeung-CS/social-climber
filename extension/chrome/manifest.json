@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "IG Tracker companion",
-  "version": "1.0.159",
+  "version": "1.0.160",
   "description": "Auto-fills the Instagram data export wizard and overlays your local IG Tracker history on profile pages.",
   "permissions": [
     "storage",
@@ -16,6 +16,8 @@
     "https://accounts.google.com/*",
     "https://*.cdninstagram.com/*",
     "https://*.fbcdn.net/*",
+    "https://vsco.co/*",
+    "https://*.vsco.co/*",
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*",
     "http://localhost:8765/*",
@@ -64,6 +66,12 @@
     {
       "matches": ["https://accounts.google.com/*"],
       "js": ["content/google-oauth.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://vsco.co/*"],
+      "js": ["content/vsco-profile.js"],
+      "css": ["content/vsco-profile.css"],
       "run_at": "document_idle"
     }
   ]
