@@ -9,6 +9,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from .config import (
+    INCOMING_REQUEST_PENDING_DAYS,
     PRIVATE_NO_FOLLOWBACK_ALERT_DAYS,
     RECENT_UNFOLLOW_ALERT_DAYS,
     WAITBACK_ALERT_DAYS,
@@ -618,6 +619,89 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
             "privacy": rw_priv.get(u, "unknown"),
             "ts": int(last_seen.timestamp()),
         })
+
+    # Stateful: incoming follow-requests that have been pending too long.
+    # The diff side (`new_incoming_request`) fires once when a request
+    # arrives; this stateful counterpart keeps it surfaced if you
+    # haven't accepted/rejected after N days, so a request that came
+    # in while you weren't paying attention doesn't fall off the
+    # alerts panel and stay forgotten.
+    #
+    # Per-account first-seen time comes from
+    # MIN(incoming_follow_requests.export_timestamp) when present
+    # (IG's stable per-row timestamp) — falls back to
+    # MIN(snapshots.taken_at) for rows where IG didn't record a
+    # per-event timestamp, same dual-lookup pattern as the want_remove
+    # block. Suppressed accounts (disabled / unavailable /
+    # random_request) skipped — already classified.
+    if curr.incoming_requests:
+        pending_cutoff = datetime.now(timezone.utc) - timedelta(days=INCOMING_REQUEST_PENDING_DAYS)
+        # Pull the earliest per-event timestamp per username, plus the
+        # earliest snapshot a username showed up in. Two queries beats
+        # an N+1 over the list.
+        in_list = sorted(curr.incoming_requests - suppressed)
+        if in_list:
+            placeholders = ",".join("?" * len(in_list))
+            first_export_ts: dict[str, int] = {}
+            for r in conn.execute(
+                f"SELECT username, MIN(export_timestamp) AS ts "
+                f"FROM incoming_follow_requests "
+                f"WHERE username IN ({placeholders}) AND export_timestamp IS NOT NULL "
+                f"GROUP BY username",
+                in_list,
+            ).fetchall():
+                if r["ts"] is not None:
+                    first_export_ts[r["username"]] = int(r["ts"])
+            # Fallback: earliest snapshot.taken_at the user appeared
+            # in incoming. Used when IG didn't include
+            # export_timestamp for that row (older IG export schema).
+            first_snapshot_iso: dict[str, str] = {}
+            for r in conn.execute(
+                f"SELECT i.username, MIN(s.taken_at) AS first_seen "
+                f"FROM incoming_follow_requests i "
+                f"JOIN snapshots s ON s.id = i.snapshot_id "
+                f"WHERE s.taken_at IS NOT NULL AND i.username IN ({placeholders}) "
+                f"GROUP BY i.username",
+                in_list,
+            ).fetchall():
+                if r["first_seen"]:
+                    first_snapshot_iso[r["username"]] = r["first_seen"]
+            ir_privacy = privacy_status_bulk(conn, in_list)
+            ph2 = ",".join("?" * len(in_list))
+            ir_now_public: set[str] = set()
+            for r in conn.execute(
+                f"SELECT username FROM profile_tags WHERE now_public = 1 AND username IN ({ph2})",
+                in_list,
+            ).fetchall():
+                ir_now_public.add(r["username"])
+            now_utc_ir = datetime.now(timezone.utc)
+            for u in in_list:
+                requested_at: datetime | None = None
+                if u in first_export_ts:
+                    requested_at = datetime.fromtimestamp(first_export_ts[u], tz=timezone.utc)
+                elif u in first_snapshot_iso:
+                    parsed = _parse_iso(first_snapshot_iso[u])
+                    if parsed is not None:
+                        requested_at = parsed
+                if requested_at is None:
+                    continue
+                if requested_at > pending_cutoff:
+                    continue  # still inside the grace window
+                days = (now_utc_ir - requested_at).days
+                status = ir_privacy.get(u, "unknown")
+                priv_label = _privacy_label(status, u in ir_now_public)
+                is_fav = u in favorites
+                prefix = "★📥" if is_fav else "📥"
+                fav_label = "★ Favorite " if is_fav else ""
+                stateful.append({
+                    "kind": "favorite_incoming_request_pending" if is_fav else "incoming_request_pending",
+                    "username": u,
+                    "severity": "high" if is_fav else "normal",
+                    "message": f"{prefix} {fav_label}{u} ({priv_label}) has been requesting to follow you for {days} day{'s' if days != 1 else ''} — still waiting on your reply.",
+                    "days": days,
+                    "privacy": status,
+                    "ts": int(requested_at.timestamp()),
+                })
 
     # Stateful: tagged-as-disabled or tagged-as-unavailable accounts that show
     # real proof-of-life. The only reliable signal is them appearing in YOUR

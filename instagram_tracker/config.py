@@ -37,3 +37,12 @@ RECENT_UNFOLLOW_ALERT_DAYS = 7
 # already covered by those tagged paths so a single account never
 # triggers two alerts.
 PRIVATE_NO_FOLLOWBACK_ALERT_DAYS = 3
+# Surface incoming follow-requests that have been pending for at least
+# this many days. The diff alert (`new_incoming_request`) fires once
+# per arrival, but if it goes unanswered it falls off the alerts panel
+# the next import. This stateful version keeps unresolved requests
+# visible so they don't get forgotten about. Threshold is generous —
+# requests <3 days old are "still fresh, you'll see them when you
+# next open the app"; alerts only kick in when something has been
+# sitting and you might have lost track of it.
+INCOMING_REQUEST_PENDING_DAYS = 3
