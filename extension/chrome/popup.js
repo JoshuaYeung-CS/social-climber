@@ -729,6 +729,59 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
+  // Mirror of the SW's _swLog ring buffer. Shows every chain edge:
+  // sweep start, close-my-tab, tab-removed, advance attempt + reason.
+  // Best place to look when the chain stalls — tells you which check
+  // fired without needing chrome://extensions devtools.
+  el("view-sw-log").addEventListener("click", async () => {
+    const result = el("vsco-tabs-result");
+    result.style.display = "block";
+    result.textContent = "loading…";
+    try {
+      const s = await chrome.storage.local.get(["swLogVsco"]);
+      const log = Array.isArray(s.swLogVsco) ? s.swLogVsco : [];
+      result.innerHTML = "";
+      if (!log.length) {
+        result.textContent = "no SW log yet — run a sweep first.";
+        return;
+      }
+      const head = document.createElement("div");
+      head.innerHTML = `<strong>${log.length} log line${log.length === 1 ? "" : "s"}</strong> (newest at bottom)`;
+      result.appendChild(head);
+      const pre = document.createElement("pre");
+      pre.style.cssText = "margin-top:6px; max-height:200px; overflow:auto; font-family: ui-monospace, monospace; font-size: 10.5px; line-height: 1.4; padding: 8px; border:1px solid var(--border); border-radius:8px; background: rgba(0,0,0,0.2); white-space: pre-wrap;";
+      pre.textContent = log.join("\n");
+      result.appendChild(pre);
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex; gap:6px; margin-top:6px;";
+      const copyBtn = document.createElement("button");
+      copyBtn.className = "secondary";
+      copyBtn.textContent = "Copy log";
+      copyBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(log.join("\n"));
+          copyBtn.textContent = "Copied ✓";
+          setTimeout(() => { copyBtn.textContent = "Copy log"; }, 1500);
+        } catch (e) {
+          copyBtn.textContent = `failed: ${e.message}`;
+        }
+      });
+      row.appendChild(copyBtn);
+      const clearBtn = document.createElement("button");
+      clearBtn.className = "secondary";
+      clearBtn.textContent = "Clear log";
+      clearBtn.addEventListener("click", async () => {
+        await chrome.storage.local.set({ swLogVsco: [] });
+        clearBtn.textContent = "Cleared";
+        setTimeout(() => { result.textContent = "(cleared — run a sweep to repopulate)"; }, 600);
+      });
+      row.appendChild(clearBtn);
+      result.appendChild(row);
+    } catch (e) {
+      result.textContent = `failed: ${e?.message || e}`;
+    }
+  });
+
   el("copy-debug-log").addEventListener("click", async () => {
     // Pull the [IG Tracker] log out of the active tab's content
     // script. We don't know up front whether we're on instagram.com
