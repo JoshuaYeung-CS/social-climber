@@ -95,40 +95,57 @@
     const found = new Map();  // media_id -> { url, ext, area }
     const consider = (raw, areaEstimate, ext) => {
       if (!raw) return;
-      // Skip obvious profile-pic / icon URLs by pathname signal. VSCO
-      // uses different CDN folders for avatars vs media; let media id
-      // length be the filter — avatars have shorter ids.
+      if (!/^https?:\/\//.test(raw)) return;
       const id = _mediaIdFromUrl(raw);
       if (!id || id.length < 12) return;
+      // Skip obvious avatars — VSCO routes them through the same CDN
+      // with shorter ids. The length filter above handles most;
+      // belt-and-suspenders for paths that mention "avatar".
+      if (/\/avatar/i.test(raw)) return;
       const prev = found.get(id);
       if (!prev || areaEstimate > prev.area) {
         found.set(id, { url: raw, ext: ext || _extFromUrl(raw), area: areaEstimate });
       }
     };
-    for (const el of document.querySelectorAll("img, video")) {
+    // Pull every plausible image source. Lower the visibility floor so
+    // we don't drop tiles that haven't fully laid out yet (off-screen
+    // virtualized children often have rect 0x0 or under-60-px until
+    // they intersect the viewport).
+    for (const el of document.querySelectorAll("img, video, source, picture")) {
       const r = el.getBoundingClientRect();
       const area = Math.max(1, r.width * r.height);
-      // Drop avatars / micro thumbnails — anything under 60×60 is UI
-      // chrome, not gallery media.
-      if (r.width < 60 || r.height < 60) continue;
       if (el.tagName === "VIDEO") {
         const src = el.src || el.currentSrc;
         const poster = el.getAttribute("poster");
-        if (src && /^https?:/.test(src)) consider(src, area + 1_000_000, "mp4");
-        if (poster && /^https?:/.test(poster)) consider(poster, area, _extFromUrl(poster));
-      } else {
-        const src = el.src || el.currentSrc;
-        if (src && /^https?:/.test(src)) consider(src, area, _extFromUrl(src));
-        // VSCO also renders srcset on its gallery imgs — picking the
-        // largest candidate gives us a higher-res file than the
-        // displayed thumbnail.
-        const srcset = el.getAttribute("srcset");
-        if (srcset) {
-          for (const part of srcset.split(",")) {
-            const url = part.trim().split(/\s+/)[0];
-            if (url && /^https?:/.test(url)) consider(url, area, _extFromUrl(url));
-          }
+        if (src) consider(src, area + 1_000_000, "mp4");
+        if (poster) consider(poster, area, _extFromUrl(poster));
+        continue;
+      }
+      // <source srcset="..."> inside <picture> — modern Next.js Image
+      // pattern. The fallback <img> is also walked separately.
+      const srcset = el.getAttribute("srcset") || el.getAttribute("data-srcset");
+      if (srcset) {
+        for (const part of srcset.split(",")) {
+          const url = part.trim().split(/\s+/)[0];
+          if (url) consider(url, area, _extFromUrl(url));
         }
+      }
+      // <img src> + lazy-load fallbacks (data-src / data-original /
+      // data-lazy are the three patterns React/Next sites use).
+      const src = el.src || el.currentSrc
+        || el.getAttribute("data-src")
+        || el.getAttribute("data-original")
+        || el.getAttribute("data-lazy");
+      if (src) consider(src, area, _extFromUrl(src));
+    }
+    // Background-image divs — Next.js Image's "fill" mode falls back to
+    // this on some breakpoints. Walk everything with an inline style
+    // mentioning vsco's CDN host.
+    for (const el of document.querySelectorAll('[style*="vsco.co"]')) {
+      const m = /url\((['"]?)(https?:[^'")]+)\1\)/i.exec(el.getAttribute("style") || "");
+      if (m) {
+        const r = el.getBoundingClientRect();
+        consider(m[2], Math.max(1, r.width * r.height), _extFromUrl(m[2]));
       }
     }
     return Array.from(found.entries()).map(([id, v]) => ({
