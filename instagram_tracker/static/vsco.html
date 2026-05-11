@@ -248,17 +248,80 @@
     }
     .vsco-select-bar button.danger:hover { opacity: 0.85; color: white; border-color: var(--bad); }
 
-    /* Fullsize lightbox. */
+    /* Fullsize lightbox. The media stack lives in .vsco-lightbox-stage
+       so the prev/next/close/play overlays don't get hit when clicking
+       the dim background to close. */
     .vsco-lightbox {
-      position: fixed; inset: 0; background: rgba(0,0,0,0.92);
+      position: fixed; inset: 0; background: rgba(0,0,0,0.94);
       display: flex; align-items: center; justify-content: center;
-      z-index: 1000; cursor: zoom-out;
-    }
-    .vsco-lightbox img, .vsco-lightbox video {
-      max-width: 92vw; max-height: 92vh; object-fit: contain;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+      z-index: 1000;
     }
     .vsco-lightbox[hidden] { display: none; }
+    .vsco-lightbox-stage {
+      max-width: 92vw; max-height: 92vh;
+      position: relative;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .vsco-lightbox-stage img, .vsco-lightbox-stage video {
+      max-width: 92vw; max-height: 92vh; object-fit: contain;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+      display: block;
+    }
+    /* Click anywhere outside the media closes; clicking the media or
+       the overlay buttons doesn't. */
+    .vsco-lightbox { cursor: zoom-out; }
+    .vsco-lightbox-stage,
+    .vsco-lightbox-stage * { cursor: default; }
+    .vsco-lightbox-stage img,
+    .vsco-lightbox-stage video { cursor: zoom-out; }
+
+    /* Left/right paddle navigation buttons. Centered vertically,
+       fixed to the viewport edges (not the stage) so they're easy to
+       reach on any image aspect ratio. */
+    .lightbox-paddle {
+      position: fixed;
+      top: 50%; transform: translateY(-50%);
+      width: 52px; height: 52px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.18);
+      color: #fff;
+      font-size: 22px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      z-index: 1001;
+      transition: background 120ms ease, transform 120ms ease;
+    }
+    .lightbox-paddle:hover { background: rgba(255,255,255,0.18); }
+    .lightbox-paddle:active { transform: translateY(-50%) scale(0.94); }
+    .lightbox-paddle[disabled] {
+      opacity: 0.25; cursor: not-allowed; pointer-events: none;
+    }
+    .lightbox-paddle.prev { left: 24px; }
+    .lightbox-paddle.next { right: 24px; }
+
+    /* Top toolbar — slideshow play/pause + counter + close. */
+    .lightbox-toolbar {
+      position: fixed; top: 16px; left: 50%;
+      transform: translateX(-50%);
+      display: flex; gap: 10px; align-items: center;
+      background: rgba(0,0,0,0.5);
+      padding: 8px 14px; border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.12);
+      z-index: 1001;
+      font-size: 13px; color: #fff;
+      font-variant-numeric: tabular-nums;
+    }
+    .lightbox-toolbar button {
+      background: transparent; border: 0; color: #fff;
+      cursor: pointer; padding: 4px 8px;
+      border-radius: 6px; font-size: 14px;
+    }
+    .lightbox-toolbar button:hover { background: rgba(255,255,255,0.15); }
+    .lightbox-toolbar button.active {
+      background: var(--accent);
+    }
+    .lightbox-toolbar .counter { opacity: 0.85; }
 
     .empty {
       text-align: center; color: var(--muted);
@@ -279,7 +342,16 @@
   </header>
 
   <main id="root" class="vsco-grid"></main>
-  <div id="lightbox" class="vsco-lightbox" hidden></div>
+  <div id="lightbox" class="vsco-lightbox" hidden>
+    <div class="lightbox-toolbar">
+      <button type="button" id="lb-play" title="Slideshow (Space)">▶</button>
+      <span class="counter" id="lb-counter">0 / 0</span>
+      <button type="button" id="lb-close" title="Close (Esc)">✕</button>
+    </div>
+    <button type="button" class="lightbox-paddle prev" id="lb-prev" title="Previous (←)">‹</button>
+    <div class="vsco-lightbox-stage" id="lb-stage"></div>
+    <button type="button" class="lightbox-paddle next" id="lb-next" title="Next (→)">›</button>
+  </div>
   <div class="vsco-select-bar" id="select-bar" hidden>
     <span class="count" id="select-count">0 selected</span>
     <button type="button" id="select-cancel-btn">Cancel</button>
@@ -396,19 +468,93 @@
       return /\.(mp4|mov|webm|m4v)$/i.test(name || "");
     }
 
-    function openLightbox(url, name) {
-      lightbox.innerHTML = "";
+    // Lightbox state — the currently-open profile's full item list
+    // + a cursor. Letting the lightbox iterate the whole gallery
+    // means arrow keys / paddles / slideshow can advance without
+    // re-querying anything.
+    const lbStage = document.getElementById("lb-stage");
+    const lbPrev = document.getElementById("lb-prev");
+    const lbNext = document.getElementById("lb-next");
+    const lbPlay = document.getElementById("lb-play");
+    const lbClose = document.getElementById("lb-close");
+    const lbCounter = document.getElementById("lb-counter");
+    let _lbItems = [];   // array of { url, name }
+    let _lbIndex = 0;
+    let _lbSlideshow = null;  // setInterval handle when playing
+    const SLIDESHOW_MS = 3000;
+
+    function _renderLbAt(i) {
+      if (!_lbItems.length) return;
+      _lbIndex = ((i % _lbItems.length) + _lbItems.length) % _lbItems.length;
+      const { url, name } = _lbItems[_lbIndex];
+      lbStage.innerHTML = "";
       const el = isVideo(name)
-        ? Object.assign(document.createElement("video"), { src: url, controls: true, autoplay: true })
+        ? Object.assign(document.createElement("video"), { src: url, controls: true, autoplay: true, muted: false })
         : Object.assign(document.createElement("img"), { src: url, alt: name });
-      lightbox.appendChild(el);
+      // Clicking the media itself closes the lightbox (same as the
+      // background) — matches the previous behavior + the cursor hint.
+      el.addEventListener("click", closeLightbox);
+      lbStage.appendChild(el);
+      lbCounter.textContent = `${_lbIndex + 1} / ${_lbItems.length}`;
+      // Disable paddles when there's nowhere to go (single-item view).
+      const single = _lbItems.length <= 1;
+      lbPrev.disabled = single;
+      lbNext.disabled = single;
+    }
+    function _lbNext() { _renderLbAt(_lbIndex + 1); }
+    function _lbPrev() { _renderLbAt(_lbIndex - 1); }
+    function _stopSlideshow() {
+      if (_lbSlideshow != null) {
+        clearInterval(_lbSlideshow);
+        _lbSlideshow = null;
+      }
+      lbPlay.textContent = "▶";
+      lbPlay.classList.remove("active");
+      lbPlay.title = "Slideshow (Space)";
+    }
+    function _startSlideshow() {
+      if (_lbSlideshow != null || _lbItems.length <= 1) return;
+      _lbSlideshow = setInterval(_lbNext, SLIDESHOW_MS);
+      lbPlay.textContent = "⏸";
+      lbPlay.classList.add("active");
+      lbPlay.title = "Pause slideshow (Space)";
+    }
+    function _toggleSlideshow() {
+      if (_lbSlideshow != null) _stopSlideshow();
+      else _startSlideshow();
+    }
+
+    // Public entry — used by the gallery tile click handlers.
+    function openLightbox(items, index) {
+      _lbItems = items;
+      _renderLbAt(index || 0);
       lightbox.hidden = false;
     }
-    lightbox.addEventListener("click", () => { lightbox.hidden = true; lightbox.innerHTML = ""; });
+    function closeLightbox() {
+      _stopSlideshow();
+      lightbox.hidden = true;
+      lbStage.innerHTML = "";
+      _lbItems = [];
+    }
+
+    // Background click closes (cursor: zoom-out hint).
+    lightbox.addEventListener("click", (e) => {
+      // Stage + toolbar + paddles all stop propagation via the
+      // explicit handlers below; bare background-click lands here.
+      if (e.target === lightbox) closeLightbox();
+    });
+    lbStage.addEventListener("click", (e) => e.stopPropagation());
+    lbPrev.addEventListener("click", (e) => { e.stopPropagation(); _lbPrev(); });
+    lbNext.addEventListener("click", (e) => { e.stopPropagation(); _lbNext(); });
+    lbPlay.addEventListener("click", (e) => { e.stopPropagation(); _toggleSlideshow(); });
+    lbClose.addEventListener("click", (e) => { e.stopPropagation(); closeLightbox(); });
+
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && !lightbox.hidden) {
-        lightbox.hidden = true; lightbox.innerHTML = "";
-      }
+      if (lightbox.hidden) return;
+      if (e.key === "Escape") { e.preventDefault(); closeLightbox(); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); _lbNext(); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); _lbPrev(); }
+      else if (e.key === " ") { e.preventDefault(); _toggleSlideshow(); }
     });
 
     async function renderUserGrid() {
@@ -546,7 +692,14 @@
           grid.innerHTML = `<div class="empty">No files saved yet for this profile.</div>`;
           return;
         }
-        for (const it of items) {
+        // Pre-build the lightbox item list once — every tile passes
+        // this same array + its own index when opening, so the
+        // lightbox can walk forward/back through the whole gallery.
+        const lbItems = items.map((it) => ({
+          url: it.url,
+          name: it.media_id + "." + it.ext,
+        }));
+        items.forEach((it, idx) => {
           const name = it.media_id + "." + it.ext;
           const tile = document.createElement("div");
           tile.className = "vsco-tile";
@@ -572,7 +725,7 @@
               _refreshSelectBar();
               return;
             }
-            openLightbox(it.url, name);
+            openLightbox(lbItems, idx);
           });
           // Per-tile delete overlay. Stop propagation so clicking the
           // trash doesn't open the lightbox underneath.
@@ -594,7 +747,7 @@
           });
           tile.appendChild(del);
           grid.appendChild(tile);
-        }
+        });
       } catch (e) {
         grid.innerHTML = `<div class="empty">Failed to load: ${escapeText(e.message)}</div>`;
       }
