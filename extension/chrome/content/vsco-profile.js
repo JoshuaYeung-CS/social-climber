@@ -19,13 +19,6 @@
 
 (function () {
   if (window.__VscoArchive) return;  // re-injection guard
-  const SETTINGS_KEY = "trackerUrl";
-  const DEFAULT_TRACKER_URL = "http://127.0.0.1:8000";
-
-  // Limits matched to the server-side `_VSCO_MAX_BYTES`. Keeps a
-  // runaway base64 encode from ballooning RAM if a video sneaks
-  // through that's larger than expected.
-  const MAX_BYTES = 30 * 1024 * 1024;
 
   // Username comes from the URL: vsco.co/<user>/gallery, vsco.co/<user>,
   // vsco.co/<user>/journal etc. We only archive when the path's first
@@ -166,15 +159,6 @@
     });
   }
 
-  async function _trackerUrl() {
-    try {
-      const s = await chrome.storage.local.get([SETTINGS_KEY]);
-      return (s[SETTINGS_KEY] || DEFAULT_TRACKER_URL).replace(/\/$/, "");
-    } catch {
-      return DEFAULT_TRACKER_URL;
-    }
-  }
-
   // Persist a structured per-run entry so the popup can show the log
   // after the tab has been auto-closed by the queue runner. Capped at
   // the last 30 runs so storage doesn't grow unbounded.
@@ -204,7 +188,6 @@
       });
       return { ok: false, error: "no media found" };
     }
-    const trackerUrl = await _trackerUrl();
     console.log(`[VSCO Archive] @${username}: ${items.length} candidate items`);
     let saved = 0;
     let failed = 0;
@@ -220,34 +203,44 @@
         console.warn(`[VSCO Archive] fetch failed for ${it.media_id}: ${fetched.error}`);
         continue;
       }
-      try {
-        const resp = await fetch(`${trackerUrl}/api/vsco-media-bytes`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            username,
-            media_id: it.media_id,
-            ext: it.ext,
-            bytes_b64: fetched.body,
-          }),
-        });
-        const body = await resp.json().catch(() => ({}));
-        if (!resp.ok) {
-          failed += 1;
-          const errMsg = body.detail || resp.statusText;
-          errors.push({ stage: "save", media_id: it.media_id, error: errMsg });
-          console.warn(`[VSCO Archive] save failed for ${it.media_id}: ${errMsg}`);
-        } else if (body.skipped === "duplicate") {
-          skipped += 1;
-          console.log(`[VSCO Archive] ${it.media_id}.${it.ext} (duplicate, skipped)`);
-        } else {
-          saved += 1;
-          console.log(`[VSCO Archive] saved ${it.media_id}.${it.ext} (${body.size} bytes)`);
+      // Route the save POST through the SW. Content scripts are in
+      // vsco.co's HTTPS origin, and Chrome blocks HTTP fetches from
+      // there as mixed content — every direct POST to localhost
+      // failed with "Failed to fetch". The SW runs in extension
+      // origin and isn't subject to that block.
+      const resp = await new Promise((resolve) => {
+        try {
+          chrome.runtime.sendMessage({
+            type: "save-vsco-bytes",
+            payload: {
+              username,
+              media_id: it.media_id,
+              ext: it.ext,
+              bytes_b64: fetched.body,
+            },
+          }, (r) => {
+            if (chrome.runtime.lastError) {
+              resolve({ ok: false, status: 0, error: chrome.runtime.lastError.message });
+              return;
+            }
+            resolve(r || { ok: false, status: 0, error: "no response from background" });
+          });
+        } catch (e) {
+          resolve({ ok: false, status: 0, error: e?.message || String(e) });
         }
-      } catch (e) {
+      });
+      const body = resp.body || {};
+      if (!resp.ok) {
         failed += 1;
-        errors.push({ stage: "save", media_id: it.media_id, error: e?.message || String(e) });
-        console.warn(`[VSCO Archive] POST error: ${e?.message || e}`);
+        const errMsg = resp.error || body.detail || `HTTP ${resp.status}`;
+        errors.push({ stage: "save", media_id: it.media_id, error: errMsg });
+        console.warn(`[VSCO Archive] save failed for ${it.media_id}: ${errMsg}`);
+      } else if (body.skipped === "duplicate") {
+        skipped += 1;
+        console.log(`[VSCO Archive] ${it.media_id}.${it.ext} (duplicate, skipped)`);
+      } else {
+        saved += 1;
+        console.log(`[VSCO Archive] saved ${it.media_id}.${it.ext} (${body.size || "?"} bytes)`);
       }
     }
     _updateProgress(`Done · ${saved} saved · ${skipped} dup · ${failed} failed`, saved, failed, skipped, /*done=*/true);

@@ -1122,7 +1122,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       try {
         // No credentials — we want a logged-out fetch so VSCO can't
         // tie this to any account. CDN images are public anyway.
-        const r = await fetch(msg.url, { credentials: "omit" });
+        // The referrer = vsco.co is what gets us past Cloudflare's
+        // bot wall — without it, requests come from a
+        // chrome-extension:// origin and the edge returns 403 because
+        // the asset is meant to be hot-linked only from vsco.co.
+        const r = await fetch(msg.url, {
+          credentials: "omit",
+          referrer: "https://vsco.co/",
+          referrerPolicy: "strict-origin-when-cross-origin",
+        });
         if (!r.ok) {
           sendResponse({ ok: false, error: `HTTP ${r.status}` });
           return;
@@ -1143,6 +1151,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: true, body: btoa(binary), size: blob.size });
       } catch (e) {
         sendResponse({ ok: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+  // Proxy VSCO save POSTs through the SW. The content script lives in
+  // vsco.co's HTTPS origin and POSTing to http://127.0.0.1:8000 trips
+  // Chrome's mixed-content blocker (every save fails with "Failed to
+  // fetch"). The SW runs in extension origin which Chrome doesn't
+  // gate the same way, so the local tracker is reachable here.
+  if (msg.type === "save-vsco-bytes") {
+    (async () => {
+      try {
+        const s = await chrome.storage.local.get(["trackerUrl"]);
+        const trackerUrl = (s.trackerUrl || "http://127.0.0.1:8000").replace(/\/$/, "");
+        const r = await fetch(`${trackerUrl}/api/vsco-media-bytes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(msg.payload),
+        });
+        const body = await r.json().catch(() => ({}));
+        sendResponse({ ok: r.ok, status: r.status, body });
+      } catch (e) {
+        sendResponse({ ok: false, status: 0, error: e?.message || String(e) });
       }
     })();
     return true;
