@@ -227,7 +227,33 @@ async function checkTrackerReachable(url) {
   }
 }
 
+// Wire every .card-toggle: clicking flips aria-expanded, which the CSS
+// uses to hide the sibling .card-body. State persists per-card in
+// chrome.storage.local under "collapse:<key>" so cards stay collapsed
+// across popup opens — but defaults to expanded for first-time users.
+async function wireCollapsibles() {
+  const toggles = Array.from(document.querySelectorAll(".card-toggle"));
+  if (!toggles.length) return;
+  const keys = toggles.map((t) => `collapse:${t.dataset.collapse}`);
+  let stored = {};
+  try { stored = await chrome.storage.local.get(keys); } catch (_) { /* default to expanded */ }
+  for (const t of toggles) {
+    const k = `collapse:${t.dataset.collapse}`;
+    const collapsed = !!stored[k];
+    t.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    t.addEventListener("click", async () => {
+      const isExpanded = t.getAttribute("aria-expanded") !== "false";
+      t.setAttribute("aria-expanded", isExpanded ? "false" : "true");
+      try { await chrome.storage.local.set({ [k]: isExpanded }); } catch (_) {}
+    });
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
+  // Wire collapsibles before anything else so the cards' shown state
+  // matches the user's saved preference by the time everything renders.
+  wireCollapsibles();
+
   // Show the extension version in the footer so the user can see at a
   // glance whether they're running the latest code without having to
   // open chrome://extensions. Useful when iterating on fixes — if the
@@ -751,6 +777,16 @@ async function renderArchiveRunner() {
     parts.push(`next at ${clock} (~${minsUntil} min)${modeTag}`);
   }
   summary.textContent = parts.join(" · ");
+
+  // Mirror a compact status into the collapsed-header slot so the
+  // user can see queue depth + on/off state at a glance even with the
+  // card minimized. Keep it short — the header has limited width.
+  const collapsed = el("archive-runner-summary-collapsed");
+  if (collapsed) {
+    const onOff = resp.on ? "on" : "off";
+    const q = stats ? `${stats.queue_size} queued` : "no data";
+    collapsed.textContent = `${q} · ${onOff}`;
+  }
 
   // Permanent-failure banner — persistent until user retries or
   // permanently dismisses by tagging the account as unavailable.

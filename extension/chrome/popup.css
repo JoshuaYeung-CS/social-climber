@@ -35,6 +35,51 @@ html, body {
   border-bottom: 1px solid var(--border);
 }
 .card h2 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+
+/* Collapsible card pattern. The h2 (kept as-is for styling parity)
+   lives inside a borderless button that toggles aria-expanded; the
+   sibling .card-body is hidden when collapsed. Chevron rotates 90°
+   to indicate state. Keeps keyboard accessibility (button is focusable
+   + Space/Enter activate it). */
+.card.collapsible { padding-top: 0; }
+.card-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px 0 6px;
+  margin: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+.card-toggle:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.card-toggle h2 { margin: 0; flex: 0 0 auto; }
+.card-toggle .card-summary {
+  flex: 1 1 auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.card-toggle .card-chevron {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+  transition: transform 150ms ease;
+  margin-left: auto;
+}
+.card-toggle[aria-expanded="false"] .card-chevron { transform: rotate(-90deg); }
+.card-toggle[aria-expanded="false"] + .card-body { display: none; }
+/* When collapsed we want the toggle row tight against the next card's
+   border — keep some bottom padding so the chevron isn't kissing it. */
+.card.collapsible:has(.card-toggle[aria-expanded="false"]) { padding-bottom: 8px; }
 .card p { margin: 0 0 10px; font-size: 12px; line-height: 1.4; }
 .muted { color: var(--muted); }
 .primary, .secondary {

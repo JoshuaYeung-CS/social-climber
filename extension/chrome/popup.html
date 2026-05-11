@@ -37,38 +37,44 @@
     <p class="muted small schedule-hint">Set min = max for a fixed cadence. A different range (e.g. 15–30 min) makes each run land at a random time inside that window so the pattern looks less robotic to Instagram.</p>
   </section>
 
-  <section class="card" id="archive-runner-card">
-    <h2>📦 Auto-archive favorites</h2>
-    <p class="muted">Opens favorited accounts that haven't been archived yet, one at a time, paced so IG doesn't rate-limit. Skips accounts whose media folder you emptied — that's your "I cleared this on purpose" signal. Requires "Auto-archive viewed posts &amp; reels" enabled below.</p>
-    <div class="schedule-row">
-      <label class="schedule-toggle">
-        <input type="checkbox" id="archive-runner-on" />
-        <span>Auto-archive on</span>
-      </label>
-      <span class="schedule-status muted small" id="archive-runner-status"></span>
-      <button class="secondary" id="run-archive-now" title="Fire the archive runner immediately. Picks the next user from the queue and re-anchors the schedule. Disabled while a run is in flight.">▶ Now</button>
+  <section class="card collapsible" id="archive-runner-card">
+    <button type="button" class="card-toggle" data-collapse="archive-runner" aria-expanded="true">
+      <h2>📦 Auto-archive favorites</h2>
+      <span class="card-summary muted small" id="archive-runner-summary-collapsed"></span>
+      <span class="card-chevron" aria-hidden="true">▾</span>
+    </button>
+    <div class="card-body">
+      <p class="muted">Opens favorited accounts that haven't been archived yet, one at a time, paced so IG doesn't rate-limit. Skips accounts whose media folder you emptied — that's your "I cleared this on purpose" signal. Requires "Auto-archive viewed posts &amp; reels" enabled below.</p>
+      <div class="schedule-row">
+        <label class="schedule-toggle">
+          <input type="checkbox" id="archive-runner-on" />
+          <span>Auto-archive on</span>
+        </label>
+        <span class="schedule-status muted small" id="archive-runner-status"></span>
+        <button class="secondary" id="run-archive-now" title="Fire the archive runner immediately. Picks the next user from the queue and re-anchors the schedule. Disabled while a run is in flight.">▶ Now</button>
+      </div>
+      <div class="archive-mode-row">
+        <label class="archive-mode-opt">
+          <input type="radio" name="archive-runner-mode" value="interval" id="archive-runner-mode-interval" />
+          <span>every</span>
+          <input type="number" id="archive-runner-interval" min="1" step="1" value="10" inputmode="numeric" />
+          <span class="schedule-dash">min (fixed cadence)</span>
+        </label>
+        <label class="archive-mode-opt">
+          <input type="radio" name="archive-runner-mode" value="completion" id="archive-runner-mode-completion" />
+          <span>after each finishes +</span>
+          <input type="number" id="archive-runner-grace" min="1" step="1" value="1" inputmode="numeric" />
+          <span class="schedule-dash">min grace</span>
+        </label>
+      </div>
+      <div id="archive-runner-summary" class="muted small" style="margin-top:8px"></div>
+      <div id="archive-runner-permfail-banner" class="archive-permfail-banner" hidden></div>
+      <div class="archive-add-row" style="margin-top:8px; display:flex; gap:6px; align-items:center;">
+        <input type="text" id="archive-add-input" placeholder="Add @username to queue" style="flex:1" autocomplete="off" />
+        <button class="secondary" id="archive-add-btn" style="white-space:nowrap;">Add</button>
+      </div>
+      <ul id="archive-runner-history" class="export-history" style="margin-top:6px"></ul>
     </div>
-    <div class="archive-mode-row">
-      <label class="archive-mode-opt">
-        <input type="radio" name="archive-runner-mode" value="interval" id="archive-runner-mode-interval" />
-        <span>every</span>
-        <input type="number" id="archive-runner-interval" min="1" step="1" value="10" inputmode="numeric" />
-        <span class="schedule-dash">min (fixed cadence)</span>
-      </label>
-      <label class="archive-mode-opt">
-        <input type="radio" name="archive-runner-mode" value="completion" id="archive-runner-mode-completion" />
-        <span>after each finishes +</span>
-        <input type="number" id="archive-runner-grace" min="1" step="1" value="1" inputmode="numeric" />
-        <span class="schedule-dash">min grace</span>
-      </label>
-    </div>
-    <div id="archive-runner-summary" class="muted small" style="margin-top:8px"></div>
-    <div id="archive-runner-permfail-banner" class="archive-permfail-banner" hidden></div>
-    <div class="archive-add-row" style="margin-top:8px; display:flex; gap:6px; align-items:center;">
-      <input type="text" id="archive-add-input" placeholder="Add @username to queue" style="flex:1" autocomplete="off" />
-      <button class="secondary" id="archive-add-btn" style="white-space:nowrap;">Add</button>
-    </div>
-    <ul id="archive-runner-history" class="export-history" style="margin-top:6px"></ul>
   </section>
 
   <section class="card">
@@ -81,42 +87,47 @@
     <button class="secondary" id="copy-debug-log" style="margin-top:6px" title="Copy the recent [IG Tracker] console output to your clipboard">📋 Copy debug log</button>
   </section>
 
-  <section class="card">
-    <h2>Settings</h2>
-    <label class="row">
-      <span>Tracker URL</span>
-      <input type="text" id="tracker-url" placeholder="http://127.0.0.1:8000" />
-    </label>
-    <label class="row">
-      <span>Vault URL (optional secondary archive — only if you run a separate vault service. Auto-archive to the tracker's data/media/ works regardless of this)</span>
-      <input type="text" id="vault-url" placeholder="http://localhost:8765 (leave empty unless you run a vault service)" />
-    </label>
-    <label class="row">
-      <span>Save IG password (opt-in, used only on the verify-password screen)</span>
-      <input type="password" id="ig-password" autocomplete="off" placeholder="(leave empty for manual entry)" />
-    </label>
-    <label class="row">
-      <span>Notification email (for the "Fill notification email" button)</span>
-      <input type="email" id="notification-email" autocomplete="off" placeholder="you@example.com" />
-    </label>
-    <label class="row">
-      <span>Google account email (auto-pick on the OAuth chooser)</span>
-      <input type="email" id="google-account-email" autocomplete="off" placeholder="(leave empty to pick manually)" />
-    </label>
-    <label class="row check">
-      <input type="checkbox" id="autosubmit-google" />
-      <span>Auto-click "Continue" on Google OAuth</span>
-    </label>
-    <label class="row check">
-      <input type="checkbox" id="show-overlay" checked />
-      <span>Show profile overlay on instagram.com</span>
-    </label>
-    <label class="row check">
-      <input type="checkbox" id="auto-archive-media" />
-      <span>Auto-archive viewed posts &amp; reels (saves locally to data/media/)</span>
-    </label>
-    <p class="muted" style="font-size:11px; margin: 6px 0;">Failure alerts (push to phone on 2+ consecutive failures) are configured server-side at <code>~/.config/igtracker/push.json</code>. iMessage to your own number is recommended — no third-party app, E2E by Apple. See the server <code>/api/push</code> docs.</p>
-    <button class="secondary" id="save-settings">Save settings</button>
+  <section class="card collapsible">
+    <button type="button" class="card-toggle" data-collapse="settings" aria-expanded="true">
+      <h2>Settings</h2>
+      <span class="card-chevron" aria-hidden="true">▾</span>
+    </button>
+    <div class="card-body">
+      <label class="row">
+        <span>Tracker URL</span>
+        <input type="text" id="tracker-url" placeholder="http://127.0.0.1:8000" />
+      </label>
+      <label class="row">
+        <span>Vault URL (optional secondary archive — only if you run a separate vault service. Auto-archive to the tracker's data/media/ works regardless of this)</span>
+        <input type="text" id="vault-url" placeholder="http://localhost:8765 (leave empty unless you run a vault service)" />
+      </label>
+      <label class="row">
+        <span>Save IG password (opt-in, used only on the verify-password screen)</span>
+        <input type="password" id="ig-password" autocomplete="off" placeholder="(leave empty for manual entry)" />
+      </label>
+      <label class="row">
+        <span>Notification email (for the "Fill notification email" button)</span>
+        <input type="email" id="notification-email" autocomplete="off" placeholder="you@example.com" />
+      </label>
+      <label class="row">
+        <span>Google account email (auto-pick on the OAuth chooser)</span>
+        <input type="email" id="google-account-email" autocomplete="off" placeholder="(leave empty to pick manually)" />
+      </label>
+      <label class="row check">
+        <input type="checkbox" id="autosubmit-google" />
+        <span>Auto-click "Continue" on Google OAuth</span>
+      </label>
+      <label class="row check">
+        <input type="checkbox" id="show-overlay" checked />
+        <span>Show profile overlay on instagram.com</span>
+      </label>
+      <label class="row check">
+        <input type="checkbox" id="auto-archive-media" />
+        <span>Auto-archive viewed posts &amp; reels (saves locally to data/media/)</span>
+      </label>
+      <p class="muted" style="font-size:11px; margin: 6px 0;">Failure alerts (push to phone on 2+ consecutive failures) are configured server-side at <code>~/.config/igtracker/push.json</code>. iMessage to your own number is recommended — no third-party app, E2E by Apple. See the server <code>/api/push</code> docs.</p>
+      <button class="secondary" id="save-settings">Save settings</button>
+    </div>
   </section>
 
   <section class="card" id="export-stats-card" hidden>
