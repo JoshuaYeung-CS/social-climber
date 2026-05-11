@@ -330,36 +330,6 @@ function initVscoQueueControls() {
     if (e.key === "Enter") { e.preventDefault(); addBtn.click(); }
   });
 
-  // Bulk-add every open vsco.co profile tab into the queue without
-  // running. The user then clicks 'Run queue' below to actually
-  // start archiving — same incognito toggle, same sequential sweep.
-  const queueTabsBtn = el("archive-vsco-queue-tabs");
-  if (queueTabsBtn) {
-    queueTabsBtn.addEventListener("click", async () => {
-      try {
-        const tabs = await chrome.tabs.query({});
-        const handles = [];
-        for (const t of tabs) {
-          const h = _vscoParseHandle(t?.url || "");
-          if (h) handles.push(h);
-        }
-        if (!handles.length) {
-          queueTabsBtn.textContent = "No VSCO tabs open";
-          setTimeout(() => { queueTabsBtn.textContent = "📥 Queue all open VSCO tabs"; }, 1500);
-          return;
-        }
-        const added = await addHandles(handles);
-        const skipped = handles.length - added;
-        queueTabsBtn.textContent = added
-          ? `Added ${added}${skipped ? ` (${skipped} dup)` : ""} ✓`
-          : `Already queued ✓`;
-        setTimeout(() => { queueTabsBtn.textContent = "📥 Queue all open VSCO tabs"; }, 1800);
-      } catch (e) {
-        queueTabsBtn.textContent = `failed: ${e?.message || e}`;
-      }
-    });
-  }
-
   addCurrentBtn.addEventListener("click", async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const handle = _vscoParseHandle(tab?.url || "");
@@ -621,6 +591,61 @@ document.addEventListener("DOMContentLoaded", async () => {
   // the bare CDN GETs (no credentials, no referer beyond chrome-
   // extension://). Pair with a VPN if IP-level anonymity matters —
   // browsers can't hide IP from the server.
+  // Shared helper: scan every open vsco.co tab across all windows
+  // and return the canonical /gallery URL set, deduped by lowercased
+  // handle. Used by both "archive now" and "grab → queue".
+  async function _collectOpenVscoHandles() {
+    const tabs = await chrome.tabs.query({});
+    const RESERVED = new Set([
+      "m", "spaces", "studio", "feed", "search", "discover", "explore",
+      "settings", "account", "login", "join", "user", "users",
+      "membership", "about", "privacy", "terms", "help", "legal",
+      "ai-lab", "blog", "stories", "support", "company",
+      "products", "solutions", "resources", "downloads", "campaigns",
+    ]);
+    const seen = new Set();
+    const matches = [];
+    for (const t of tabs) {
+      const url = t.url || "";
+      const m = url.match(/^https?:\/\/(?:www\.)?vsco\.co\/([A-Za-z0-9._-]{1,40})(?:\/(?:gallery)?)?(?:\?|#|$)/i);
+      if (!m) continue;
+      const handle = m[1];
+      if (RESERVED.has(handle.toLowerCase())) continue;
+      if (seen.has(handle.toLowerCase())) continue;
+      seen.add(handle.toLowerCase());
+      matches.push({ handle, url: `https://vsco.co/${handle}/gallery` });
+    }
+    return matches;
+  }
+
+  // Pull every open VSCO tab into the persistent queue without
+  // running anything. Lets the user review / trim / add usernames
+  // before hitting Run.
+  el("grab-tabs-to-queue").addEventListener("click", async () => {
+    const btn = el("grab-tabs-to-queue");
+    const orig = btn.textContent;
+    const matches = await _collectOpenVscoHandles();
+    if (!matches.length) {
+      btn.textContent = "No VSCO tabs open";
+      setTimeout(() => { btn.textContent = orig; }, 1500);
+      return;
+    }
+    const queue = await _getVscoQueue();
+    const lowerSet = new Set(queue.map((h) => h.toLowerCase()));
+    let added = 0;
+    for (const m of matches) {
+      if (!lowerSet.has(m.handle.toLowerCase())) {
+        queue.push(m.handle);
+        lowerSet.add(m.handle.toLowerCase());
+        added += 1;
+      }
+    }
+    await _setVscoQueue(queue);
+    renderVscoQueue();
+    btn.textContent = `Added ${added} (${matches.length - added} dup)`;
+    setTimeout(() => { btn.textContent = orig; }, 1800);
+  });
+
   el("archive-vsco").addEventListener("click", async () => {
     const result = el("vsco-tabs-result");
     result.style.display = "block";

@@ -84,17 +84,17 @@
     <button class="secondary" id="copy-debug-log" style="margin-top:6px" title="Copy the recent [IG Tracker] console output to your clipboard">📋 Copy debug log</button>
   </section>
 
-  <section class="card collapsible" id="vsco-queue-card">
-    <button type="button" class="card-toggle" data-collapse="vsco-queue" aria-expanded="false">
+  <section class="card collapsible" id="vsco-card">
+    <button type="button" class="card-toggle" data-collapse="vsco" aria-expanded="false">
       <h2>📷 VSCO</h2>
       <span class="card-summary muted small" id="vsco-queue-summary-collapsed"></span>
       <span class="card-chevron" aria-hidden="true">▾</span>
     </button>
     <div class="card-body">
-      <p class="muted small">Add VSCO usernames to a queue, then run them sequentially. Each profile opens in its own window (incognito or normal), scrolls + archives the full gallery, then closes after a 10s grace.</p>
-      <button class="secondary" id="archive-vsco" style="margin-top:6px" title="One-click incognito sweep: grab every open vsco.co tab and archive each in a fresh incognito window, sequentially. Skips the queue entirely. Requires 'Allow in Incognito' on this extension.">🕶️ Archive all open tabs now (incognito)</button>
-      <button class="secondary" id="archive-vsco-queue-tabs" style="margin-top:6px" title="Grab every open vsco.co profile tab and add the handles to the queue. Click 'Run queue' below to actually start archiving — use this if you want to populate the queue from open tabs without immediately running.">📥 Queue all open VSCO tabs</button>
-      <div class="archive-add-row" style="margin-top:6px; display:flex; gap:6px; align-items:center;">
+      <p class="muted small">Sweep one or more VSCO profiles into your local archive. 'Archive now' grabs every open VSCO tab and runs immediately; 'Grab → queue' stages them so you can edit before running. The queue runs sequentially with a 10s grace per tab — close a tab early with cmd+w to skip ahead.</p>
+      <button class="secondary" id="archive-vsco" title="Grab every open vsco.co tab and start an incognito sweep right now.">🕶️ Archive all open tabs (incognito, now)</button>
+      <button class="secondary" id="grab-tabs-to-queue" style="margin-top:6px" title="Pull every open vsco.co tab into the queue below without running yet — lets you review or trim before hitting Run.">📥 Grab open tabs → queue</button>
+      <div class="archive-add-row" style="margin-top:8px; display:flex; gap:6px; align-items:center;">
         <input type="text" id="vsco-queue-add-input" placeholder="@username or vsco.co/<user>" style="flex:1" autocomplete="off" />
         <button class="secondary" id="vsco-queue-add-btn" style="white-space:nowrap;">Add</button>
       </div>
@@ -102,13 +102,13 @@
       <ul id="vsco-queue-list" class="export-history" style="margin-top:6px; max-height:140px;"></ul>
       <div class="schedule-row" style="margin-top:6px;">
         <label class="schedule-toggle">
-          <input type="checkbox" id="vsco-queue-incognito" />
+          <input type="checkbox" id="vsco-queue-incognito" checked />
           <span>Run in incognito</span>
         </label>
         <span class="schedule-status muted small" style="font-size:10px;">(privacy vs. speed)</span>
       </div>
       <button class="primary" id="vsco-queue-run" style="margin-top:6px">▶ Run queue</button>
-      <button class="secondary" id="view-vsco-log" style="margin-top:6px" title="Show the last few VSCO archive runs and any per-item errors. Useful when tabs auto-close before you can read the failure messages.">📋 View archive log</button>
+      <button class="secondary" id="view-vsco-log" style="margin-top:6px" title="Show the last few VSCO archive runs and any per-item errors.">📋 View archive log</button>
       <div id="vsco-tabs-result" class="muted small" style="margin-top:6px; display:none;"></div>
     </div>
   </section>
