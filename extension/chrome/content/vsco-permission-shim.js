@@ -65,4 +65,43 @@
       };
     }
   } catch (_) { /* old browser, ignore */ }
+
+  // VSCO declares a PWA manifest at <link rel="manifest" href="...">.
+  // Chrome's incognito mode reads that manifest's protocol_handlers /
+  // url_handlers fields on the fly and prompts the user — "Access
+  // other apps and services on this device" — every gallery load
+  // because incognito doesn't remember the previous decision. The
+  // registerProtocolHandler API override doesn't catch this path
+  // because Chrome consumes the manifest directly without going
+  // through page JS.
+  //
+  // Strip the <link rel="manifest"> element the instant it appears
+  // (and on every mutation in case VSCO re-injects). The page itself
+  // doesn't need the manifest to function — only the install UI does.
+  function _stripManifestLinks() {
+    try {
+      for (const link of document.querySelectorAll('link[rel="manifest"], link[rel~="manifest"]')) {
+        log("stripping manifest link", link.href);
+        link.parentNode && link.parentNode.removeChild(link);
+      }
+    } catch (_) { /* ignore */ }
+  }
+  // documentElement exists at document_start; observe it for child
+  // additions in head/body until the page is hydrated. Then disconnect
+  // after a generous window — no need to keep observing forever.
+  try {
+    const root = document.documentElement;
+    if (root) {
+      const obs = new MutationObserver(_stripManifestLinks);
+      obs.observe(root, { childList: true, subtree: true });
+      // First synchronous pass in case the head already has it parsed
+      // by the time we reach this line.
+      _stripManifestLinks();
+      // Disconnect after 30s — by then VSCO's bundle has booted and
+      // any further manifest re-injection is unlikely.
+      setTimeout(() => { try { obs.disconnect(); } catch (_) {} }, 30000);
+    }
+  } catch (e) {
+    log("manifest-strip observer failed", e && e.message);
+  }
 })();

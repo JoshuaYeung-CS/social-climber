@@ -237,47 +237,19 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                 "ts": latest_ts,
             })
 
-        # Outbound request was rejected / withdrew — your pending dropped
-        # without becoming a follow. Favorites get high severity since
-        # the user explicitly cared about getting that follow.
-        for u in sorted(request_rejected_outbound & favorites):
-            diff_alerts.append({
-                "kind": "favorite_my_request_rejected",
-                "username": u,
-                "severity": "high",
-                "message": f"★ Favorite {u} ({_badge(u)}) — your follow request was rejected/withdrew.",
-                "ts": latest_ts,
-            })
-
-        for u in sorted(request_rejected_outbound - favorites):
-            diff_alerts.append({
-                "kind": "my_request_rejected",
-                "username": u,
-                "severity": "normal",
-                "message": f"✕ {u} ({_badge(u)}) — your follow request was rejected/withdrew.",
-                "ts": latest_ts,
-            })
-
-        # Inbound request disappeared — they withdrew, you rejected, or
-        # it was auto-handled. Framed as "removed their request" since
-        # that's the most user-relevant interpretation.
-        for u in sorted(request_withdrawn_inbound & favorites):
-            diff_alerts.append({
-                "kind": "favorite_removed_their_request",
-                "username": u,
-                "severity": "high",
-                "message": f"★ Favorite {u} ({_badge(u)}) removed their follow request to you.",
-                "ts": latest_ts,
-            })
-
-        for u in sorted(request_withdrawn_inbound - favorites):
-            diff_alerts.append({
-                "kind": "removed_their_request",
-                "username": u,
-                "severity": "normal",
-                "message": f"✕ {u} ({_badge(u)}) removed their follow request to you.",
-                "ts": latest_ts,
-            })
+        # Withdrawn/rejected follow-request alerts (both directions) used
+        # to fire here as diff alerts — kinds my_request_rejected /
+        # favorite_my_request_rejected (outbound) and
+        # removed_their_request / favorite_removed_their_request
+        # (inbound). Disabled per user request: the home alerts panel
+        # was getting flooded with these and they resolve themselves
+        # (request_withdrawn_inbound especially churns). The underlying
+        # sets request_rejected_outbound + request_withdrawn_inbound are
+        # still computed above, still drive the activity log + the
+        # dedicated list pages ("My follow request rejected" /
+        # "Removed their follow request"), so the events remain
+        # tracked — just not surfaced as home-screen alerts.
+        _ = request_rejected_outbound, request_withdrawn_inbound
 
         # NOTE: previously emitted diff alerts for "they accepted but
         # haven't followed back" (kinds: accepted_no_followback /
@@ -586,39 +558,13 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
     # bounced-now filter on the diff side); without this skip, we'd
     # double-alert on the same real-world event with two different
     # framings, none of them quite right.
-    _ru_set = set(recent_unfollow_users)
-    recent_request_withdrawn_users = [
-        u for u in last_requested_iso
-        if u not in curr.incoming_requests
-        and u not in curr.followers
-        and u not in suppressed
-        and u not in _ru_set
-    ]
-    rw_priv, rw_np = _privacy_for(recent_request_withdrawn_users)
-    for u in sorted(recent_request_withdrawn_users,
-                     key=lambda x: last_requested_iso[x], reverse=True):
-        last_seen = _parse_iso(last_requested_iso[u])
-        if last_seen is None:
-            continue
-        if last_seen.tzinfo is None:
-            last_seen = last_seen.replace(tzinfo=timezone.utc)
-        days_ago = (now_utc - last_seen).days
-        is_fav = u in favorites
-        priv_label = _privacy_label(rw_priv.get(u, "unknown"), u in rw_np)
-        prefix = "★✕" if is_fav else "✕"
-        fav_label = "★ Favorite " if is_fav else ""
-        when_text = "today" if days_ago == 0 else (
-            f"{days_ago} day{'s' if days_ago != 1 else ''} ago"
-        )
-        stateful.append({
-            "kind": "favorite_recent_request_withdrawn" if is_fav else "recent_request_withdrawn",
-            "username": u,
-            "severity": "high" if is_fav else "normal",
-            "message": f"{prefix} {fav_label}{u} ({priv_label}) — their follow request to you went away (last seen requesting {when_text}).",
-            "days": days_ago,
-            "privacy": rw_priv.get(u, "unknown"),
-            "ts": int(last_seen.timestamp()),
-        })
+    # Stateful "their request to you went away" alerts (kinds
+    # recent_request_withdrawn / favorite_recent_request_withdrawn)
+    # used to fire here. Disabled per user request — same reason as
+    # the diff-side suppression above. The last_requested_iso map is
+    # still maintained and feeds the "Removed their follow request"
+    # list view + activity log; only the home alert is muted.
+    _ = last_requested_iso  # intentionally unused now
 
     # Stateful: incoming follow-requests that have been pending too long.
     # The diff side (`new_incoming_request`) fires once when a request
