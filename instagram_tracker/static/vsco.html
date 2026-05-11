@@ -119,8 +119,10 @@
     .vsco-expanded-head .close-btn:hover { border-color: var(--accent); color: var(--accent); }
     .vsco-expanded-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-      gap: 6px;
+      /* Larger tiles per user request — was 220, now 340. With
+         high-res archived files (?w=2400) these render much sharper. */
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 8px;
     }
     /* Per-tile card. aspect-ratio + background lives on the tile
        itself so the cell reserves its 1:1 box BEFORE the image

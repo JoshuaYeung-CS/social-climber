@@ -1170,13 +1170,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "fetch-vsco-bytes") {
     (async () => {
       try {
+        // Upgrade VSCO CDN thumbnails to highest resolution. The DOM
+        // exposes `?w=300` / `?w=600` thumbnails; VSCO's CDN happily
+        // serves the same media_id at `?w=2400` (the max desktop
+        // display size on vsco.co). c=1 is a crop flag — drop it so
+        // we get uncropped originals when available.
+        let fetchUrl = msg.url;
+        try {
+          const u = new URL(msg.url);
+          if (/^(?:i|im)\.vsco\.co$/i.test(u.hostname)) {
+            u.searchParams.set("w", "2400");
+            u.searchParams.delete("h");
+            u.searchParams.delete("c");
+            fetchUrl = u.toString();
+          }
+        } catch (_) { /* malformed URL, fall back to raw */ }
         // No credentials — we want a logged-out fetch so VSCO can't
         // tie this to any account. CDN images are public anyway.
         // The referrer = vsco.co is what gets us past Cloudflare's
         // bot wall — without it, requests come from a
         // chrome-extension:// origin and the edge returns 403 because
         // the asset is meant to be hot-linked only from vsco.co.
-        const r = await fetch(msg.url, {
+        const r = await fetch(fetchUrl, {
           credentials: "omit",
           referrer: "https://vsco.co/",
           referrerPolicy: "strict-origin-when-cross-origin",
