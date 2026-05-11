@@ -532,15 +532,15 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       }
       const head = document.createElement("div");
-      head.innerHTML = `<strong>${log.length} recent run${log.length === 1 ? "" : "s"}</strong> <span class="muted small">(newest first)</span>`;
+      head.innerHTML = `<strong>${log.length} run${log.length === 1 ? "" : "s"}</strong> <span class="muted small">(newest first)</span>`;
       result.appendChild(head);
       const body = document.createElement("div");
       body.className = "vsco-log-scroll";
-      // Compact one-line-per-run rendering — was three lines + a
-      // padded box per run, which pushed the Copy JSON button off the
-      // bottom for any log >5 entries. Now: time @user N/T saved · F
-      // fail · S dup [↘ collected]. Errors collapse into a small dim
-      // line below only when present.
+      // True single-line-per-run rendering. Format:
+      //   ✓ 12:34 @user · 15/15 · 14 dup [HTTP 403 ×1]
+      // Time short-form, status icon, summary collapses zero counts,
+      // errors fold into one inline bracketed suffix. Hovering the
+      // row shows the full timestamp + duration + scanned count.
       for (const r of log) {
         const row = document.createElement("div");
         row.className = "vsco-log-row";
@@ -548,29 +548,30 @@ document.addEventListener("DOMContentLoaded", async () => {
         const time = new Date(r.ts || 0).toLocaleTimeString([], {
           hour: "numeric", minute: "2-digit",
         });
-        const colParts = [
-          `<span class="vsco-log-status">${status}</span>`,
-          `<span class="vsco-log-time">${time}</span>`,
-          `<span class="vsco-log-user">@${r.username || "?"}</span>`,
-          `<span class="vsco-log-counts">${r.saved}/${r.total}<span class="muted"> saved</span>`
-            + (r.failed ? ` · <span class="vsco-log-fail">${r.failed} fail</span>` : "")
-            + (r.skipped ? ` · <span class="muted">${r.skipped} dup</span>` : "")
-            + (r.collected != null && r.collected !== r.total ? ` · <span class="muted">${r.collected} scanned</span>` : "")
-            + `</span>`,
-        ];
-        row.innerHTML = colParts.join("");
+        const parts = [`${r.saved}/${r.total}`];
+        if (r.failed) parts.push(`<span class="vsco-log-fail">${r.failed} fail</span>`);
+        if (r.skipped) parts.push(`<span class="muted">${r.skipped} dup</span>`);
+        let errSuffix = "";
         if (Array.isArray(r.errors) && r.errors.length) {
           const seen = new Map();
           for (const e of r.errors) {
-            const key = e.error || "unknown";
-            seen.set(key, (seen.get(key) || 0) + 1);
+            const k = e.error || "unknown";
+            seen.set(k, (seen.get(k) || 0) + 1);
           }
-          const errLine = document.createElement("div");
-          errLine.className = "vsco-log-errors";
-          errLine.textContent = Array.from(seen.entries())
-            .map(([msg, c]) => `${c}× ${msg}`).join(" · ");
-          row.appendChild(errLine);
+          errSuffix = ` <span class="vsco-log-errors">[`
+            + Array.from(seen.entries())
+                .map(([m, c]) => `${m}${c > 1 ? ` ×${c}` : ""}`)
+                .join(", ")
+            + `]</span>`;
         }
+        row.innerHTML =
+          `<span class="vsco-log-status">${status}</span>`
+          + `<span class="vsco-log-time">${time}</span>`
+          + `<span class="vsco-log-user">@${r.username || "?"}</span>`
+          + `<span class="vsco-log-counts">${parts.join(" · ")}</span>`
+          + errSuffix;
+        row.title = `${new Date(r.ts || 0).toLocaleString()} · ${r.durationMs || "?"}ms`
+          + (r.collected != null ? ` · ${r.collected} scanned` : "");
         body.appendChild(row);
       }
       result.appendChild(body);
