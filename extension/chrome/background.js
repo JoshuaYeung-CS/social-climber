@@ -459,6 +459,16 @@ async function _vscoSweepAdvance(windowId) {
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  // VSCO sweep tab grace timer fired — remove the tab. The
+  // tabs.onRemoved listener will then advance the chain. Tab might
+  // already be gone (user closed manually) which is fine.
+  if (alarm.name.startsWith("vsco-tab-grace-")) {
+    const tabId = parseInt(alarm.name.slice("vsco-tab-grace-".length), 10);
+    if (!isNaN(tabId)) {
+      try { await chrome.tabs.remove(tabId); } catch (_) {}
+    }
+    return;
+  }
   if (alarm.name === SCHEDULE_ALARM) {
     await _onScheduledExportFire();
     // Re-arm with a fresh random interval. We dropped periodInMinutes
@@ -1106,6 +1116,8 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
   if (_debuggerTabs.has(tabId)) {
     _debuggerTabs.delete(tabId);
   }
+  // Cancel any pending grace alarm for this tab — harmless if absent.
+  try { await chrome.alarms.clear(`vsco-tab-grace-${tabId}`); } catch (_) {}
   // Skip if the whole window is closing (user aborted the sweep)
   if (removeInfo && removeInfo.isWindowClosing) return;
   if (removeInfo && removeInfo.windowId != null) {
@@ -1243,6 +1255,43 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     })();
     return true;
   }
+  // Start a VSCO sweep. Popup builds the URL list + an incognito flag
+  // and hands it here; the SW handles the window create + state
+  // writes atomically so neither operation gets cut off by the popup
+  // closing. Previously the popup did
+  //   await chrome.windows.create(...)        // popup closes here ↓
+  //   await chrome.storage.local.set({...})   // never completes
+  // so vscoSweepWindowId was never written and the sweep stalled at
+  // tab #1 because the onRemoved listener couldn't recognize the
+  // window.
+  if (msg.type === "start-vsco-sweep") {
+    (async () => {
+      try {
+        const urls = (msg.urls || []).filter((u) => typeof u === "string");
+        if (!urls.length) {
+          sendResponse({ ok: false, error: "no urls" });
+          return;
+        }
+        const queue = urls.reduce((o, u) => { o[u] = Date.now(); return o; }, {});
+        // Write the run-state first; the window's first content script
+        // races against this. By the time the script hits document_idle
+        // and reads chrome.storage, this write is already committed.
+        await chrome.storage.local.set({
+          vscoAutoArchiveQueue: queue,
+          vscoSweepWindowId: null,  // cleared until we have a real id
+        });
+        const win = await chrome.windows.create({
+          incognito: !!msg.incognito,
+          url: urls[0],
+        });
+        await chrome.storage.local.set({ vscoSweepWindowId: win.id });
+        sendResponse({ ok: true, windowId: win.id });
+      } catch (e) {
+        sendResponse({ ok: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
   // Attach chrome.debugger to the calling tab so Chrome stops
   // throttling it as a background tab. A debugger-attached tab runs
   // its JS at full speed regardless of focus — exactly the property
@@ -1267,15 +1316,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "close-my-tab") {
     const tabId = sender?.tab?.id;
     if (tabId != null) {
-      // Brief grace before the tab closes — enough to read the
-      // overlay summary, not so long that a 6-profile sweep drags
-      // for minutes. chrome.alarms minimum delay in MV3 is 30s in
-      // production but unpacked / dev allows shorter; for an
-      // unpacked extension we just use a setTimeout. (Fine because
-      // 10s is well under the SW idle-eviction threshold.)
-      setTimeout(() => {
-        chrome.tabs.remove(tabId).catch(() => {});
-      }, 10000);
+      // 60-second grace per user preference — time to copy logs,
+      // scroll the page, etc. Use chrome.alarms instead of setTimeout
+      // because the SW can idle-evict after ~30s and a setTimeout in
+      // that case wouldn't fire. Cmd+W on the tab still advances the
+      // sweep immediately via the tabs.onRemoved listener.
+      chrome.alarms.create(`vsco-tab-grace-${tabId}`, { delayInMinutes: 1 });
     }
     sendResponse({ ok: true });
     return false;

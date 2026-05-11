@@ -360,15 +360,18 @@ function initVscoQueueControls() {
         return;
       }
     }
-    // Write the auto-archive queue + sweep window marker, then open
-    // the first URL. The SW's tabs.onRemoved listener advances the
-    // chain from there — same machinery as the open-tabs sweep.
+    // Delegate to the SW so window-create + state-writes happen
+    // atomically. Doing this from the popup means the popup closes
+    // when the new window focuses and any pending awaits after
+    // chrome.windows.create silently die — so vscoSweepWindowId
+    // never lands, the onRemoved listener can't recognize the
+    // window, and the chain stalls after tab #1.
     const urls = queue.map((h) => `https://vsco.co/${h}/gallery`);
-    await chrome.storage.local.set({
-      vscoAutoArchiveQueue: urls.reduce((o, u) => { o[u] = Date.now(); return o; }, {}),
+    chrome.runtime.sendMessage({
+      type: "start-vsco-sweep",
+      urls,
+      incognito: useIncognito,
     });
-    const win = await chrome.windows.create({ incognito: useIncognito, url: urls[0] });
-    await chrome.storage.local.set({ vscoSweepWindowId: win.id });
     runBtn.textContent = `▶ Running (${queue.length})`;
   });
 }

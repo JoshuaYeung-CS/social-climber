@@ -571,12 +571,27 @@
       _updateProgress("Loading gallery…", 0, 0, 0);
       await _scrollAllImagesIntoView();
       const r = await archiveCurrentProfile();
+      // Remove the just-finished handle from the popup-facing queue
+      // (vscoQueue is the user's persistent staging list; the auto
+      // archive queue used by the sweep chain is dequeued separately
+      // at start-of-run). On clean success only — if archive failed,
+      // leave it in the queue so the user can retry.
+      if (r && r.ok && (r.saved > 0 || r.total === 0)) {
+        try {
+          const s = await chrome.storage.local.get(["vscoQueue"]);
+          if (Array.isArray(s.vscoQueue)) {
+            const lower = user.toLowerCase();
+            const next = s.vscoQueue.filter((h) => h.toLowerCase() !== lower);
+            if (next.length !== s.vscoQueue.length) {
+              await chrome.storage.local.set({ vscoQueue: next });
+            }
+          }
+        } catch (_) { /* best-effort */ }
+      }
       // Always close + advance the sweep chain — even on partial
       // failure. The structured log in chrome.storage.local
       // (vscoArchiveLog, viewable via the popup's '📋 View VSCO
-      // archive log' button) preserves per-error details, so we
-      // don't need to leave the tab open. Leaving tabs open used to
-      // stall the sequential sweep chain at the first failure.
+      // archive log' button) preserves per-error details.
       try { chrome.runtime.sendMessage({ type: "close-my-tab" }); } catch (_) {}
     } finally {
       btn.dataset.running = "0";
