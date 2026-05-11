@@ -367,12 +367,11 @@
   async function _scrollAllImagesIntoView() {
     _collectedMedia = new Map();
     _harvestVisibleMedia();
-    // 20 passes ≈ 7-10s with the fast cadence. Enough to scroll
-    // through ~250 tiles after one Load More click before bailing.
-    // Galleries deeper than that are rare; for the few that are
-    // truly massive, bump this. Previously 5 — turned out to be too
-    // tight on chloee-fan-sized profiles (~200 photos).
-    const MAX_PASSES = 20;
+    // 60 passes × ~400ms = ~25s budget. Handles deeply paginated
+    // galleries (chloee-fan = 206 tiles needs ~40 passes after Load
+    // More). Loop still exits early via 3-stable-passes rule when
+    // the gallery is exhausted, so small profiles still finish fast.
+    const MAX_PASSES = 60;
     let lastHeight = 0;
     let stable = 0;
     let loadMoreClicks = 0;
@@ -527,7 +526,11 @@
   //     stale entries can't lie in wait and ambush a future tab.
   const QUEUE_TTL_MS = 10 * 60 * 1000;
   async function _maybeAutoArchive() {
-    if (!chrome.extension?.inIncognitoContext) return;
+    // Removed the prior 'incognito only' guard — the queue match
+    // itself is the primary gate, and we now support non-incognito
+    // archive flows (faster, no debugger infobar). The 10-min TTL
+    // ensures a stale queue entry can't ambush an unrelated tab
+    // weeks later.
     const user = _vscoUserFromPath();
     if (!user) return;
     const canonical = `https://vsco.co/${user}/gallery`;

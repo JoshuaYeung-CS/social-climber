@@ -459,23 +459,6 @@ async function _vscoSweepAdvance(windowId) {
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name.startsWith("vsco-tab-grace-")) {
-    const tabId = parseInt(alarm.name.slice("vsco-tab-grace-".length), 10);
-    if (!isNaN(tabId)) {
-      // Look up the window before removing so we can advance the
-      // sweep without depending on the tabs.onRemoved listener
-      // (which sees an undefined windowId on alarm-driven closes
-      // in some Chrome versions).
-      let windowId = null;
-      try {
-        const t = await chrome.tabs.get(tabId);
-        windowId = t?.windowId;
-      } catch (_) { /* tab already gone, fine */ }
-      try { await chrome.tabs.remove(tabId); } catch (_) {}
-      if (windowId != null) await _vscoSweepAdvance(windowId);
-    }
-    return;
-  }
   if (alarm.name === SCHEDULE_ALARM) {
     await _onScheduledExportFire();
     // Re-arm with a fresh random interval. We dropped periodInMinutes
@@ -1125,9 +1108,6 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
   }
   // Skip if the whole window is closing (user aborted the sweep)
   if (removeInfo && removeInfo.isWindowClosing) return;
-  // Cancel any pending grace alarm — tab's already gone so the alarm
-  // would be a no-op anyway, but cleaning up avoids alarm-spam.
-  try { await chrome.alarms.clear(`vsco-tab-grace-${tabId}`); } catch (_) {}
   if (removeInfo && removeInfo.windowId != null) {
     await _vscoSweepAdvance(removeInfo.windowId);
   }
@@ -1272,13 +1252,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "close-my-tab") {
     const tabId = sender?.tab?.id;
     if (tabId != null) {
-      // 60-second grace before the tab closes so the user can copy
-      // the log / inspect anything mid-flight. chrome.alarms survives
-      // SW eviction; plain setTimeout would die if the SW idles out.
-      // The actual sweep-advancement (open next URL) happens in the
-      // chrome.tabs.onRemoved listener — so manually closing the tab
-      // early also advances the chain.
-      chrome.alarms.create(`vsco-tab-grace-${tabId}`, { delayInMinutes: 1 });
+      // Brief grace before the tab closes — enough to read the
+      // overlay summary, not so long that a 6-profile sweep drags
+      // for minutes. chrome.alarms minimum delay in MV3 is 30s in
+      // production but unpacked / dev allows shorter; for an
+      // unpacked extension we just use a setTimeout. (Fine because
+      // 10s is well under the SW idle-eviction threshold.)
+      setTimeout(() => {
+        chrome.tabs.remove(tabId).catch(() => {});
+      }, 10000);
     }
     sendResponse({ ok: true });
     return false;

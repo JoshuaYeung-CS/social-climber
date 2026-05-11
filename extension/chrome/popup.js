@@ -227,6 +227,152 @@ async function checkTrackerReachable(url) {
   }
 }
 
+// ---------- VSCO queue ----------
+// Persistent list of VSCO usernames the user wants to archive later.
+// Mirrors the IG archive runner's add/list/run-from-queue pattern but
+// stays inside the popup — no background runner, no scheduler. Click
+// 'Run queue' to open the first profile in a window (incognito or
+// normal) and let the sequential-sweep machinery walk through all of
+// them.
+
+// Parse "@user", "vsco.co/user", or a full /gallery URL to a bare
+// handle. Returns null if the input doesn't look like a VSCO handle.
+const VSCO_RESERVED = new Set([
+  "m", "spaces", "studio", "feed", "search", "discover", "explore",
+  "settings", "account", "login", "join", "user", "users",
+  "membership", "about", "privacy", "terms", "help", "legal",
+  "ai-lab", "blog", "stories", "support", "company",
+  "products", "solutions", "resources", "downloads", "campaigns",
+]);
+function _vscoParseHandle(raw) {
+  if (!raw) return null;
+  let s = String(raw).trim();
+  if (!s) return null;
+  if (s.startsWith("@")) s = s.slice(1);
+  const m = s.match(/^(?:https?:\/\/)?(?:www\.)?vsco\.co\/([A-Za-z0-9._-]{1,40})/i);
+  if (m) s = m[1];
+  if (!/^[A-Za-z0-9._-]{1,40}$/.test(s)) return null;
+  if (VSCO_RESERVED.has(s.toLowerCase())) return null;
+  return s;
+}
+
+async function _getVscoQueue() {
+  const s = await chrome.storage.local.get(["vscoQueue"]).catch(() => ({}));
+  return Array.isArray(s.vscoQueue) ? s.vscoQueue : [];
+}
+async function _setVscoQueue(list) {
+  await chrome.storage.local.set({ vscoQueue: list }).catch(() => {});
+}
+
+async function renderVscoQueue() {
+  const list = await _getVscoQueue();
+  const ul = el("vsco-queue-list");
+  if (!ul) return;
+  ul.innerHTML = "";
+  for (const handle of list) {
+    const li = document.createElement("li");
+    li.style.cssText = "display:flex; align-items:center; gap:6px;";
+    const name = document.createElement("span");
+    name.textContent = "@" + handle;
+    name.style.flex = "1";
+    li.appendChild(name);
+    const del = document.createElement("button");
+    del.textContent = "✕";
+    del.title = "Remove from queue";
+    del.style.cssText = "background:transparent; border:0; color:var(--muted); cursor:pointer; font-size:14px; padding:0 4px;";
+    del.addEventListener("click", async () => {
+      const q = await _getVscoQueue();
+      const next = q.filter((h) => h.toLowerCase() !== handle.toLowerCase());
+      await _setVscoQueue(next);
+      renderVscoQueue();
+    });
+    li.appendChild(del);
+    ul.appendChild(li);
+  }
+  const sum = el("vsco-queue-summary-collapsed");
+  if (sum) sum.textContent = list.length ? `${list.length} queued` : "empty";
+}
+
+function initVscoQueueControls() {
+  const addBtn = el("vsco-queue-add-btn");
+  const input = el("vsco-queue-add-input");
+  const addCurrentBtn = el("vsco-queue-add-current");
+  const runBtn = el("vsco-queue-run");
+  if (!addBtn || !input || !runBtn) return;
+
+  async function addHandles(raws) {
+    const queue = await _getVscoQueue();
+    const seen = new Set(queue.map((h) => h.toLowerCase()));
+    let added = 0;
+    for (const r of raws) {
+      const h = _vscoParseHandle(r);
+      if (h && !seen.has(h.toLowerCase())) {
+        queue.push(h);
+        seen.add(h.toLowerCase());
+        added += 1;
+      }
+    }
+    await _setVscoQueue(queue);
+    renderVscoQueue();
+    return added;
+  }
+
+  addBtn.addEventListener("click", async () => {
+    const added = await addHandles([input.value]);
+    if (added) {
+      input.value = "";
+    } else {
+      addBtn.textContent = "Invalid";
+      setTimeout(() => { addBtn.textContent = "Add"; }, 1000);
+    }
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); addBtn.click(); }
+  });
+
+  addCurrentBtn.addEventListener("click", async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const handle = _vscoParseHandle(tab?.url || "");
+    if (!handle) {
+      addCurrentBtn.textContent = "Not a VSCO tab";
+      setTimeout(() => { addCurrentBtn.textContent = "📷 Add current VSCO tab"; }, 1500);
+      return;
+    }
+    await addHandles([handle]);
+    addCurrentBtn.textContent = `Added @${handle} ✓`;
+    setTimeout(() => { addCurrentBtn.textContent = "📷 Add current VSCO tab"; }, 1500);
+  });
+
+  runBtn.addEventListener("click", async () => {
+    const queue = await _getVscoQueue();
+    if (!queue.length) {
+      runBtn.textContent = "Queue empty";
+      setTimeout(() => { runBtn.textContent = "▶ Run queue"; }, 1500);
+      return;
+    }
+    const useIncognito = !!el("vsco-queue-incognito")?.checked;
+    if (useIncognito) {
+      let allowed = true;
+      try { allowed = await chrome.extension.isAllowedIncognitoAccess(); } catch (_) {}
+      if (!allowed) {
+        runBtn.textContent = "Allow Incognito first";
+        setTimeout(() => { runBtn.textContent = "▶ Run queue"; }, 2000);
+        return;
+      }
+    }
+    // Write the auto-archive queue + sweep window marker, then open
+    // the first URL. The SW's tabs.onRemoved listener advances the
+    // chain from there — same machinery as the open-tabs sweep.
+    const urls = queue.map((h) => `https://vsco.co/${h}/gallery`);
+    await chrome.storage.local.set({
+      vscoAutoArchiveQueue: urls.reduce((o, u) => { o[u] = Date.now(); return o; }, {}),
+    });
+    const win = await chrome.windows.create({ incognito: useIncognito, url: urls[0] });
+    await chrome.storage.local.set({ vscoSweepWindowId: win.id });
+    runBtn.textContent = `▶ Running (${queue.length})`;
+  });
+}
+
 // Wire every .card-toggle: clicking flips aria-expanded, which the CSS
 // uses to hide the sibling .card-body. State persists per-card in
 // chrome.storage.local under "collapse:<key>" so cards stay collapsed
@@ -284,6 +430,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   renderExportStats();
   renderArchiveRunner();
   initArchiveRunnerControls();
+  renderVscoQueue();
+  initVscoQueueControls();
 
   el("run-export").addEventListener("click", () => {
     // Delegate to the background SW: it opens the wizard tab, captures

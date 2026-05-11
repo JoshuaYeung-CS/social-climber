@@ -84,6 +84,31 @@
     <button class="secondary" id="archive-vsco" style="margin-top:6px" title="One-click private archive of every open vsco.co profile tab. Opens them in a fresh incognito window (no cookies, no logged-in session), each tab scrolls + archives itself + closes. Requires 'Allow in Incognito' on this extension. For IP-level anonymity, run a VPN — the browser can't hide your IP from VSCO's CDN.">🕶️ Archive all VSCO tabs (private)</button>
     <button class="secondary" id="view-vsco-log" style="margin-top:6px" title="Show the last few VSCO archive runs and any per-item errors. Useful when tabs auto-close before you can read the failure messages.">📋 View VSCO archive log</button>
     <div id="vsco-tabs-result" class="muted small" style="margin-top:6px; display:none;"></div>
+  </section>
+
+  <section class="card collapsible" id="vsco-queue-card">
+    <button type="button" class="card-toggle" data-collapse="vsco-queue" aria-expanded="false">
+      <h2>📷 VSCO queue</h2>
+      <span class="card-summary muted small" id="vsco-queue-summary-collapsed"></span>
+      <span class="card-chevron" aria-hidden="true">▾</span>
+    </button>
+    <div class="card-body">
+      <p class="muted small">Save VSCO usernames to archive later. "Run" opens each one sequentially in a fresh window (incognito or normal) and archives the full gallery before moving to the next. 10s grace between profiles — close a tab early with cmd+w to skip ahead.</p>
+      <div class="archive-add-row" style="margin-top:6px; display:flex; gap:6px; align-items:center;">
+        <input type="text" id="vsco-queue-add-input" placeholder="@username or vsco.co/<user>" style="flex:1" autocomplete="off" />
+        <button class="secondary" id="vsco-queue-add-btn" style="white-space:nowrap;">Add</button>
+      </div>
+      <button class="secondary" id="vsco-queue-add-current" style="margin-top:6px" title="Pick up the VSCO profile URL from the currently-active tab.">📷 Add current VSCO tab</button>
+      <ul id="vsco-queue-list" class="export-history" style="margin-top:6px; max-height:140px;"></ul>
+      <div class="schedule-row" style="margin-top:6px;">
+        <label class="schedule-toggle">
+          <input type="checkbox" id="vsco-queue-incognito" />
+          <span>Run in incognito</span>
+        </label>
+        <span class="schedule-status muted small" style="font-size:10px;">(privacy vs. speed)</span>
+      </div>
+      <button class="primary" id="vsco-queue-run" style="margin-top:6px">▶ Run queue</button>
+    </div>
     <button class="secondary" id="copy-debug-log" style="margin-top:6px" title="Copy the recent [IG Tracker] console output to your clipboard">📋 Copy debug log</button>
   </section>
 
