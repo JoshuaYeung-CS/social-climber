@@ -1218,11 +1218,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // closed (content scripts can't close their own tab directly).
   if (msg.type === "close-my-tab") {
     const tabId = sender?.tab?.id;
-    if (tabId != null) {
-      // Tiny delay so the user can see "Done" before the tab vanishes
-      // — same UX pattern as the wizard's post-finish close.
-      setTimeout(() => chrome.tabs.remove(tabId).catch(() => {}), 1500);
-    }
+    const windowId = sender?.tab?.windowId;
+    (async () => {
+      // Brief delay so the overlay's "Done" line is readable before
+      // the tab vanishes. Matches the wizard's post-finish UX.
+      await new Promise((r) => setTimeout(r, 1500));
+      if (tabId != null) {
+        try { await chrome.tabs.remove(tabId); } catch (_) {}
+      }
+      // VSCO sweep continuation: if there's another queued URL,
+      // open it in the same incognito window. Sequential = each
+      // tab runs foregrounded = no background-throttling.
+      try {
+        const s = await chrome.storage.local.get(["vscoAutoArchiveQueue"]);
+        const queue = s.vscoAutoArchiveQueue;
+        if (!queue || typeof queue !== "object") return;
+        const TTL = 10 * 60 * 1000;
+        const now = Date.now();
+        // Find the next fresh URL in insertion order
+        let nextUrl = null;
+        for (const [u, ts] of Object.entries(queue)) {
+          if (ts && (now - ts) <= TTL) { nextUrl = u; break; }
+        }
+        if (nextUrl && windowId != null) {
+          await chrome.tabs.create({ windowId, url: nextUrl, active: true });
+        }
+      } catch (_) { /* best-effort */ }
+    })();
     sendResponse({ ok: true });
     return false;
   }

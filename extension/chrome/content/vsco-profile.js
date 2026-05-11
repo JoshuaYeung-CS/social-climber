@@ -568,19 +568,13 @@
       _updateProgress("Loading gallery…", 0, 0, 0);
       await _scrollAllImagesIntoView();
       const r = await archiveCurrentProfile();
-      // Only close if every item landed cleanly. Any failures, leave
-      // the tab open so the user can inspect — the in-page overlay
-      // shows the summary and devtools console has the per-item log.
-      // The structured log also lives in chrome.storage.local now so
-      // the popup can read it after this tab is gone.
-      if (r && r.ok && r.failed === 0 && r.saved > 0) {
-        try { chrome.runtime.sendMessage({ type: "close-my-tab" }); } catch (_) {}
-      } else {
-        _updateProgress(
-          `Tab kept open — ${r ? (r.failed || 0) : "?"} failed. Check the popup's VSCO log.`,
-          r ? r.saved : 0, r ? r.failed : 0, r ? r.skipped : 0, /*done=*/true,
-        );
-      }
+      // Always close + advance the sweep chain — even on partial
+      // failure. The structured log in chrome.storage.local
+      // (vscoArchiveLog, viewable via the popup's '📋 View VSCO
+      // archive log' button) preserves per-error details, so we
+      // don't need to leave the tab open. Leaving tabs open used to
+      // stall the sequential sweep chain at the first failure.
+      try { chrome.runtime.sendMessage({ type: "close-my-tab" }); } catch (_) {}
     } finally {
       btn.dataset.running = "0";
       btn.textContent = "📥 Archive to IG Tracker";
