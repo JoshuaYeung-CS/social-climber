@@ -397,6 +397,71 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   });
 
+  // List + copy URLs of every open vsco.co tab across ALL windows.
+  // Filters to canonical profile/gallery shapes — vsco.co/<user> or
+  // vsco.co/<user>/gallery — so vsco.co/about / /spaces / /studio etc.
+  // are skipped. Output is one URL per line ready to paste into an
+  // incognito-window address bar (one paste per tab). Also lists the
+  // detected usernames inline in the popup so the user can sanity-check
+  // before pasting.
+  el("list-vsco-tabs").addEventListener("click", async () => {
+    const result = el("vsco-tabs-result");
+    result.style.display = "block";
+    result.textContent = "scanning tabs…";
+    try {
+      const tabs = await chrome.tabs.query({});
+      // Reserves match the content-script's RESERVED set so we don't
+      // treat e.g. vsco.co/studio as a profile.
+      const RESERVED = new Set([
+        "m", "spaces", "studio", "feed", "search", "discover", "explore",
+        "settings", "account", "login", "join", "user", "users",
+        "membership", "about", "privacy", "terms", "help", "legal",
+        "ai-lab", "blog", "stories", "support", "company",
+        "products", "solutions", "resources", "downloads", "campaigns",
+      ]);
+      const seen = new Set();
+      const matches = [];
+      for (const t of tabs) {
+        const url = t.url || "";
+        const m = url.match(/^https?:\/\/(?:www\.)?vsco\.co\/([A-Za-z0-9._-]{1,40})(?:\/(?:gallery)?)?(?:\?|#|$)/i);
+        if (!m) continue;
+        const handle = m[1];
+        if (RESERVED.has(handle.toLowerCase())) continue;
+        if (seen.has(handle.toLowerCase())) continue;
+        seen.add(handle.toLowerCase());
+        matches.push({ handle, url: `https://vsco.co/${handle}/gallery` });
+      }
+      if (!matches.length) {
+        result.textContent = "no vsco.co tabs open. Open some profile tabs first.";
+        return;
+      }
+      const text = matches.map((m) => m.url).join("\n") + "\n";
+      try { await navigator.clipboard.writeText(text); }
+      catch (_) { /* clipboard may fail in some popup contexts */ }
+      // Handles can only contain [A-Za-z0-9._-] per the regex so HTML
+      // escaping isn't strictly needed, but textContent on a fresh
+      // <div> per row is the safe path either way.
+      result.innerHTML = "";
+      const head = document.createElement("div");
+      head.innerHTML = `<strong>${matches.length} VSCO tab${matches.length === 1 ? "" : "s"}</strong> — URLs copied to clipboard.`;
+      result.appendChild(head);
+      const list = document.createElement("div");
+      list.style.cssText = "margin-top:6px; max-height:160px; overflow-y:auto; font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.5;";
+      for (const m of matches) {
+        const row = document.createElement("div");
+        row.textContent = "@" + m.handle;
+        list.appendChild(row);
+      }
+      result.appendChild(list);
+      const hint = document.createElement("div");
+      hint.style.marginTop = "6px";
+      hint.textContent = "Paste into an incognito window (one URL per tab) and click the 📥 Archive button on each.";
+      result.appendChild(hint);
+    } catch (e) {
+      result.textContent = `failed: ${e?.message || e}`;
+    }
+  });
+
   el("copy-debug-log").addEventListener("click", async () => {
     // Pull the [IG Tracker] log out of the active tab's content
     // script. We don't know up front whether we're on instagram.com
