@@ -287,17 +287,15 @@
     return { ok: true, saved, failed, skipped, total: items.length };
   }
 
-  // Find a "Load more" pagination button. VSCO's gallery sometimes
-  // renders the button as a <button>, sometimes as a <div role=button>,
-  // and the visible-only check that used to be here failed when the
-  // button was offscreen (rect 0×0) — which is the common case for
-  // long galleries. New strategy: scan everything that looks
-  // button-shaped, match exact "load more" text (case-insensitive),
-  // ignore visibility, and let the caller scrollIntoView before
-  // clicking. Skip our own overlay.
+  // Find a "Load more" pagination button. VSCO ships its own design
+  // system ("grain"), and the pagination button is a custom element
+  // <grain-button>Load more</grain-button> — not a real <button> or
+  // <a>. Standard CSS selectors never matched it. Include custom-
+  // element tag names + a couple of known utility classes alongside
+  // the canonical button-shaped selectors. Skip our own overlay.
   function _findLoadMoreButton() {
     const candidates = document.querySelectorAll(
-      'button, a, [role="button"], [data-testid*="load"], [class*="LoadMore"], [class*="loadmore"]'
+      'button, a, [role="button"], grain-button, [data-testid*="load"], [class*="LoadMore"], [class*="loadmore"]'
     );
     for (const el of candidates) {
       const text = (el.textContent || "").trim().toLowerCase();
