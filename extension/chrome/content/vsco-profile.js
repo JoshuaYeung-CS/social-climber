@@ -318,7 +318,10 @@
   // VSCO layouts that scroll inside a nested container rather than
   // the document body.
   function _scrollEverything() {
-    const step = Math.max(400, Math.floor(window.innerHeight * 0.9));
+    // 1.2 viewport per step — slightly faster than "perceived natural
+    // scroll" but still slow enough for the intersection observer to
+    // fire on every sentinel along the way.
+    const step = Math.max(500, Math.floor(window.innerHeight * 1.2));
     window.scrollBy({ top: step, behavior: "instant" });
     try {
       for (const el of document.querySelectorAll("*")) {
@@ -370,18 +373,23 @@
     let loadMoreClicks = 0;
     for (let i = 0; i < MAX_PASSES; i++) {
       _scrollEverything();
-      await new Promise((r) => setTimeout(r, 600));
+      // 350ms is the floor for VSCO's intersection observer to fire
+      // after a viewport-sized scroll — verified empirically; less
+      // than that and we race past tiles before they mount.
+      await new Promise((r) => setTimeout(r, 350));
       const harvested = _harvestVisibleMedia();
       const btn = _findLoadMoreButton();
       if (btn) {
         _updateProgress(`Loading more (pass ${i + 1}, ${_collectedMedia.size} so far)…`, 0, 0, 0);
         try {
           btn.scrollIntoView({ behavior: "instant", block: "center" });
-          await new Promise((r) => setTimeout(r, 200));
+          await new Promise((r) => setTimeout(r, 150));
           btn.click();
           loadMoreClicks += 1;
         } catch (_) { /* button gone between probe + click, retry */ }
-        await new Promise((r) => setTimeout(r, 1500));
+        // After Load More, give VSCO time to fetch + render the
+        // post-button content. Empirically ~800ms is enough.
+        await new Promise((r) => setTimeout(r, 800));
         _harvestVisibleMedia();
         stable = 0;
         lastHeight = document.body.scrollHeight;
