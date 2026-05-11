@@ -388,13 +388,35 @@
         _updateProgress(`Loading more (pass ${i + 1}, ${_collectedMedia.size} so far)…`, 0, 0, 0);
         try {
           btn.scrollIntoView({ behavior: "instant", block: "center" });
-          await new Promise((r) => setTimeout(r, 150));
-          btn.click();
-          loadMoreClicks += 1;
-        } catch (_) { /* button gone between probe + click, retry */ }
-        // After Load More, give VSCO time to fetch + render the
-        // post-button content. Empirically ~800ms is enough.
-        await new Promise((r) => setTimeout(r, 800));
+          await new Promise((r) => setTimeout(r, 200));
+          // VSCO's <grain-button> only paginates on a TRUSTED click
+          // (isTrusted=true). A plain btn.click() produces
+          // isTrusted=false and is silently ignored — verified by the
+          // user manually clicking and immediately seeing more tiles
+          // load while our automated click did nothing. Route through
+          // the SW's chrome.debugger trusted-click path (same one the
+          // Meta export wizard uses).
+          const r = btn.getBoundingClientRect();
+          const cx = Math.round(r.left + r.width / 2);
+          const cy = Math.round(r.top + r.height / 2);
+          const resp = await new Promise((resolve) => {
+            try {
+              chrome.runtime.sendMessage({ type: "trusted-click", x: cx, y: cy }, (r) => {
+                resolve(r || { ok: false });
+              });
+            } catch (_) { resolve({ ok: false }); }
+          });
+          if (resp && resp.ok) {
+            loadMoreClicks += 1;
+          } else {
+            // Best-effort fallback so the loop still produces some
+            // pagination even if the debugger attach fails.
+            try { btn.click(); } catch (_) {}
+          }
+        } catch (_) { /* button gone between probe + click */ }
+        // After Load More, give VSCO time to fetch + render the new
+        // batch before we scan again.
+        await new Promise((r) => setTimeout(r, 1000));
         _harvestVisibleMedia();
         stable = 0;
         lastHeight = document.body.scrollHeight;
