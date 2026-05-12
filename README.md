@@ -91,6 +91,9 @@ Diff- and state-based:
 - Acknowledge / "mark read" to clear new-flag noise
 
 ### Companion Chrome extension (Manifest V3)
+
+![Profile overlay live on an instagram.com profile](docs/overlay.jpg)
+
 - **Profile overlay** — when you visit any IG profile, an overlay panel surfaces this account's history from the tracker (mutual since X, ever-unfollowed-you flag, current tags, notes)
 - **Live page-state bridging** — content script reads the actual "Follow / Following / Requested" button state per profile and writes it to `profile_observations`. Closes the ~25-minute gap between IG exports so the home stats reflect "what you actually see in the app right now."
 - **Export wizard automation** — auto-fills Meta's data export wizard (JSON, followers+following, all-time, Google Drive) with your saved preferences. Survives the SPA's screen-switching dance, dispatches trusted clicks via `chrome.debugger`, handles the password challenge and the Google OAuth chooser.
