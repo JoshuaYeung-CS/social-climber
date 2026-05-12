@@ -469,9 +469,8 @@ def scan_now(force: bool = False, since_ms: int | None = None):
 @app.post("/api/reset-snapshots")
 def reset_snapshots(rescan: bool = True):
     """Wipe all snapshot-derived data and (optionally) trigger a fresh
-    scan. Tags, notes, follow-up queue, profile observations, and the
-    auto-archived media folder are PRESERVED — those are user-authored
-    or expensive to rebuild.
+    scan. Tags, notes, follow-up queue, and profile observations are
+    PRESERVED — those are user-authored or expensive to rebuild.
 
     Use this when the snapshot DB has gone funny (stuck errors that
     won't clear via re-scan, partial imports left ghost rows, etc.) and
@@ -1205,7 +1204,6 @@ def _home_compute():
             "unavailable": len(tags_mod.list_with_flag(conn, "unavailable")),
             "random_request": len(tags_mod.list_with_flag(conn, "random_request")),
             "now_public": len(tags_mod.list_with_flag(conn, "now_public")),
-            "need_archive": len(tags_mod.list_with_flag(conn, "need_archive")),
             "to_follow": len(tags_mod.list_with_flag(conn, "to_follow")),
             "star": len(tags_mod.list_with_flag(conn, "star")),
             "with_notes": conn.execute(
@@ -2334,7 +2332,7 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # Bucket lists. Skipped in pure mode — overlay rebuilds them from
         # current tags so a tag toggle doesn't invalidate the snapshot cache.
         if not _pure_only:
-            for flag in ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive", "to_follow", "star"):
+            for flag in ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "to_follow", "star"):
                 sections[flag] = sorted(r["username"] for r in tags_mod.list_with_flag(conn, flag))
 
         # ---- Cumulative / historical lists across ALL snapshots ----
@@ -2692,44 +2690,11 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
             "all_followers",
             "feeder_accounts",
         }
-        BUCKET_KINDS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive", "to_follow", "star"}
+        BUCKET_KINDS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "to_follow", "star"}
 
         # Tag state — empty in pure mode so pre-built rows have tag fields = False;
         # overlay attaches the real values per request.
         flagged = {} if _pure_only else tags_mod.all_flagged_usernames(conn)
-
-        # Set of usernames with at least one archived media file. Computed
-        # once via a cheap directory scan rather than re-statting per row.
-        # Used as a virtual tag (📦) on each row so the user can see at a
-        # glance which accounts have local archive content.
-        # Also captures the MOST RECENT mtime per username (the latest
-        # archive event) so list rows can display 'last archived 2h ago'.
-        # We sample the first non-dotfile we hit per dir for a cheap
-        # has_archive bool, then iterate the rest only to find the max
-        # mtime — bounded scan, no full rglob over thousands of files.
-        archived_users: set[str] = set()
-        archived_mtimes: dict[str, float] = {}
-        try:
-            for d in _MEDIA_DIR.iterdir():
-                if not d.is_dir():
-                    continue
-                latest = 0.0
-                for f in d.rglob("*"):
-                    if not f.is_file():
-                        continue
-                    if f.name.startswith("."):  # skip .archive_complete, .DS_Store
-                        continue
-                    try:
-                        m = f.stat().st_mtime
-                    except OSError:
-                        continue
-                    if m > latest:
-                        latest = m
-                if latest > 0:
-                    archived_users.add(d.name)
-                    archived_mtimes[d.name] = latest
-        except OSError:
-            pass
 
         reengaged = q.detect_reengagements(conn)
 
@@ -2952,11 +2917,6 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
                 "disabled": flagged.get(u, {}).get("disabled", False),
                 "unavailable": flagged.get(u, {}).get("unavailable", False),
                 "random_request": flagged.get(u, {}).get("random_request", False),
-                "need_archive": flagged.get(u, {}).get("need_archive", False),
-                # Virtual flag computed from filesystem (data/media/<u>/).
-                # Surfaced as a 📦 pill on the row.
-                "has_archive": u in archived_users,
-                "last_archived_ts": archived_mtimes.get(u),
                 "currently_following": u in sd.following,
                 "currently_follower": u in sd.followers,
                 "currently_pending": u in sd.pending,
@@ -3117,8 +3077,6 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
                     "sd_following": frozenset(sd.following),
                     "sd_pending": frozenset(sd.pending),
                     "sd_incoming_requests": frozenset(sd.incoming_requests),
-                    "archived_users": frozenset(archived_users),
-                    "archived_mtimes": dict(archived_mtimes),
                     "reengaged": frozenset(reengaged),
                     "privacy_map": privacy_map,
                     "alias_map": alias_map,
@@ -3180,8 +3138,8 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         return {"snapshot_id": sid, "previous_snapshot_id": prev_id, "sections": annotated}
 
 
-_TAG_FLAGS = ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive", "to_follow", "star")
-_BUCKET_KINDS_SET = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "need_archive", "to_follow", "star"}
+_TAG_FLAGS = ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "to_follow", "star")
+_BUCKET_KINDS_SET = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "to_follow", "star"}
 _BUCKET_PRIORITY = {"action": 0, "warn": 1, "pending": 2, "stopped": 3, "good": 4, "": 5}
 
 
@@ -3265,8 +3223,6 @@ def _build_bucket_row(ctx: dict, flagged: dict, u: str, kind: str) -> dict:
         "relationship_kind": rel_kind,
         "bucket_status": bs[0],
         "bucket_status_kind": bs[1],
-        "has_archive": u in ctx["archived_users"],
-        "last_archived_ts": ctx.get("archived_mtimes", {}).get(u),
     }
     # Tag flags from current state.
     for f in _TAG_FLAGS:
@@ -3695,26 +3651,6 @@ def _lookup_compute(username: str, profile_url: str):
                 currently_following = True
                 following_via_extension = True
 
-        # Archived-media presence — fast scan of data/media/<user>/.
-        # Cheap (one stat + one rglob); the result lets the extension
-        # overlay show a "📦 N items archived" line so the user knows
-        # they've already saved this account before. Counts files
-        # recursively so post_<id>/slide<N>.jpg etc. all roll up.
-        archived_count = 0
-        archived_bytes = 0
-        try:
-            mdir = _MEDIA_DIR / username
-            if mdir.is_dir():
-                for p in mdir.rglob("*"):
-                    if p.is_file():
-                        archived_count += 1
-                        try:
-                            archived_bytes += p.stat().st_size
-                        except OSError:
-                            pass
-        except OSError:
-            pass
-
         current_state = {
             "currently_following": currently_following,
             "currently_follower": currently_follower,
@@ -3723,8 +3659,6 @@ def _lookup_compute(username: str, profile_url: str):
             "pending_via_extension": pending_via_extension,
             "following_via_extension": following_via_extension,
             "observation": observation,
-            "archived_media_count": archived_count,
-            "archived_media_bytes": archived_bytes,
         }
 
         if summary is None:
@@ -3894,60 +3828,6 @@ def profile_observation(payload: dict = Body(...)):
 # is registered above (search "app.include_router(routes_profiles.router)").
 
 
-# ---------- generic media archive (posts / reels / stories) ----------
-
-_MEDIA_DIR = DB_PATH.parent / "media"
-
-
-_ARCHIVE_QUEUE_ORDER_FILE = DB_PATH.parent / "archive_queue_order.json"
-
-
-def _load_archive_queue_order() -> list[str]:
-    """User-specified order for the archive queue (drag-drop). Returns the
-    saved list of usernames; entries that are no longer in the queue get
-    silently filtered when applied."""
-    try:
-        import json as _json
-        return list(_json.loads(_ARCHIVE_QUEUE_ORDER_FILE.read_text()))
-    except (FileNotFoundError, OSError, ValueError):
-        return []
-
-
-def _save_archive_queue_order(usernames: list[str]) -> None:
-    import json as _json
-    _ARCHIVE_QUEUE_ORDER_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _ARCHIVE_QUEUE_ORDER_FILE.write_text(_json.dumps(usernames))
-
-
-def _media_path(username: str, media_id: str, ext: str) -> Path:
-    """Sanitized path for an archived media file under
-    data/media/<username>/<media_id>.<ext>. The media id may now
-    include forward-slashes so callers can group slides into a
-    sub-folder per post (e.g. `post_<id>/slide1`, which lands at
-    data/media/<user>/post_<id>/slide1.jpg). We still reject any
-    `..` segment and characters outside [A-Za-z0-9_-/] so the
-    resolved path can't escape the media dir."""
-    import re
-    if not re.fullmatch(r"[A-Za-z0-9._]{1,30}", username or ""):
-        raise HTTPException(status_code=400, detail="Invalid username.")
-    if not re.fullmatch(r"[A-Za-z0-9_\-/]{1,120}", media_id or ""):
-        raise HTTPException(status_code=400, detail="Invalid media id.")
-    # Reject path-traversal patterns explicitly even though the regex
-    # already excludes `.` — belt-and-braces.
-    parts = media_id.split("/")
-    if any(p in ("", "..", ".") for p in parts):
-        raise HTTPException(status_code=400, detail="Invalid media id (segment).")
-    if ext not in ("jpg", "png", "mp4", "webp"):
-        raise HTTPException(status_code=400, detail="Unsupported ext.")
-    user_dir = _MEDIA_DIR / username
-    target = user_dir / f"{media_id}.{ext}"
-    # Ensure the parent of the target is inside user_dir (resolve
-    # symlinks etc.) before returning. mkdir creates intermediate
-    # folders so nested groups Just Work.
-    target.parent.mkdir(parents=True, exist_ok=True)
-    return target
-
-
 @app.get("/api/tags/{flag}")
 def list_tags(flag: str):
     with db_conn() as conn:
@@ -3983,8 +3863,8 @@ def update_tag(payload: dict = Body(...)):
 def get_note(username: str):
     """Return the free-form note saved for an account, or empty string if
     there isn't one. The note lives in profile_tags.notes — a per-user
-    free-text scratchpad for things like 'has a vsco at …', 'met at X',
-    'do not unfollow until Y'."""
+    free-text scratchpad for things like 'met at X', 'do not unfollow
+    until Y'."""
     with db_conn() as conn:
         row = conn.execute(
             "SELECT notes FROM profile_tags WHERE username = ?", (username,)

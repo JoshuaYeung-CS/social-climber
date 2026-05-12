@@ -54,7 +54,7 @@
         <div class="scan-row">
           <button class="ghost-btn" id="scan-drive-btn" hidden>Scan Drive folder for new exports</button>
           <button class="ghost-btn" id="scan-drive-force-btn" hidden title="Re-extract every file regardless of fingerprint cache. Slower but catches files the fast scan incorrectly skipped.">Force re-scan all</button>
-          <button class="ghost-btn danger" id="reset-snapshots-btn" hidden title="Wipe all snapshot data and re-import every export from Drive. Tags, notes, and archived media are preserved.">Reset snapshots &amp; re-import</button>
+          <button class="ghost-btn danger" id="reset-snapshots-btn" hidden title="Wipe all snapshot data and re-import every export from Drive. Tags and notes are preserved.">Reset snapshots &amp; re-import</button>
         </div>
         <label class="auto-import-toggle hint" id="auto-import-toggle-row" hidden>
           <input type="checkbox" id="auto-import-toggle" />
@@ -132,11 +132,10 @@
         <div id="request-rejected-users" class="notes-users"></div>
       </div>
 
-      <!-- Imports moved here from its own tab (swapped with Archived
-           media which is now a top-level page). Same loader as the
-           snapshots view — list of imports, newest first, with delete
-           buttons. Hidden until at least one snapshot exists so the
-           empty-state on a fresh install isn't ugly. -->
+      <!-- Imports card on the home view — same loader as the snapshots
+           view: list of imports, newest first, with delete buttons.
+           Hidden until at least one snapshot exists so the empty-state
+           on a fresh install isn't ugly. -->
       <div class="card" id="imports-card" hidden>
         <div class="card-header">
           <h2>📦 Imports <span class="count-pill" id="imports-count">0</span></h2>

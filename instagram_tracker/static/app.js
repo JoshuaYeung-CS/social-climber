@@ -37,10 +37,9 @@ const _LONG_TIMEOUT_PATHS = new Set([
   // long timeout only matters on the first request after a server
   // restart or a snapshot import.
   "/api/lists",
-  // /api/home shares the same cumulative compute machinery and the
-  // archive-mtime scan over data/media/* — both grow with archive
-  // size. Snapshot counts in the thousands push cold-cache compute
-  // past 20s. Hot cache is sub-second.
+  // /api/home shares the same cumulative compute machinery. Snapshot
+  // counts in the thousands push cold-cache compute past 20s; hot
+  // cache is sub-second.
   "/api/home",
   // /api/activity-log iterates every snapshot transition to build
   // per-event rows; same cold-cache shape.
@@ -221,10 +220,9 @@ function showView(name, push = true) {
 // Tabs are anchors so the browser handles cmd/ctrl/shift-click and
 // middle-click natively (opens a new tab pointing at #<view> — the
 // receiving tab's bootstrapHistory routes to that view on load).
-// Plain click: intercept and SPA-route in place — EXCEPT for tabs
-// that don't carry a data-view (the Archived tab is a real link to
-// /archive, not a SPA view). Letting those through avoids the
-// "showView(undefined) → #undefined" bug.
+// Plain click: intercept and SPA-route in place. Tabs without a
+// data-view (real navigation links) fall through to the browser's
+// default to avoid the "showView(undefined) → #undefined" bug.
 $$(".tab").forEach((t) =>
   t.addEventListener("click", (e) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
@@ -394,8 +392,8 @@ async function loadHome() {
     $("#count-now_public").textContent = data.bucket_counts.now_public ?? 0;
     const notesCount = data.bucket_counts.with_notes ?? 0;
     $("#count-with_notes").textContent = notesCount;
-    // Hide the card entirely until at least one note exists, mirroring
-    // the Archived media card's "no clutter when empty" behavior.
+    // Hide the card entirely until at least one note exists so the
+    // home view stays clean on a fresh install.
     $("#notes-card").hidden = notesCount === 0;
     const notesUsersEl = $("#notes-users");
     if (notesUsersEl) {
@@ -502,15 +500,11 @@ async function loadHome() {
       ]
     );
 
-    loadArchiveQueueCard();
-    // Imports moved from its own tab to a home card (swapped slots
-    // with the archive-media card, which is now its own top-level
-    // page). loadSnapshots also handles count-pill + show/hide of
-    // the card based on whether any imports exist.
+    // loadSnapshots handles count-pill + show/hide of the imports
+    // card based on whether any imports exist.
     loadSnapshots();
-    // Home page is shorter than lists but a long Notes / archive
-    // queue can still push it taller than the viewport — restore the
-    // saved scroll if we have one.
+    // Home is shorter than lists, but a long Notes section can still
+    // push it past the viewport — restore the saved scroll if any.
     _tryRestoreScroll();
   } catch (e) {
     console.error("loadHome failed:", e);
@@ -529,149 +523,6 @@ async function loadHome() {
   }
 }
 
-// Archive queue card — shows what the auto-archive runner will visit
-// next, with add/remove. Hidden when both queue is empty AND no
-// favorites have been set up (no point showing an empty queue if
-// the user isn't using the runner).
-async function loadArchiveQueueCard() {
-  const card = $("#archive-queue-card");
-  if (!card) return;
-  let data;
-  try {
-    data = await api.get("/api/archive-queue");
-  } catch (e) {
-    card.hidden = true;
-    return;
-  }
-  const queue = data.queue || [];
-  const stats = data.stats || {};
-  const manualSet = new Set(data.manual_in_queue || []);
-  if (queue.length === 0 && !stats.favorite_total && !stats.manual_total) {
-    card.hidden = true;
-    return;
-  }
-  card.hidden = false;
-  const summary = [
-    `${queue.length} queued`,
-    stats.manual_in_queue ? `${stats.manual_in_queue} manual` : null,
-    stats.skipped_already_archived ? `${stats.skipped_already_archived} already archived` : null,
-    stats.skipped_user_cleared ? `${stats.skipped_user_cleared} you cleared` : null,
-    stats.skipped_tagged ? `${stats.skipped_tagged} skipped (tagged)` : null,
-  ].filter(Boolean).join(" · ");
-  $("#archive-queue-summary").textContent = summary;
-
-  const list = $("#archive-queue-list");
-  list.innerHTML = queue.map((u) => {
-    const isManual = manualSet.has(u);
-    const safeU = escapeHtml(u);
-    return `<li>
-      <span class="qbadge${isManual ? " manual" : ""}">${isManual ? "manual" : "favorite"}</span>
-      <span class="qname"><a href="https://www.instagram.com/${encodeURIComponent(u)}/" target="_blank" rel="noopener">@${safeU}</a></span>
-      <button class="qremove" data-username="${escapeAttr(u)}" data-manual="${isManual ? "1" : "0"}">Remove</button>
-    </li>`;
-  }).join("");
-
-  list.querySelectorAll(".qremove").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const u = btn.dataset.username;
-      const isManual = btn.dataset.manual === "1";
-      btn.disabled = true;
-      btn.textContent = "…";
-      try {
-        if (isManual) {
-          // Manual entries: just untag need_archive.
-          await api.post("/api/tags", { username: u, flag: "need_archive", value: false });
-        } else {
-          // Favorite entries: set archive_skip so they don't re-appear,
-          // without un-favoriting them.
-          await api.post("/api/tags", { username: u, flag: "archive_skip", value: true });
-        }
-        await loadArchiveQueueCard();
-      } catch (e) {
-        btn.disabled = false;
-        btn.textContent = "Failed";
-        setTimeout(() => { btn.textContent = "Remove"; }, 1500);
-      }
-    });
-  });
-}
-
-async function _archiveQueueAdd() {
-  const input = $("#archive-queue-add-input");
-  const btn = $("#archive-queue-add-btn");
-  const u = (input.value || "").trim().replace(/^@/, "");
-  if (!u) return;
-  btn.disabled = true;
-  btn.textContent = "Adding…";
-  try {
-    // If the account was previously archive_skip'd, clear that too so
-    // it actually re-enters the queue.
-    await api.post("/api/tags", { username: u, flag: "archive_skip", value: false });
-    await api.post("/api/tags", { username: u, flag: "need_archive", value: true });
-    btn.textContent = "Added ✓";
-    input.value = "";
-    setTimeout(() => { btn.textContent = "Add"; btn.disabled = false; loadArchiveQueueCard(); }, 700);
-  } catch (e) {
-    btn.textContent = "Failed";
-    setTimeout(() => { btn.textContent = "Add"; btn.disabled = false; }, 1500);
-  }
-}
-document.addEventListener("DOMContentLoaded", () => {
-  const btn = $("#archive-queue-add-btn");
-  const input = $("#archive-queue-add-input");
-  if (btn) btn.addEventListener("click", _archiveQueueAdd);
-  if (input) input.addEventListener("keydown", (e) => { if (e.key === "Enter") _archiveQueueAdd(); });
-});
-
-// Surface the local media archive on the home view. Hidden entirely
-// when nothing has been auto-archived yet (the auto-archive setting
-// defaults off, so most users won't see this card).
-async function loadArchiveCard() {
-  const card = $("#archive-card");
-  if (!card) return;
-  try {
-    const r = await fetch("/api/media-summary");
-    if (!r.ok) { card.hidden = true; return; }
-    const data = await r.json();
-    if (!data.users || data.users.length === 0) { card.hidden = true; return; }
-    card.hidden = false;
-    // Promote to GB above 1024 MB so the header doesn't read
-    // '21977.0 MB' on multi-GB archives.
-    const fmtArchBytes = (n) => {
-      if (n >= 1024 * 1024 * 1024) return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
-      if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-      if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
-      return `${n} B`;
-    };
-    $("#archive-summary").textContent =
-      `${data.total_items} item${data.total_items === 1 ? "" : "s"} across ${data.users.length} account${data.users.length === 1 ? "" : "s"} · ${fmtArchBytes(data.total_bytes)}`;
-    // List rows match the notes / public-followback / private-accepted
-    // cards: username on the left, "<count> items · <size> · <when>"
-    // on the right. Each row links to /media/<username> in a new tab
-    // (real <a target="_blank"> so cmd/ctrl-click works without any
-    // JS interception). Server already sorts by latest_mtime desc, so
-    // most-recently archived accounts surface at the top.
-    const users = (data.users || []).slice().sort(
-      (a, b) => (b.latest_mtime || 0) - (a.latest_mtime || 0)
-    );
-    const fmtSize = fmtArchBytes;
-    $("#archive-users").innerHTML = users.map((u) => {
-      const size = fmtSize(u.bytes);
-      const when = fmtMtimeAgo(u.latest_mtime);
-      const href = `/media/${encodeURIComponent(u.username)}`;
-      const detail = `${u.count} item${u.count === 1 ? "" : "s"} · ${size}${when ? ` · ${when}` : ""}`;
-      return `<a class="notes-user" href="${escapeAttr(href)}" target="_blank" rel="noopener" title="${escapeAttr(u.username)} · open archive page">@${escapeHtml(u.username)} <span class="muted small">${escapeHtml(detail)}</span></a>`;
-    }).join("");
-  } catch {
-    card.hidden = true;
-  }
-}
-
-// Live-refresh the archive card + notes count every 15 seconds when
-// the home view is active. Updates only those two cards (not the
-// whole loadHome flow), so the user's scroll position and any open
-// modals are preserved. Driven by the visible/active-view check so
-// we don't pointlessly poll while the user is on Lists / Imports.
 // Calibration banner — top-right sticky notification that surfaces
 // post-import "calibrating data..." → "✓ snapshot calibrated" so the
 // user knows exactly when their imports have been fully incorporated
@@ -771,7 +622,6 @@ function _startLiveRefresh() {
     if (_renderedView !== "home") return;
     try {
       // Refresh just the imports card — cheap, no scroll impact.
-      // (Archive card moved to its own top-level page.)
       await loadSnapshots();
       // Also refresh the home summary's bucket counts (notes count
       // changes when you add/edit notes from the modal). Skip the
@@ -923,14 +773,14 @@ $("#watch-folder-downloads")?.addEventListener("click", async () => {
 });
 
 // Reset snapshots + auto re-import. Confirms first since this wipes
-// all derived snapshot tables. Tags, notes, and archived media are
+// all derived snapshot tables. Tags, notes, and follow-up queue are
 // preserved server-side. The result panel shows the same per-file
 // detail view as a normal scan, so the 2 errors (or whatever's left)
 // are visible inline.
 async function runReset() {
   const ok = window.confirm(
     "This will wipe all snapshot data (followers / following / pending / etc.) and re-import every export from Drive.\n\n" +
-    "Tags, notes, follow-up queue, and archived media are kept.\n\n" +
+    "Tags, notes, and follow-up queue are kept.\n\n" +
     "Continue?"
   );
   if (!ok) return;
@@ -1494,7 +1344,6 @@ async function openAccount(account, { resultId = "lookup-result", saveToQueue = 
     const data = await api.get(`/api/lookup?account=${encodeURIComponent(account)}`);
     const result = $(`#${resultId}`);
     result.innerHTML = renderLookup(data);
-    loadArchivedMediaForModal(data.username);
     loadAccountNote(data.username);
     bindTagToggles(result, data.username, data.tags);
     // Record on every successful lookup so the user can scroll back
@@ -1527,20 +1376,17 @@ function renderLookup(data) {
   const url = instagramUrl(data.username);
   if (!data.found) {
     // Even when the account isn't in any snapshot, the user may have
-    // saved a note for them OR archived media — show the full notes
-    // block + the archived-media block so those pieces don't silently
-    // disappear off the modal. The async loaders below this render
-    // populate them.
+    // saved a note for them — show the notes block so it doesn't
+    // silently disappear off the modal.
     return `
       <div class="account-detail">
         <h3>${escapeHtml(data.username)}</h3>
         <div class="url"><a href="${escapeAttr(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a></div>
         <p class="muted">Never seen in any snapshot.</p>
         ${renderTagToggles(data.tags)}
-        <div class="archived-media-block" data-username="${escapeAttr(data.username)}"></div>
         <div class="account-note-block" data-username="${escapeAttr(data.username)}">
           <h4 class="account-note-h">📝 Notes</h4>
-          <textarea class="account-note-input" data-username="${escapeAttr(data.username)}" placeholder="VSCO link, where you met, why you tagged them, etc."></textarea>
+          <textarea class="account-note-input" data-username="${escapeAttr(data.username)}" placeholder="where you met them, why you tagged them, etc."></textarea>
           <div class="account-note-actions">
             <button class="account-note-save" data-action="save-note" data-username="${escapeAttr(data.username)}">Save</button>
             <span class="account-note-status" data-username="${escapeAttr(data.username)}"></span>
@@ -1626,10 +1472,9 @@ function renderLookup(data) {
         ${data.first_requested_snapshot ? `<div class="row"><span class="key">First requested</span><span>#${data.first_requested_snapshot.snapshot_id} ${escapeHtml(cleanLabel(data.first_requested_snapshot.label))}</span></div>` : ""}
         ${data.last_requested_snapshot ? `<div class="row"><span class="key">Last requested</span><span>#${data.last_requested_snapshot.snapshot_id} ${escapeHtml(cleanLabel(data.last_requested_snapshot.label))}</span></div>` : ""}
       </div>
-      <div class="archived-media-block" data-username="${escapeAttr(data.username)}"></div>
       <div class="account-note-block" data-username="${escapeAttr(data.username)}">
         <h4 class="account-note-h">📝 Notes</h4>
-        <textarea class="account-note-input" data-username="${escapeAttr(data.username)}" placeholder="VSCO link, where you met, why you tagged them, etc."></textarea>
+        <textarea class="account-note-input" data-username="${escapeAttr(data.username)}" placeholder="where you met them, why you tagged them, etc."></textarea>
         <div class="account-note-actions">
           <button class="account-note-save" data-action="save-note" data-username="${escapeAttr(data.username)}">Save</button>
           <span class="account-note-status" data-username="${escapeAttr(data.username)}"></span>
@@ -1640,15 +1485,6 @@ function renderLookup(data) {
   `;
 }
 
-// Async loader for the archived-media gallery in the account modal.
-// Delegates to the shared ArchiveGallery module (archive-gallery.js)
-// which handles rendering, hierarchical select-all, and delete. The
-// same module powers the standalone /media/<username> full-page view.
-async function loadArchivedMediaForModal(username) {
-  const block = document.querySelector(`.archived-media-block[data-username="${cssEscape(username)}"]`);
-  if (!block) return;
-  if (window.ArchiveGallery) window.ArchiveGallery.mount(block, username);
-}
 
 function cssEscape(s) {
   if (typeof CSS !== "undefined" && CSS.escape) return CSS.escape(s);
@@ -1721,10 +1557,6 @@ async function loadAccountNote(username) {
     /* leave blank — note is non-critical */
   }
 }
-
-// Delete + bulk-select handlers for the archived-media gallery live
-// in archive-gallery.js so they're shared between the modal and the
-// standalone /media/<username> page.
 
 // One delegated handler at document level so both openAccount and
 // openAccountModal paths get save behavior without manual binding.
@@ -1962,7 +1794,6 @@ async function openAccountModal(username, push = true) {
     const data = await api.get(`/api/lookup?account=${encodeURIComponent(username)}`);
     $("#account-detail").innerHTML = renderLookup(data);
     bindTagToggles($("#account-detail"), data.username, data.tags);
-    loadArchivedMediaForModal(data.username);
     loadAccountNote(data.username);
     renderJourneyForModal(data.username, data.aliases || []);
   } catch (e) {
@@ -2030,7 +1861,7 @@ const LIST_DESCRIPTIONS = {
   unavailable:                  "Accounts where the extension landed on Instagram's 'Sorry, this page isn't available' state. Auto-clears if they reappear in your followers. Excluded from non-bucket lists.",
   random_request:               "Manual flag for incoming requests that look like spam / bots / random users. Excluded from 'real_requests' and other non-bucket lists.",
   now_public:                   "Accounts you've personally verified flipped from private to public. The historical pending evidence in your DB still says 'likely private', but you've checked their profile and confirmed they're now public. This tag overrides the privacy display to '🌐 public (you confirmed)' for those accounts. Use it for the rare flip case the inference can't detect on its own.",
-  with_notes:                   "Every account you've saved a note on (VSCO link, where you met, why you tagged them, etc.). Sourced directly from profile_tags.notes — does NOT require the account to currently follow you or be in your following list, so notes for accounts you've unfollowed (or who unfollowed you) stay discoverable. Disabled / unavailable / random_request tags don't filter this list either.",
+  with_notes:                   "Every account you've saved a note on. Sourced directly from profile_tags.notes — does NOT require the account to currently follow you or be in your following list, so notes for accounts you've unfollowed (or who unfollowed you) stay discoverable. Disabled / unavailable / random_request tags don't filter this list either.",
 };
 
 const LIST_KINDS = [
@@ -2344,7 +2175,7 @@ function exportCurrentListCsv() {
     "favorite", "star", "want_remove", "watchlist", "to_follow",
     "disabled", "unavailable", "random_request", "now_public",
     "followed_at", "they_followed_at", "requested_at", "incoming_requested_at",
-    "you_unfollowed_at", "last_seen_as_follower_at", "last_archived_at",
+    "you_unfollowed_at", "last_seen_as_follower_at",
   ];
   const rows = items.map((item) => ({
     username: item.username,
@@ -2372,7 +2203,6 @@ function exportCurrentListCsv() {
     incoming_requested_at: csvDateTimeFromUnix(item.incoming_ts),
     you_unfollowed_at: csvDateTimeFromUnix(item.unfollowed_ts || item.unfollowed_by_you_ts) || item.unfollowed_by_you_at || "",
     last_seen_as_follower_at: csvDateTimeFromUnix(item.last_followed_you_ts) || item.last_followed_you_at || "",
-    last_archived_at: csvDateTimeFromUnix(item.last_archived_ts),
   }));
   const csv = [headers.join(",")]
     .concat(rows.map((row) => headers.map((h) => csvCell(row[h])).join(",")))
@@ -2637,7 +2467,7 @@ async function openBulkNoteEditor(usernames) {
     <div class="modal-card bulk-note-card">
       <h3 class="bulk-note-title">📝 Add note to ${usernames.length} account${usernames.length === 1 ? "" : "s"}</h3>
       <div class="muted small bulk-note-targets">${escapeHtml(sample)}</div>
-      <textarea id="bulk-note-text" placeholder="e.g. met at SF meetup, do not unfollow until June, has VSCO at …"></textarea>
+      <textarea id="bulk-note-text" placeholder="e.g. met at SF meetup, do not unfollow until June, …"></textarea>
       <div class="bulk-note-mode">
         <label><input type="radio" name="bulk-note-mode" value="append" checked /> Append (preserve existing notes)</label>
         <label><input type="radio" name="bulk-note-mode" value="replace" /> Replace existing notes</label>
@@ -2984,30 +2814,7 @@ function renderListRow(item) {
 
   const tagBtn = (flag, sym, on) =>
     `<button class="row-tag${on ? " on" : ""}" data-row-flag="${flag}" title="${flag}">${sym}</button>`;
-  // 📦 = virtual flag computed server-side from data/media/<u>/. Read-only —
-  // can't toggle it from the row (clicking just opens the IG profile to view
-  // archived media). Has its own CSS class so it's visually distinct from
-  // togglable tags. Tooltip includes the last-archived relative time so
-  // the user can see at a glance when this account was last touched.
-  let archiveTitle = "has archived media — open the gallery from the modal";
-  if (item.last_archived_ts) {
-    const ago = _fmtRelativeFromUnix(item.last_archived_ts);
-    if (ago) archiveTitle = `last archived ${ago} — open the gallery from the modal`;
-  }
-  const archivePill = item.has_archive
-    ? `<span class="row-tag has-archive on" title="${escapeAttr(archiveTitle)}">📦</span>`
-    : "";
-  // Sub-line caption: "📦 last archived 2h ago". Only shown when there
-  // IS archived media (item.last_archived_ts present). Distinct from
-  // the per-row 📦 pill on the right edge — that pill is a tap target,
-  // this caption is informational so the timestamp is visible without
-  // having to hover.
-  if (item.last_archived_ts) {
-    const ago = _fmtRelativeFromUnix(item.last_archived_ts);
-    if (ago) parts.push(`📦 last archived ${ago}`);
-  }
   const tagButtons = `
-    ${archivePill}
     ${tagBtn("favorite", "★", item.favorite)}
     ${tagBtn("want_remove", "✦", item.want_remove)}
     ${tagBtn("watchlist", "↺", item.watchlist)}
@@ -3092,22 +2899,6 @@ function fmtAgo(days) {
   return `${Math.round(days / 365 * 10) / 10} yr ago`;
 }
 
-// Friendly relative time for an absolute mtime (seconds since epoch).
-// Used by the home archive list — minute / hour granularity within
-// the day so a freshly archived account reads as "just now" instead
-// of "today" alongside an account archived 12 hours ago.
-function fmtMtimeAgo(secs) {
-  if (!secs) return "";
-  const diffSec = Math.max(0, Date.now() / 1000 - secs);
-  if (diffSec < 60) return "just now";
-  if (diffSec < 3600) return `${Math.round(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.round(diffSec / 3600)}h ago`;
-  const days = Math.round(diffSec / 86400);
-  if (days === 1) return "yesterday";
-  if (days < 30) return `${days}d ago`;
-  if (days < 365) return `${Math.round(days / 30)} mo ago`;
-  return `${Math.round(days / 365 * 10) / 10} yr ago`;
-}
 
 function cleanLabel(label) {
   if (!label) return "";

@@ -157,51 +157,9 @@
   align-items: center;
   margin-top: 4px;
 }
-.igt-link-archive { color: #8f8f99; }
-.igt-link-archive:hover { color: #ffb454; }
-.igt-vault-btn {
-  display: block;
-  width: 100%;
-  background: rgba(255, 180, 84, 0.10);
-  border: 1px solid rgba(255, 180, 84, 0.35);
-  color: #ffb454;
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  margin-bottom: 8px;
-  transition: all 100ms ease;
-}
-/* Category pills above the Archive button. Off-state is muted-grey,
-   on-state matches the archive button's amber so it reads as "this
-   category will be included in the next Archive run". */
-.igt-cat-row {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-  margin-bottom: 6px;
-}
-.igt-cat-pill {
-  background: transparent;
-  border: 1px solid #2a2a30;
-  color: #8f8f99;
-  padding: 3px 7px;
-  border-radius: 999px;
-  font-size: 11px;
-  cursor: pointer;
-  transition: all 100ms ease;
-  white-space: nowrap;
-}
-.igt-cat-pill:hover { border-color: rgba(255, 180, 84, 0.55); color: #ffd089; }
-.igt-cat-pill.on {
-  background: rgba(255, 180, 84, 0.15);
-  border-color: rgba(255, 180, 84, 0.55);
-  color: #ffd089;
-}
 /* Account-type indicator next to the username — small inline pill,
-   matching the verified-check sizing. Business gets a slightly
-   warmer hue (matches the archive button), creator gets cool blue. */
+   matching the verified-check sizing. Business gets an amber hue,
+   creator gets cool blue. */
 .igt-acct-pill {
   display: inline-block;
   font-size: 10px;
@@ -221,11 +179,6 @@
   background: rgba(79, 140, 255, 0.10);
   border-color: rgba(79, 140, 255, 0.45);
   color: #90b6ff;
-}
-.igt-vault-btn:hover {
-  background: rgba(255, 180, 84, 0.18);
-  border-color: rgba(255, 180, 84, 0.55);
-  color: #ffd089;
 }
 .igt-flash {
   background: rgba(62, 207, 142, 0.15);

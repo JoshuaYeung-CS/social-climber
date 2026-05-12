@@ -1075,7 +1075,7 @@ function _findBackArrow() {
 }
 
 // Find the destination header row on the confirm modal — the box
-// containing text like "joshuajyeung • Instagram • Export to Device
+// containing text like "<your-ig-username> • Instagram • Export to Device
 // · Once". Used by the dest-fix when the chooseWhere chooser is
 // collapsed (Layout B) and we need to click the header to open it.
 //
@@ -1162,7 +1162,7 @@ function _findDestinationHeaderRow() {
 //   modal alongside the other rows. Click external service directly.
 //
 //   Layout B — chooser COLLAPSED: only the destination header
-//   ("joshuajyeung • Instagram • Export to Device · Once") is shown.
+//   ("<your-ig-username> • Instagram • Export to Device · Once") is shown.
 //   Clicking that header opens a "Choose where to export" sub-modal
 //   on top, which has the two buttons. Then click external service.
 //
@@ -2310,9 +2310,7 @@ async function runWizard() {
   try { chrome.runtime.sendMessage({ type: "wizard-detach-debugger" }); } catch (_) {}
   // Tell the SW the wizard finished so it can auto-close the tab
   // ~1 minute later. We give Meta a beat to fire any password prompt
-  // (the watchdog still listens for it) before closing — the close
-  // delay matches the auto-archive runner's post-completion delay
-  // for consistency.
+  // (the watchdog still listens for it) before closing.
   try { chrome.runtime.sendMessage({ type: "wizard-finished" }); } catch (_) {}
 }
 

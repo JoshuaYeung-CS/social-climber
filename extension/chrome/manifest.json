@@ -39,13 +39,6 @@
   "content_scripts": [
     {
       "matches": ["https://www.instagram.com/*"],
-      "js": ["content/ig-network-interceptor.js"],
-      "run_at": "document_start",
-      "world": "MAIN",
-      "all_frames": false
-    },
-    {
-      "matches": ["https://www.instagram.com/*"],
       "js": ["content/ig-profile.js"],
       "css": ["content/ig-profile.css"],
       "run_at": "document_idle"

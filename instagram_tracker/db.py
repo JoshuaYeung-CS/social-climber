@@ -90,8 +90,6 @@ CREATE TABLE IF NOT EXISTS profile_tags (
     unavailable_added_at TEXT,
     random_request INTEGER NOT NULL DEFAULT 0,
     random_request_added_at TEXT,
-    need_archive INTEGER NOT NULL DEFAULT 0,
-    need_archive_added_at TEXT,
     notes TEXT,
     profile_url TEXT,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -208,24 +206,6 @@ def connect(db_path: Path) -> sqlite3.Connection:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN now_public INTEGER NOT NULL DEFAULT 0")
     if "now_public_added_at" not in cols:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN now_public_added_at TEXT")
-    # need_archive: user-set "I want to archive this account" reminder.
-    # Independent of whether archived files exist on disk — flips on
-    # when the user marks intent, off when they clear it manually
-    # (the extension also auto-clears it once archived items appear,
-    # so the tag acts as a TODO list of accounts waiting to be saved).
-    if "need_archive" not in cols:
-        conn.execute("ALTER TABLE profile_tags ADD COLUMN need_archive INTEGER NOT NULL DEFAULT 0")
-    if "need_archive_added_at" not in cols:
-        conn.execute("ALTER TABLE profile_tags ADD COLUMN need_archive_added_at TEXT")
-    # archive_skip: explicit "do NOT include in the auto-archive
-    # queue" flag. Used by the home-page queue UI's Remove button so
-    # the user can take a favorited account off the queue without
-    # un-favoriting it. The runner endpoint excludes any account with
-    # this flag set even if it's also in favorites or need_archive.
-    if "archive_skip" not in cols:
-        conn.execute("ALTER TABLE profile_tags ADD COLUMN archive_skip INTEGER NOT NULL DEFAULT 0")
-    if "archive_skip_added_at" not in cols:
-        conn.execute("ALTER TABLE profile_tags ADD COLUMN archive_skip_added_at TEXT")
     # to_follow: user-set "I want to follow this account" bookmark. The
     # extension overlay's 👤 button toggles this. Surfaced on the home
     # page as its own bucket card so the user can scan their queue of
@@ -244,9 +224,9 @@ def connect(db_path: Path) -> sqlite3.Connection:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN star INTEGER NOT NULL DEFAULT 0")
     if "star_added_at" not in cols:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN star_added_at TEXT")
-    # Free-form per-account notes — the user can jot down a VSCO link,
-    # who introduced them, why they're tagged, etc. One row per username
-    # max; an empty/whitespace string is treated as no note.
+    # Free-form per-account notes — the user can jot down who introduced
+    # them, why they're tagged, etc. One row per username max; an
+    # empty/whitespace string is treated as no note.
     if "notes" not in cols:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN notes TEXT")
 

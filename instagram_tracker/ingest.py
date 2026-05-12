@@ -442,7 +442,7 @@ def _label_from_export_dir(ff: Path) -> str | None:
 
     Prefer FULL-precision (HH-MM-SS) timestamps over date-only ones.
     Newer Meta exports nest the data: `meta-2026-May-05-19-49-12/
-    instagram-joshuajyeung-2026-05-05-XYZ/connections/...`. Walking
+    instagram-<your-ig-username>-2026-05-05-XYZ/connections/...`. Walking
     up parents would stop at the inner `instagram-...-2026-05-05-XYZ`
     folder (which has a parseable date-only label) before reaching
     the outer `meta-...-19-49-12` (which has full HMS precision).

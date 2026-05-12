@@ -37,7 +37,7 @@ sys.path.insert(0, str(ROOT))
 # Pull the watch root from the same env var the watcher uses.
 WATCH_ROOT = Path(os.environ.get(
     "IG_WATCH_DIR",
-    "/Users/joshua/Library/CloudStorage/GoogleDrive-joshua.jiale.yeung@gmail.com/My Drive",
+    "$HOME/Library/CloudStorage/GoogleDrive-your-email@example.com/My Drive",
 )).expanduser()
 
 # Files we consider critical for a valid snapshot. Without these, the
