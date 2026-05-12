@@ -3828,7 +3828,7 @@ $("#activity-filter")?.addEventListener("input", () => {
 const HISTORY_SERIES = [
   { key: "followers",              label: "Followers",                color: "#4f8cff", on: true  },
   { key: "following",              label: "Following",                color: "#ffb454", on: true  },
-  { key: "mutuals",                label: "Mutuals",                  color: "#3ecf8e", on: true  },
+  { key: "mutuals",                label: "Mutuals",                  color: "#3ecf8e", on: false },
   { key: "pending",                label: "Pending (you sent)",       color: "#a78bfa", on: false },
   { key: "incoming",               label: "Pending (they sent)",      color: "#f472b6", on: false },
   { key: "cumulative_unfollowers", label: "Unfollowers (cumulative)", color: "#ff5e7a", on: false },
