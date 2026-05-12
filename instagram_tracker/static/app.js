@@ -3831,7 +3831,13 @@ const HISTORY_SERIES = [
   { key: "mutuals",                label: "Mutuals",                  color: "#3ecf8e", on: false },
   { key: "pending",                label: "Pending (you sent)",       color: "#a78bfa", on: false },
   { key: "incoming",               label: "Pending (they sent)",      color: "#f472b6", on: false },
-  { key: "cumulative_unfollowers", label: "Unfollowers (cumulative)", color: "#ff5e7a", on: false },
+  { key: "cumulative_unfollowers",   label: "Unfollowers (cumulative)",       color: "#ff5e7a", on: false },
+  // Diff-filter-only chip: governs the History detail panel's
+  // "You unfollowed" and "They removed you as a follower" blocks. No
+  // chart line (the timeline API doesn't carry a cumulative
+  // self-unfollow count); drawHistoryChart skips it automatically
+  // since the data isn't on the snapshot rows.
+  { key: "cumulative_you_unfollowed", label: "You unfollowed (cumulative)",     color: "#e0a87c", on: false },
   // Per-snapshot deltas — count of NEW entries since previous snapshot.
   // Off by default to keep the initial chart clean; tick the boxes to
   // overlay them. Useful for spotting follow-burst days vs. quiet ones,
@@ -3920,9 +3926,14 @@ function drawHistoryChart(snaps) {
   const W = 760, H = 280, PAD_L = 50, PAD_R = 16, PAD_T = 16, PAD_B = 40;
   const innerW = W - PAD_L - PAD_R, innerH = H - PAD_T - PAD_B;
 
-  const visible = HISTORY_SERIES.filter((s) => s.on);
+  // Diff-filter-only chips (no per-snapshot data column) get excluded
+  // from the chart but still apply to the detail panel below.
+  const visible = HISTORY_SERIES.filter((s) => s.on && (snaps.length === 0 || snaps[0][s.key] != null));
   if (visible.length === 0) {
-    $("#history-chart").innerHTML = `<div class="muted">Pick at least one series above.</div>`;
+    const anyOn = HISTORY_SERIES.some((s) => s.on);
+    $("#history-chart").innerHTML = anyOn
+      ? `<div class="muted">No chart line for the selected chips. The detail panel below still filters to your selection.</div>`
+      : `<div class="muted">Pick at least one chip above.</div>`;
     return;
   }
 
@@ -4163,27 +4174,32 @@ function shortDate(s) {
 // cards only render when at least one of their related series is
 // visible. Lets the user focus on "just unfollowers" or "just pending
 // activity" without scanning past unrelated blocks.
+// Strict 1-to-1 mapping: each diff block is governed by exactly one
+// chip, and each chip governs exactly one direction of count change.
+//   Followers chip                       → ↑ followers (new_followers)
+//   Unfollowers (cumulative) chip        → ↓ followers (they unfollowed + you removed)
+//   Following chip                       → ↑ following (new_following)
+//   You unfollowed (cumulative) chip     → ↓ following (you unfollowed + they removed you)
+//   Pending (you sent) chip              → both directions of pending
+// Mutuals / Pending (they sent) / all Δ chips are chart-only — they
+// have no mapping here, so they don't add or hide diff blocks.
 const HISTORY_DETAIL_BLOCK_TO_SERIES = {
-  new_followers:                ["followers", "mutuals", "new_followers"],
-  they_unfollowed_you:          ["followers", "mutuals", "cumulative_unfollowers"],
-  you_removed_as_follower:      ["followers", "mutuals"],
-  new_following:                ["following", "mutuals", "new_follows"],
-  you_unfollowed:               ["following", "mutuals", "cumulative_unfollowers"],
-  they_removed_you_as_follower: ["following", "mutuals"],
-  new_pending:                  ["pending", "new_outgoing_requests"],
-  resolved_pending:             ["pending", "new_follows"],
-  // Bonus kinds emitted by /api/diff(-range) beyond the eight headline
-  // blocks. Mapped explicitly so the strict "unmapped = hide" rule
-  // below doesn't accidentally surface them.
-  unfollowers_you_still_follow: ["followers", "following", "mutuals", "cumulative_unfollowers"],
-  new_recent_requests:          ["pending", "new_outgoing_requests"],
-  new_recently_unfollowed:      ["following", "cumulative_unfollowers"],
+  new_followers:                ["followers"],
+  they_unfollowed_you:          ["cumulative_unfollowers"],
+  you_removed_as_follower:      ["cumulative_unfollowers"],
+  new_following:                ["following"],
+  you_unfollowed:               ["cumulative_you_unfollowed"],
+  they_removed_you_as_follower: ["cumulative_you_unfollowed"],
+  new_pending:                  ["pending"],
+  resolved_pending:             ["pending"],
 };
+// Count cards follow the same strict rule: each card only shows when
+// its corresponding level chip is on.
 const HISTORY_DETAIL_COUNT_TO_SERIES = {
-  followers: ["followers", "new_followers"],
-  following: ["following", "new_follows"],
+  followers: ["followers"],
+  following: ["following"],
   mutuals:   ["mutuals"],
-  pending:   ["pending", "new_outgoing_requests"],
+  pending:   ["pending"],
 };
 function _historyVisibleSeriesKeys() {
   const on = HISTORY_SERIES.filter((s) => s.on).map((s) => s.key);
