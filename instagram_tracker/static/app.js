@@ -4168,10 +4168,16 @@ const HISTORY_DETAIL_BLOCK_TO_SERIES = {
   they_unfollowed_you:          ["followers", "mutuals", "cumulative_unfollowers"],
   you_removed_as_follower:      ["followers", "mutuals"],
   new_following:                ["following", "mutuals", "new_follows"],
-  you_unfollowed:               ["following", "mutuals"],
+  you_unfollowed:               ["following", "mutuals", "cumulative_unfollowers"],
   they_removed_you_as_follower: ["following", "mutuals"],
   new_pending:                  ["pending", "new_outgoing_requests"],
   resolved_pending:             ["pending", "new_follows"],
+  // Bonus kinds emitted by /api/diff(-range) beyond the eight headline
+  // blocks. Mapped explicitly so the strict "unmapped = hide" rule
+  // below doesn't accidentally surface them.
+  unfollowers_you_still_follow: ["followers", "following", "mutuals", "cumulative_unfollowers"],
+  new_recent_requests:          ["pending", "new_outgoing_requests"],
+  new_recently_unfollowed:      ["following", "cumulative_unfollowers"],
 };
 const HISTORY_DETAIL_COUNT_TO_SERIES = {
   followers: ["followers", "new_followers"],
@@ -4188,12 +4194,18 @@ function _historyVisibleSeriesKeys() {
 function _detailBlockShouldShow(blockKey, visible) {
   if (!visible) return true;
   const m = HISTORY_DETAIL_BLOCK_TO_SERIES[blockKey];
-  return !m || m.some((k) => visible.has(k));
+  // Strict: unmapped kinds are HIDDEN. Every legitimate kind needs an
+  // explicit entry in HISTORY_DETAIL_BLOCK_TO_SERIES above. Previously
+  // unmapped kinds fell through to "show," which leaked categories like
+  // new_recently_unfollowed into a Followers-only selection.
+  if (!m) return false;
+  return m.some((k) => visible.has(k));
 }
 function _detailCountShouldShow(countKey, visible) {
   if (!visible) return true;
   const m = HISTORY_DETAIL_COUNT_TO_SERIES[countKey];
-  return !m || m.some((k) => visible.has(k));
+  if (!m) return false;
+  return m.some((k) => visible.has(k));
 }
 
 // Tracks the most-recently-rendered detail panel so a series-checkbox
@@ -4256,6 +4268,9 @@ async function showHistoryDetail(idx, snaps) {
         they_removed_you_as_follower: "They removed you as a follower",
         new_pending: "New pending requests",
         resolved_pending: "Resolved pending",
+        unfollowers_you_still_follow: "Unfollowers you still follow",
+        new_recent_requests: "New outgoing requests (recent)",
+        new_recently_unfollowed: "Recently unfollowed",
       };
       const suppHtml = Object.entries(supp)
         .filter(([kind, users]) => users && users.length && _detailBlockShouldShow(kind, visible))
