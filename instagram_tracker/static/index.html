@@ -38,13 +38,6 @@
     <a class="tab" data-view="check" href="#check" role="tab">Check</a>
     <a class="tab" data-view="history" href="#history" role="tab">History</a>
     <a class="tab" data-view="activity" href="#activity" role="tab">Activity</a>
-    <!-- Archived media gets its own top-level page (the standalone /archive
-         view that already exists). Anchor with no data-view so the SPA
-         router doesn't try to swap views — browser does a real navigation,
-         which is what we want for this view (it has its own search, sort,
-         and bulk-select that don't need to live inside the SPA shell). -->
-    <a class="tab" href="/archive" role="tab">Archived</a>
-    <a class="tab" href="/vsco" role="tab">VSCO</a>
   </nav>
 
   <main id="main">
@@ -154,19 +147,6 @@
         </div>
       </div>
 
-      <div class="card" id="archive-queue-card" hidden>
-        <h2 style="display:flex; align-items:center; gap:8px;">
-          📥 Archive queue
-          <a href="/archive-queue" target="_blank" rel="noopener" class="card-open-link" title="Open the full-screen queue manager in a new tab">↗</a>
-        </h2>
-        <p class="muted small">Accounts the auto-archive runner will visit (favorites + manually-added). Add a username to queue it; remove takes it off the queue without un-favoriting. <a href="/archive-queue" target="_blank" rel="noopener">Open full-page manager ↗</a></p>
-        <div class="archive-queue-add-row">
-          <input type="text" id="archive-queue-add-input" placeholder="Add @username to queue" autocomplete="off" />
-          <button class="secondary" id="archive-queue-add-btn">Add</button>
-        </div>
-        <p class="muted small" id="archive-queue-summary"></p>
-        <ul id="archive-queue-list" class="archive-queue-list"></ul>
-      </div>
     </section>
 
     <!-- Lists view -->
@@ -306,7 +286,6 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="/static/archive-gallery.js?v=2"></script>
   <script src="/static/app.js?v=34"></script>
 </body>
 </html>

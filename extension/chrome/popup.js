@@ -209,7 +209,26 @@ function initScheduleControls(initialMinHours, initialMaxHours) {
   unitEl.addEventListener("change", persist);
 }
 
-function el(id) { return document.getElementById(id); }
+// el() resolves a DOM id with a permissive fallback: returns a no-op
+// Proxy when the element isn't present in this build. Lets handler
+// bindings for optional / build-conditional UI elements be written
+// inline without surrounding null checks; missing elements silently
+// no-op every method call.
+const _ELEMENT_NOOP = new Proxy(function () {}, {
+  get(_t, prop) {
+    if (prop === "addEventListener" || prop === "removeEventListener") return () => {};
+    if (prop === "classList") return { add() {}, remove() {}, toggle() {}, contains() { return false; } };
+    if (prop === "style") return new Proxy({}, { get: () => "", set: () => true });
+    if (prop === "dataset") return new Proxy({}, { get: () => "", set: () => true });
+    if (prop === "querySelectorAll") return () => [];
+    if (prop === "querySelector") return () => null;
+    if (prop === "appendChild" || prop === "removeChild" || prop === "remove") return () => {};
+    return undefined;
+  },
+  set() { return true; },
+  apply() { return undefined; },
+});
+function el(id) { return document.getElementById(id) || _ELEMENT_NOOP; }
 
 async function checkTrackerReachable(url) {
   const status = el("status");
