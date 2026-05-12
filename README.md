@@ -2,6 +2,8 @@
 
 **Personal-scale Instagram analytics. Local-first. Zero third parties.**
 
+![Social Climber — local web UI with the Chrome extension popup open](docs/home.png)
+
 A self-hosted analytics platform for your own Instagram account that turns Meta's static data exports into a queryable timeline. Stack: Python (FastAPI + SQLite), vanilla JavaScript single-page UI, and a Manifest V3 Chrome extension that automates the export workflow and overlays history onto live profile pages.
 
 Built to answer questions Instagram's UI deliberately doesn't:
