@@ -4,8 +4,3 @@ __pycache__/
 data/
 .DS_Store
 notes/
-
-# Vault — encrypted local archive. Never goes to git.
-*.sparsebundle/
-*.sparsebundle
-vault/data/
