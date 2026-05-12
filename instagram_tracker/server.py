@@ -1212,6 +1212,22 @@ def _home_compute():
             ).fetchone()["c"],
         }
 
+        # Fresh-install / empty-DB short-circuit. The relationship-breakdown
+        # block below assumes there's at least one snapshot to diff against;
+        # without that, return a minimal payload so the home view can render
+        # the import card + tag counts.
+        if latest is None:
+            return {
+                "summary": None,
+                "alerts": [],
+                "bucket_counts": bucket_counts,
+                "snapshot_count": 0,
+                "noted_users": [],
+                "public_followed_back": [],
+                "private_accepted_no_follow_back": [],
+                "request_dropped": [],
+            }
+
         # Public-followback / private-accepted-no-followback breakdowns.
         # The dashboard's mutuals total includes both kinds — these
         # carve out the subsets so the user can see who's actually
