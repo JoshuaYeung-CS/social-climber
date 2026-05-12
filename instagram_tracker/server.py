@@ -2228,12 +2228,28 @@ def get_diff(old: int | None = None, new: int | None = None):
         #      future state was producing empty 'they unfollowed' / 'they
         #      removed' sections in History even though the snapshot
         #      header showed -6 followers.
+        # Carve suppressed entries off into a parallel map so the
+        # History detail panel can render them as a muted "hidden — tagged
+        # gone" section. The main `sections` stay filtered so the alert
+        # / lists views keep their existing "don't bother me" behaviour;
+        # the History view consumes `suppressed_sections` explicitly when
+        # the user is investigating a specific snapshot transition.
+        suppressed_sections: dict[str, list[str]] = {}
         if suppressed:
+            for kind, users in sections.items():
+                hits = [u for u in users if u in suppressed]
+                if hits:
+                    suppressed_sections[kind] = hits
             sections = {
                 kind: [u for u in users if u not in suppressed]
                 for kind, users in sections.items()
             }
-        return {"old_snapshot_id": old_id, "new_snapshot_id": new_id, "sections": sections}
+        return {
+            "old_snapshot_id": old_id,
+            "new_snapshot_id": new_id,
+            "sections": sections,
+            "suppressed_sections": suppressed_sections,
+        }
 
 
 @app.get("/api/lists")

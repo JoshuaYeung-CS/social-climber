@@ -4177,6 +4177,35 @@ async function showHistoryDetail(idx, snaps) {
         ${block("New pending requests", sec.new_pending)}
         ${block("Resolved pending", sec.resolved_pending)}
       `;
+      // "Suppressed" section: transitions that DID happen at this
+      // snapshot but were hidden from the main blocks because the
+      // username is tagged unavailable / disabled / random. Surfaced
+      // here so the count-card deltas always reconcile with named
+      // people — "Followers -1" never leaves you wondering who.
+      const supp = d.suppressed_sections || {};
+      const SUPP_LABELS = {
+        new_followers: "New followers",
+        they_unfollowed_you: "They unfollowed you",
+        you_removed_as_follower: "You removed them as a follower",
+        new_following: "New following (you followed)",
+        you_unfollowed: "You unfollowed",
+        they_removed_you_as_follower: "They removed you as a follower",
+        new_pending: "New pending requests",
+        resolved_pending: "Resolved pending",
+      };
+      const suppHtml = Object.entries(supp)
+        .filter(([, users]) => users && users.length)
+        .map(([kind, users]) => {
+          const names = users.map((u) =>
+            `<span class="diff-name" data-username="${escapeAttr(u)}">${escapeHtml(u)}<a class="diff-link" href="https://www.instagram.com/${encodeURIComponent(u)}/" target="_blank" rel="noopener" title="Open on Instagram">↗</a></span>`
+          ).join(" ");
+          const label = SUPP_LABELS[kind] || kind;
+          return `<div class="diff-block muted"><strong>${escapeHtml(label)}</strong> <span class="muted small">— ${users.length} hidden (tagged unavailable/disabled/random)</span><div>${names}</div></div>`;
+        })
+        .join("");
+      if (suppHtml) {
+        diffHtml += `<hr style="margin:10px 0; border:0; border-top:1px solid var(--border, #2a2a30);" />${suppHtml}`;
+      }
       if (!diffHtml.trim()) {
         diffHtml = `<div class="muted">No follower/following/pending changes between #${prev.snapshot_id} and #${curr.snapshot_id}.</div>`;
       }
