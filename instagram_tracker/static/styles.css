@@ -767,6 +767,26 @@ code {
 .diff-block { margin: 8px 0; font-size: 13px; }
 .diff-block strong { color: var(--text); }
 .diff-name { display: inline-block; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; margin: 2px 2px 0 0; font-size: 12px; }
+.suppressed-footer {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.suppressed-footer > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 2px 0;
+}
+.suppressed-footer > summary::-webkit-details-marker { display: none; }
+.suppressed-footer > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 6px;
+  font-size: 10px;
+  transition: transform 100ms ease;
+}
+.suppressed-footer[open] > summary::before { transform: rotate(90deg); }
+.suppressed-footer-body { margin-top: 6px; }
 
 /* Activity log under History tab. Flat per-username feed, newest-first. */
 .activity-log { display: flex; flex-direction: column; gap: 0; max-height: 80vh; overflow-y: auto; padding-right: 4px; }

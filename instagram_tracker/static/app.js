@@ -4208,6 +4208,52 @@ function _detailCountShouldShow(countKey, visible) {
   return m.some((k) => visible.has(k));
 }
 
+// Display labels for the eight diff kinds the History detail panel
+// surfaces. Bonus diff-only kinds (unfollowers_you_still_follow,
+// new_recent_requests, new_recently_unfollowed) are intentionally
+// excluded — they never appear in the main blocks, so they shouldn't
+// appear in the suppressed footer either.
+const HISTORY_DETAIL_SUPP_LABELS = {
+  new_followers: "New followers",
+  they_unfollowed_you: "They unfollowed you",
+  you_removed_as_follower: "You removed them as a follower",
+  new_following: "New following (you followed)",
+  you_unfollowed: "You unfollowed",
+  they_removed_you_as_follower: "They removed you as a follower",
+  new_pending: "New pending requests",
+  resolved_pending: "Resolved pending",
+};
+
+// Render the "tagged unavailable/disabled/random" suppressed footer as
+// a single collapsed <details> block. Keeps the focused view clean but
+// preserves accountability — user can expand to reconcile the count
+// cards with named people. Series filter still applies.
+function _renderSuppressedFooter(suppressed, visible) {
+  if (!suppressed) return "";
+  const entries = Object.entries(suppressed).filter(
+    ([kind, users]) =>
+      users && users.length &&
+      HISTORY_DETAIL_SUPP_LABELS[kind] &&
+      _detailBlockShouldShow(kind, visible),
+  );
+  if (!entries.length) return "";
+  const totalHidden = entries.reduce((n, [, users]) => n + users.length, 0);
+  const body = entries.map(([kind, users]) => {
+    const names = users.map((u) =>
+      `<span class="diff-name" data-username="${escapeAttr(u)}">${escapeHtml(u)}<a class="diff-link" href="https://www.instagram.com/${encodeURIComponent(u)}/" target="_blank" rel="noopener" title="Open on Instagram">↗</a></span>`
+    ).join(" ");
+    const label = HISTORY_DETAIL_SUPP_LABELS[kind];
+    return `<div class="diff-block muted"><strong>${escapeHtml(label)}</strong> <span class="muted small">— ${users.length}</span><div>${names}</div></div>`;
+  }).join("");
+  return (
+    `<details class="suppressed-footer">` +
+    `<summary class="muted small">${totalHidden} hidden ` +
+    `(tagged unavailable / disabled / random) — click to show</summary>` +
+    `<div class="suppressed-footer-body">${body}</div>` +
+    `</details>`
+  );
+}
+
 // Tracks the most-recently-rendered detail panel so a series-checkbox
 // toggle (or any re-render trigger) can refresh it in place. The mode
 // distinguishes a single-snapshot click ("point") from a drag-selected
@@ -4256,35 +4302,12 @@ async function showHistoryDetail(idx, snaps) {
       `;
       // "Suppressed" section: transitions that happened at this snapshot
       // but were filtered out of the main blocks because the username is
-      // tagged unavailable / disabled / random. Respect the series filter
-      // here too so "show only unfollowers" stays focused.
-      const supp = d.suppressed_sections || {};
-      const SUPP_LABELS = {
-        new_followers: "New followers",
-        they_unfollowed_you: "They unfollowed you",
-        you_removed_as_follower: "You removed them as a follower",
-        new_following: "New following (you followed)",
-        you_unfollowed: "You unfollowed",
-        they_removed_you_as_follower: "They removed you as a follower",
-        new_pending: "New pending requests",
-        resolved_pending: "Resolved pending",
-        unfollowers_you_still_follow: "Unfollowers you still follow",
-        new_recent_requests: "New outgoing requests (recent)",
-        new_recently_unfollowed: "Recently unfollowed",
-      };
-      const suppHtml = Object.entries(supp)
-        .filter(([kind, users]) => users && users.length && _detailBlockShouldShow(kind, visible))
-        .map(([kind, users]) => {
-          const names = users.map((u) =>
-            `<span class="diff-name" data-username="${escapeAttr(u)}">${escapeHtml(u)}<a class="diff-link" href="https://www.instagram.com/${encodeURIComponent(u)}/" target="_blank" rel="noopener" title="Open on Instagram">↗</a></span>`
-          ).join(" ");
-          const label = SUPP_LABELS[kind] || kind;
-          return `<div class="diff-block muted"><strong>${escapeHtml(label)}</strong> <span class="muted small">— ${users.length} hidden (tagged unavailable/disabled/random)</span><div>${names}</div></div>`;
-        })
-        .join("");
-      if (suppHtml) {
-        diffHtml += `<hr style="margin:10px 0; border:0; border-top:1px solid var(--border, #2a2a30);" />${suppHtml}`;
-      }
+      // tagged unavailable / disabled / random. Collapsed by default so
+      // the focused view stays clean; user can expand to reconcile the
+      // count cards with named people. Restricted to the same eight
+      // kinds the main blocks use so bonus diff-only categories never
+      // leak in.
+      diffHtml += _renderSuppressedFooter(d.suppressed_sections, visible);
       if (!diffHtml.trim()) {
         if (totalChanges > 0 && hiddenByFilter === totalChanges) {
           diffHtml = `<div class="muted">${totalChanges} change${totalChanges === 1 ? "" : "s"} happened at this snapshot but none match your selected series. Tick more chips above to see other categories.</div>`;
@@ -4385,30 +4408,7 @@ async function showHistoryRangeDetail(fromIdx, toIdx, snaps) {
       ${block("new_pending", "New pending requests", sec.new_pending)}
       ${block("resolved_pending", "Resolved pending", sec.resolved_pending)}
     `;
-    const supp = d.suppressed_sections || {};
-    const SUPP_LABELS = {
-      new_followers: "New followers",
-      they_unfollowed_you: "They unfollowed you",
-      you_removed_as_follower: "You removed them as a follower",
-      new_following: "New following (you followed)",
-      you_unfollowed: "You unfollowed",
-      they_removed_you_as_follower: "They removed you as a follower",
-      new_pending: "New pending requests",
-      resolved_pending: "Resolved pending",
-    };
-    const suppHtml = Object.entries(supp)
-      .filter(([kind, users]) => users && users.length && _detailBlockShouldShow(kind, visible))
-      .map(([kind, users]) => {
-        const names = users.map((u) =>
-          `<span class="diff-name" data-username="${escapeAttr(u)}">${escapeHtml(u)}<a class="diff-link" href="https://www.instagram.com/${encodeURIComponent(u)}/" target="_blank" rel="noopener" title="Open on Instagram">↗</a></span>`
-        ).join(" ");
-        const label = SUPP_LABELS[kind] || kind;
-        return `<div class="diff-block muted"><strong>${escapeHtml(label)}</strong> <span class="muted small">— ${users.length} hidden (tagged unavailable/disabled/random)</span><div>${names}</div></div>`;
-      })
-      .join("");
-    if (suppHtml) {
-      diffHtml += `<hr style="margin:10px 0; border:0; border-top:1px solid var(--border, #2a2a30);" />${suppHtml}`;
-    }
+    diffHtml += _renderSuppressedFooter(d.suppressed_sections, visible);
     if (!diffHtml.trim()) {
       if (totalChanges > 0 && hiddenByFilter === totalChanges) {
         diffHtml = `<div class="muted">${totalChanges} change${totalChanges === 1 ? "" : "s"} across this range but none match your selected series. Tick more chips above to see other categories.</div>`;
