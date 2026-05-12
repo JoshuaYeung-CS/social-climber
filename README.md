@@ -2,7 +2,7 @@
 
 **Personal-scale Instagram analytics. Local-first. Zero third parties.**
 
-![Social Climber — local web UI with the Chrome extension popup open](docs/home.png)
+![Profile overlay live on instagram.com](docs/overlay.jpg)
 
 A self-hosted analytics platform for your own Instagram account that turns Meta's static data exports into a queryable timeline. Stack: Python (FastAPI + SQLite), vanilla JavaScript single-page UI, and a Manifest V3 Chrome extension that automates the export workflow and overlays history onto live profile pages.
 
@@ -91,9 +91,6 @@ Diff- and state-based:
 - Acknowledge / "mark read" to clear new-flag noise
 
 ### Companion Chrome extension (Manifest V3)
-
-![Profile overlay live on an instagram.com profile](docs/overlay.jpg)
-
 - **Profile overlay** — when you visit any IG profile, an overlay panel surfaces this account's history from the tracker (mutual since X, ever-unfollowed-you flag, current tags, notes)
 - **Live page-state bridging** — content script reads the actual "Follow / Following / Requested" button state per profile and writes it to `profile_observations`. Closes the ~25-minute gap between IG exports so the home stats reflect "what you actually see in the app right now."
 - **Export wizard automation** — auto-fills Meta's data export wizard (JSON, followers+following, all-time, Google Drive) with your saved preferences. Survives the SPA's screen-switching dance, dispatches trusted clicks via `chrome.debugger`, handles the password challenge and the Google OAuth chooser.
@@ -107,6 +104,14 @@ Diff- and state-based:
 - macOS keep-awake helper for long-running automation (`caffeinate`, `pmset disablesleep`)
 - Audit log table tracks every snapshot-bump / reset / delete event
 - Soft delete + recovery for snapshots
+
+---
+
+## Web UI
+
+The local web app — home view with the Chrome extension popup open in the corner. Both surfaces talk to the same FastAPI server at `127.0.0.1:8000`.
+
+![Social Climber web UI with the extension popup](docs/home.png)
 
 ---
 
