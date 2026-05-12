@@ -279,4 +279,8 @@ A non-exhaustive list of the disciplines this project actually does work in (as 
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) — see [LICENSE](./LICENSE).
+
+Source is available for personal use, research, code review, and hobby projects. Commercial use, redistribution, or building a product on top of this code requires a separate license from the author. Contact for licensing inquiries.
+
+Copyright © 2026 Joshua Yeung. All rights reserved.
