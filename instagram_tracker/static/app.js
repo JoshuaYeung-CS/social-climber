@@ -3860,10 +3860,17 @@ function buildSeriesCheckboxes() {
       el.dataset.on = String(s.on);
       el.setAttribute("aria-pressed", String(s.on));
       renderHistory();
-      // Selection now filters the detail panel too — re-render in place
-      // so toggling a chip while a snapshot is open updates the visible
-      // blocks immediately.
-      if (_lastHistoryDetail) {
+      // Selection filters the detail panel — re-render in place so a
+      // chip toggle updates the visible blocks immediately. Route to
+      // the right mode (point vs. range) based on whatever's currently
+      // on screen.
+      if (_lastHistoryDetail?.mode === "range") {
+        showHistoryRangeDetail(
+          _lastHistoryDetail.fromIdx,
+          _lastHistoryDetail.toIdx,
+          _lastHistoryDetail.snaps,
+        );
+      } else if (_lastHistoryDetail?.mode === "point") {
         showHistoryDetail(_lastHistoryDetail.idx, _lastHistoryDetail.snaps);
       }
     })
@@ -3873,11 +3880,15 @@ buildSeriesCheckboxes();
 
 $("#history-range")?.addEventListener("change", () => {
   _historyZoom = null;
+  _lastHistoryDetail = null;
+  $("#history-detail").innerHTML = "";
   $("#history-zoom-reset").hidden = true;
   renderHistory();
 });
 $("#history-zoom-reset")?.addEventListener("click", () => {
   _historyZoom = null;
+  _lastHistoryDetail = null;
+  $("#history-detail").innerHTML = "";
   $("#history-zoom-reset").hidden = true;
   renderHistory();
 });
@@ -4063,14 +4074,19 @@ function attachChartInteractions(container, snaps, visible, geom) {
     const svgX = eventToSvgX(ev);
     const dx = svgX === null ? 0 : Math.abs(svgX - dragStart.svgX);
     if (svgX !== null && dx >= 6) {
-      // Treat as a zoom gesture.
+      // Treat as a drag-select: zoom the chart AND surface the
+      // aggregated range diff below. `snaps` here is the pre-zoom
+      // (already date-range-filtered) array, so the index pair is
+      // valid against it.
       const a = indexAtSvgX(Math.min(dragStart.svgX, svgX));
       const b = indexAtSvgX(Math.max(dragStart.svgX, svgX));
+      const rangeSnaps = snaps;
       _historyZoom = { fromIdx: a, toIdx: b };
       $("#history-zoom-reset").hidden = false;
       dragStart = null;
       brushRect.setAttribute("width", 0);
       renderHistory();
+      showHistoryRangeDetail(a, b, rangeSnaps);
       return;
     }
     // Otherwise treat as a tap on the closest point.
@@ -4117,12 +4133,14 @@ function attachChartInteractions(container, snaps, visible, geom) {
     if (svgX !== null && dx >= 12) {
       const a = indexAtSvgX(Math.min(touchStart.svgX, svgX));
       const b = indexAtSvgX(Math.max(touchStart.svgX, svgX));
+      const rangeSnaps = snaps;
       _historyZoom = { fromIdx: a, toIdx: b };
       $("#history-zoom-reset").hidden = false;
       touchStart = null;
       brushRect.setAttribute("width", 0);
       renderHistory();
       hideTooltip();
+      showHistoryRangeDetail(a, b, rangeSnaps);
       return;
     }
     if (svgX !== null) showHistoryDetail(indexAtSvgX(svgX), snaps);
@@ -4179,12 +4197,13 @@ function _detailCountShouldShow(countKey, visible) {
 }
 
 // Tracks the most-recently-rendered detail panel so a series-checkbox
-// toggle can re-render it in place without the user having to re-click
-// the same snapshot point.
+// toggle (or any re-render trigger) can refresh it in place. The mode
+// distinguishes a single-snapshot click ("point") from a drag-selected
+// window ("range").
 let _lastHistoryDetail = null;
 
 async function showHistoryDetail(idx, snaps) {
-  _lastHistoryDetail = { idx, snaps };
+  _lastHistoryDetail = { mode: "point", idx, snaps };
   const curr = snaps[idx];
   const prev = idx > 0 ? snaps[idx - 1] : null;
   const dF = prev ? curr.followers - prev.followers : 0;
@@ -4282,6 +4301,126 @@ async function showHistoryDetail(idx, snaps) {
   $("#history-detail").innerHTML = `
     <div class="history-snapshot">
       <h3>#${curr.snapshot_id} · ${escapeHtml(cleanLabel(curr.label) || curr.created_at)}</h3>
+      <div class="history-counts">${countsHtml}</div>
+      ${diffHtml}
+    </div>
+  `;
+}
+
+// Range-mode detail. Drag-select on the chart fires this with the
+// pre-zoom index bounds. Aggregates pairwise diffs across every
+// chronological transition inside the window, then renders the same
+// kind of block / count-card layout as a point click — just with
+// "Net" deltas across the whole window and "start → end" counts.
+async function showHistoryRangeDetail(fromIdx, toIdx, snaps) {
+  _lastHistoryDetail = { mode: "range", fromIdx, toIdx, snaps };
+  const a = Math.max(0, Math.min(fromIdx, toIdx, snaps.length - 1));
+  const b = Math.min(snaps.length - 1, Math.max(fromIdx, toIdx, 0));
+  if (a === b) {
+    // Degenerate range (one point) — fall back to point detail.
+    return showHistoryDetail(a, snaps);
+  }
+  const first = snaps[a];
+  const last = snaps[b];
+  const idsParam = snaps.slice(a, b + 1).map((s) => s.snapshot_id).join(",");
+  const dF = last.followers - first.followers;
+  const dG = last.following - first.following;
+  const dM = last.mutuals  - first.mutuals;
+  const dP = last.pending  - first.pending;
+  const arrow = (n) => n > 0 ? `<span class="up">+${n}</span>` : n < 0 ? `<span class="down">${n}</span>` : `<span class="muted">±0</span>`;
+  const visible = _historyVisibleSeriesKeys();
+
+  $("#history-detail").innerHTML = `
+    <div class="history-snapshot">
+      <h3>Range · #${first.snapshot_id} → #${last.snapshot_id} <span class="muted small">(${b - a} transition${b - a === 1 ? "" : "s"} across ${b - a + 1} snapshots)</span></h3>
+      <div class="muted small">Loading aggregated changes…</div>
+    </div>
+  `;
+
+  let diffHtml = "";
+  let totalChanges = 0;
+  let hiddenByFilter = 0;
+  try {
+    const d = await api.get(`/api/diff-range?ids=${encodeURIComponent(idsParam)}`);
+    // Stale-response guard: if the user clicked away (or did another
+    // drag) while this request was in flight, don't clobber the newer
+    // detail panel with our old result.
+    const cur = _lastHistoryDetail;
+    if (!cur || cur.mode !== "range" || cur.fromIdx !== fromIdx || cur.toIdx !== toIdx) return;
+
+    const sec = d.sections || {};
+    const block = (kind, title, list, max = 12) => {
+      if (!list || !list.length) return "";
+      totalChanges += list.length;
+      if (!_detailBlockShouldShow(kind, visible)) {
+        hiddenByFilter += list.length;
+        return "";
+      }
+      const shown = list.slice(0, max);
+      const more = list.length > max ? ` <span class="muted">+${list.length - max} more</span>` : "";
+      return `<div class="diff-block"><strong>${title}</strong> (${list.length})<div>${shown.map((u) => `<span class="diff-name" data-username="${escapeAttr(u)}">${escapeHtml(u)}<a class="diff-link" href="https://www.instagram.com/${encodeURIComponent(u)}/" target="_blank" rel="noopener" title="Open on Instagram">↗</a></span>`).join(" ")}${more}</div></div>`;
+    };
+    diffHtml = `
+      ${block("new_followers", "New followers", sec.new_followers)}
+      ${block("they_unfollowed_you", "They unfollowed you", sec.they_unfollowed_you)}
+      ${block("you_removed_as_follower", "You removed them as a follower", sec.you_removed_as_follower)}
+      ${block("new_following", "New following (you followed)", sec.new_following)}
+      ${block("you_unfollowed", "You unfollowed", sec.you_unfollowed)}
+      ${block("they_removed_you_as_follower", "They removed you as a follower", sec.they_removed_you_as_follower)}
+      ${block("new_pending", "New pending requests", sec.new_pending)}
+      ${block("resolved_pending", "Resolved pending", sec.resolved_pending)}
+    `;
+    const supp = d.suppressed_sections || {};
+    const SUPP_LABELS = {
+      new_followers: "New followers",
+      they_unfollowed_you: "They unfollowed you",
+      you_removed_as_follower: "You removed them as a follower",
+      new_following: "New following (you followed)",
+      you_unfollowed: "You unfollowed",
+      they_removed_you_as_follower: "They removed you as a follower",
+      new_pending: "New pending requests",
+      resolved_pending: "Resolved pending",
+    };
+    const suppHtml = Object.entries(supp)
+      .filter(([kind, users]) => users && users.length && _detailBlockShouldShow(kind, visible))
+      .map(([kind, users]) => {
+        const names = users.map((u) =>
+          `<span class="diff-name" data-username="${escapeAttr(u)}">${escapeHtml(u)}<a class="diff-link" href="https://www.instagram.com/${encodeURIComponent(u)}/" target="_blank" rel="noopener" title="Open on Instagram">↗</a></span>`
+        ).join(" ");
+        const label = SUPP_LABELS[kind] || kind;
+        return `<div class="diff-block muted"><strong>${escapeHtml(label)}</strong> <span class="muted small">— ${users.length} hidden (tagged unavailable/disabled/random)</span><div>${names}</div></div>`;
+      })
+      .join("");
+    if (suppHtml) {
+      diffHtml += `<hr style="margin:10px 0; border:0; border-top:1px solid var(--border, #2a2a30);" />${suppHtml}`;
+    }
+    if (!diffHtml.trim()) {
+      if (totalChanges > 0 && hiddenByFilter === totalChanges) {
+        diffHtml = `<div class="muted">${totalChanges} change${totalChanges === 1 ? "" : "s"} across this range but none match your selected series. Tick more chips above to see other categories.</div>`;
+      } else {
+        diffHtml = `<div class="muted">No follower/following/pending changes across #${first.snapshot_id} → #${last.snapshot_id}.</div>`;
+      }
+    }
+  } catch (e) {
+    diffHtml = `<div class="muted">Range diff unavailable: ${escapeHtml(e.message)}</div>`;
+  }
+
+  // Net count cards for the range: start → end with the net delta.
+  // Same series filter as point mode.
+  const rangeCard = (key, label, startV, endV, delta) => {
+    if (!_detailCountShouldShow(key, visible)) return "";
+    return `<div>${label} <strong>${startV} → ${endV}</strong> ${arrow(delta)}</div>`;
+  };
+  const countsHtml = `
+    ${rangeCard("followers", "Followers", first.followers, last.followers, dF)}
+    ${rangeCard("following", "Following", first.following, last.following, dG)}
+    ${rangeCard("mutuals", "Mutuals", first.mutuals, last.mutuals, dM)}
+    ${rangeCard("pending", "Pending", first.pending, last.pending, dP)}
+  `;
+
+  $("#history-detail").innerHTML = `
+    <div class="history-snapshot">
+      <h3>Range · #${first.snapshot_id} → #${last.snapshot_id} <span class="muted small">(${b - a} transition${b - a === 1 ? "" : "s"} across ${b - a + 1} snapshots)</span></h3>
       <div class="history-counts">${countsHtml}</div>
       ${diffHtml}
     </div>

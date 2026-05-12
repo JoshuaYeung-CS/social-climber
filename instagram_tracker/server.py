@@ -2252,6 +2252,64 @@ def get_diff(old: int | None = None, new: int | None = None):
         }
 
 
+@app.get("/api/diff-range")
+def get_diff_range(ids: str):
+    """Aggregate per-pair diffs across a chronological list of snapshot IDs.
+
+    Frontend passes `ids=A,B,C,D` (already sorted chronologically) when the
+    user drag-selects a range on the History chart. Each adjacent pair
+    (A→B, B→C, C→D) is diffed using the same machinery as /api/diff, then
+    the per-pair sections are union'd by category so the response is a
+    flat "who moved into / out of each set anywhere in this window."
+    Same suppressed-tag carve-out: tagged-gone usernames go into a
+    parallel `suppressed_sections` map.
+
+    Note that net-counts (start vs. end) ARE different from event-counts
+    (everyone who churned through). Someone who joined and left within
+    the window appears in BOTH new_followers and they_unfollowed_you for
+    that range — the response captures both, the frontend can decide
+    which to show."""
+    raw = [x.strip() for x in (ids or "").split(",") if x.strip()]
+    snapshot_ids: list[int] = []
+    for s in raw:
+        try:
+            snapshot_ids.append(int(s))
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid snapshot id: {s!r}")
+    if len(snapshot_ids) < 2:
+        raise HTTPException(status_code=400, detail="Need at least two snapshot ids in the range.")
+
+    with db_conn() as conn:
+        ever_self = q.ever_self_unfollowed(conn)
+        suppressed = (
+            {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
+            | {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
+            | {r["username"] for r in tags_mod.list_with_flag(conn, "random_request")}
+        )
+        agg: dict[str, set[str]] = {}
+        supp_agg: dict[str, set[str]] = {}
+        for old_id, new_id in zip(snapshot_ids[:-1], snapshot_ids[1:]):
+            sections = diffs_mod.diff(
+                q.snapshot_data(conn, old_id),
+                q.snapshot_data(conn, new_id),
+                ever_self_unfollowed=ever_self,
+            )
+            for kind, users in sections.items():
+                for u in users:
+                    if u in suppressed:
+                        supp_agg.setdefault(kind, set()).add(u)
+                    else:
+                        agg.setdefault(kind, set()).add(u)
+    return {
+        "from_snapshot_id": snapshot_ids[0],
+        "to_snapshot_id": snapshot_ids[-1],
+        "snapshot_count": len(snapshot_ids),
+        "transition_count": len(snapshot_ids) - 1,
+        "sections": {k: sorted(v) for k, v in agg.items()},
+        "suppressed_sections": {k: sorted(v) for k, v in supp_agg.items()},
+    }
+
+
 @app.get("/api/lists")
 def get_lists(snapshot_id: int | None = None, kind: str | None = None):
     """Default snapshot_id uses a two-phase cache: the heavy snapshot-derived
