@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "IG Tracker companion",
+  "name": "Social Climber",
   "version": "1.0.0",
-  "description": "Auto-fills the Instagram data export wizard and overlays your local IG Tracker history on profile pages.",
+  "description": "Auto-fills the Instagram data export wizard and overlays your local Social Climber history on profile pages.",
   "permissions": [
     "storage",
     "activeTab",
@@ -21,7 +21,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "IG Tracker",
+    "default_title": "Social Climber",
     "default_icon": {
       "16": "icons/16.png",
       "48": "icons/48.png",

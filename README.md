@@ -1,4 +1,4 @@
-# IG Tracker
+# Social Climber
 
 **Personal-scale Instagram analytics. Local-first. Zero third parties.**
 
@@ -94,7 +94,7 @@ Diff- and state-based:
 - **Export wizard automation** — auto-fills Meta's data export wizard (JSON, followers+following, all-time, Google Drive) with your saved preferences. Survives the SPA's screen-switching dance, dispatches trusted clicks via `chrome.debugger`, handles the password challenge and the Google OAuth chooser.
 - **Scheduled exports** — set min/max interval and the SW alarm fires a fresh export at a jittered time inside the window (so the pattern doesn't look robotic to Instagram).
 - **Arrival-poll telemetry** — measures how long Meta takes to deliver each export to Drive; uses the historical distribution to start polling just before the typical arrival.
-- **Push-on-failure** — server-side hook calls `~/.config/igtracker/push.json` configurable command (default: iMessage to your own phone number) when 2+ consecutive exports fail.
+- **Push-on-failure** — server-side hook calls `~/.config/social-climber/push.json` configurable command (default: iMessage to your own phone number) when 2+ consecutive exports fail.
 
 ### Privacy & operational hygiene
 - Local-only — server binds to your LAN, no outbound calls

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Generate a self-signed TLS cert for the IG Tracker local server.
+# Generate a self-signed TLS cert for the Social Climber local server.
 #
 # Run once. Creates `data/cert.pem` and `data/key.pem` in the repo root,
 # valid for 10 years, covering localhost + 127.0.0.1 + your Mac's current
@@ -67,7 +67,7 @@ openssl req -x509 -newkey rsa:4096 -sha256 -nodes \
   -keyout "$KEY_PATH" \
   -out    "$CERT_PATH" \
   -days   3650 \
-  -subj   "/CN=IG Tracker Local" \
+  -subj   "/CN=Social Climber Local" \
   -addext "subjectAltName=$SAN_LIST" \
   -addext "basicConstraints=critical,CA:false" \
   -addext "keyUsage=critical,digitalSignature,keyEncipherment" \

@@ -91,7 +91,7 @@ async function shouldRun() {
   if (taggedTabId != null) {
     const myId = await _myTabId();
     if (myId != null && myId !== taggedTabId) {
-      console.log(`[IG Tracker] shouldRun: flag is bound to tab ${taggedTabId}, this is tab ${myId} — skipping auto-fill`);
+      console.log(`[Social Climber] shouldRun: flag is bound to tab ${taggedTabId}, this is tab ${myId} — skipping auto-fill`);
       return false;
     }
   }
@@ -441,7 +441,7 @@ function _findRowByLabel(text, within, lenient) {
     // JSON.stringify so the diagnostic survives copy-paste from the console
     // (Chrome's "Copy message" renders raw objects as [object Object]).
     console.warn(
-      `[IG Tracker] findRowByLabel('${text}') failed. Closest candidates: ` +
+      `[Social Climber] findRowByLabel('${text}') failed. Closest candidates: ` +
       JSON.stringify(debug)
     );
   }
@@ -467,9 +467,9 @@ function _findRowByLabel(text, within, lenient) {
 // manual prompt, toast) so they don't contaminate detection. Result
 // is what the user actually sees, modal included.
 const _IGT_INJECTED_IDS = new Set([
-  "igtracker-export-status",
-  "igtracker-manual-prompt",
-  "igtracker-toast",
+  "socialclimber-export-status",
+  "socialclimber-manual-prompt",
+  "socialclimber-toast",
 ]);
 function _wizardPageText() {
   const body = document.body;
@@ -694,7 +694,7 @@ function _initUserClickTracker() {
       // by `_wasRecentBotClick` already.
       const focused = (typeof document.hasFocus === "function") ? document.hasFocus() : null;
       const visState = document.visibilityState || "?";
-      console.log(`[IG Tracker] [user click] <${tag}${role ? ` role=${role}` : ""}> "${txt}" @ ${pos} path=${path.join(">")} focused=${focused} vis=${visState} ts=${ev.timeStamp}`);
+      console.log(`[Social Climber] [user click] <${tag}${role ? ` role=${role}` : ""}> "${txt}" @ ${pos} path=${path.join(">")} focused=${focused} vis=${visState} ts=${ev.timeStamp}`);
       // Danger guard: if the wizard is running AND user clicked a
       // device-direction button, flag it so _abortIfStopped halts.
       // BUT: only halt if the tab actually had focus when the click
@@ -713,10 +713,10 @@ function _initUserClickTracker() {
         }
         if (dangerMatched) {
           if (focused === false) {
-            console.warn(`[IG Tracker] [user click] phantom danger — click on 'Export to device' but tab NOT focused (hasFocus=${focused}). Ignoring; not halting wizard.`);
+            console.warn(`[Social Climber] [user click] phantom danger — click on 'Export to device' but tab NOT focused (hasFocus=${focused}). Ignoring; not halting wizard.`);
           } else {
             _userPickedDeviceDuringRun = true;
-            console.warn(`[IG Tracker] [user click] DANGER — clicked device-direction button while wizard running (hasFocus=${focused}). Wizard will halt.`);
+            console.warn(`[Social Climber] [user click] DANGER — clicked device-direction button while wizard running (hasFocus=${focused}). Wizard will halt.`);
             _setStatus({
               state: "needs-help",
               step: "⚠ You clicked 'Export to device' — wizard halting",
@@ -733,7 +733,7 @@ function _initUserClickTracker() {
       // halt with a clear message.
       if (window.__igtInDestFix) {
         _userClickedDuringDestFix = true;
-        console.warn(`[IG Tracker] [user click] during dest-fix — wizard will halt. Don't click anything during the auto-fix sequence.`);
+        console.warn(`[Social Climber] [user click] during dest-fix — wizard will halt. Don't click anything during the auto-fix sequence.`);
       }
     } catch (_) { /* never break the user's click */ }
   }, { capture: true });
@@ -790,7 +790,7 @@ async function _trustedClick(el) {
   await new Promise((r) => setTimeout(r, 80));
   const rect = el.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) {
-    console.log("[IG Tracker] trusted-click: element has zero size, falling back");
+    console.log("[Social Climber] trusted-click: element has zero size, falling back");
     return clickElement(el);
   }
   const x = Math.round(rect.left + rect.width / 2);
@@ -807,7 +807,7 @@ async function _trustedClick(el) {
     } catch (e) { resolve({ ok: false, error: String(e?.message || e) }); }
   });
   if (resp.ok) return true;
-  console.log(`[IG Tracker] trusted-click failed (${resp.error}) — falling back to synthetic`);
+  console.log(`[Social Climber] trusted-click failed (${resp.error}) — falling back to synthetic`);
   return clickElement(el);
 }
 
@@ -861,9 +861,9 @@ function _traceVisibleButtons(label = "buttons") {
       const pos = `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`;
       return `  · [${role}${dis ? " disabled" : ""}] "${txt}" @ ${pos}`;
     });
-    console.log(`[IG Tracker] trace(${label}): ${all.length} visible button-like elements${all.length > 30 ? " (showing 30)" : ""}\n${items.join("\n")}`);
+    console.log(`[Social Climber] trace(${label}): ${all.length} visible button-like elements${all.length > 30 ? " (showing 30)" : ""}\n${items.join("\n")}`);
   } catch (e) {
-    console.log(`[IG Tracker] trace(${label}) failed: ${e.message}`);
+    console.log(`[Social Climber] trace(${label}) failed: ${e.message}`);
   }
 }
 
@@ -872,7 +872,7 @@ function _traceVisibleButtons(label = "buttons") {
 // tag, role, all attributes, computed cursor + pointer-events,
 // position, parent chain (up to 5 levels), and text — everything we
 // need to reverse-engineer Meta's React handler placement without a
-// live browser. Output goes to the [IG Tracker] debug log.
+// live browser. Output goes to the [Social Climber] debug log.
 function _dumpDOMSnapshot(label, opts = {}) {
   const maxElements = opts.maxElements || 60;
   const matchText = opts.matchText;            // optional: only elements containing this text
@@ -915,9 +915,9 @@ function _dumpDOMSnapshot(label, opts = {}) {
         parents: parents.join(">"),
       });
     }
-    console.log(`[IG Tracker] dom-snapshot(${label}): ${out.length} elements\n${JSON.stringify(out, null, 2)}`);
+    console.log(`[Social Climber] dom-snapshot(${label}): ${out.length} elements\n${JSON.stringify(out, null, 2)}`);
   } catch (e) {
-    console.log(`[IG Tracker] dom-snapshot(${label}) failed: ${e.message}`);
+    console.log(`[Social Climber] dom-snapshot(${label}) failed: ${e.message}`);
   }
 }
 
@@ -977,7 +977,7 @@ async function _clickButtonByText(text) {
   // element so the trusted-click hits whatever React wired the handler to.
   const strict = _findStrictButton(text);
   if (strict) {
-    console.log(`[IG Tracker] _clickButtonByText("${text}") → ${_describe(strict)} [strict]`);
+    console.log(`[Social Climber] _clickButtonByText("${text}") → ${_describe(strict)} [strict]`);
     await _trustedClick(strict);
     return true;
   }
@@ -986,7 +986,7 @@ async function _clickButtonByText(text) {
   const el = findByText(text);
   if (!el) return false;
   const target = _findClickableAncestor(el);
-  console.log(`[IG Tracker] _clickButtonByText("${text}") → ${_describe(target)} [loose]`);
+  console.log(`[Social Climber] _clickButtonByText("${text}") → ${_describe(target)} [loose]`);
   await _trustedClick(target);
   return true;
 }
@@ -1008,7 +1008,7 @@ async function _clickButtonByText(text) {
 async function _clickAtOffsetFromButton(refButtonText, dx, dy) {
   const ref = _findStrictButton(refButtonText);
   if (!ref) {
-    console.warn(`[IG Tracker] _clickAtOffsetFromButton: ref "${refButtonText}" not found`);
+    console.warn(`[Social Climber] _clickAtOffsetFromButton: ref "${refButtonText}" not found`);
     return false;
   }
   ref.scrollIntoView({ block: "center", behavior: "instant" });
@@ -1017,7 +1017,7 @@ async function _clickAtOffsetFromButton(refButtonText, dx, dy) {
   const rect = ref.getBoundingClientRect();
   const x = Math.round(rect.left + rect.width / 2 + dx);
   const y = Math.round(rect.top + rect.height / 2 + dy);
-  console.log(`[IG Tracker] _clickAtOffsetFromButton: ref "${refButtonText}" rect=(${Math.round(rect.left)},${Math.round(rect.top)} ${Math.round(rect.width)}x${Math.round(rect.height)}) → click @ (${x},${y}) [dx=${dx} dy=${dy}]`);
+  console.log(`[Social Climber] _clickAtOffsetFromButton: ref "${refButtonText}" rect=(${Math.round(rect.left)},${Math.round(rect.top)} ${Math.round(rect.width)}x${Math.round(rect.height)}) → click @ (${x},${y}) [dx=${dx} dy=${dy}]`);
   _markBotClick(x, y, null);
   // Direct chrome.debugger dispatch — bypasses all element search.
   const resp = await new Promise((resolve) => {
@@ -1029,7 +1029,7 @@ async function _clickAtOffsetFromButton(refButtonText, dx, dy) {
     } catch (e) { resolve({ ok: false, error: String(e?.message || e) }); }
   });
   if (!resp.ok) {
-    console.warn(`[IG Tracker] _clickAtOffsetFromButton: trusted-click failed (${resp.error})`);
+    console.warn(`[Social Climber] _clickAtOffsetFromButton: trusted-click failed (${resp.error})`);
     return false;
   }
   return true;
@@ -1110,7 +1110,7 @@ function _findDestinationHeaderRow() {
     }
   }
   if (bestBtn) {
-    console.log(`[IG Tracker] _findDestinationHeaderRow: strict match → ${_describe(bestBtn)}`);
+    console.log(`[Social Climber] _findDestinationHeaderRow: strict match → ${_describe(bestBtn)}`);
     return bestBtn;
   }
 
@@ -1150,7 +1150,7 @@ function _findDestinationHeaderRow() {
     if (!weakHit && _isClickable(cur)) weakHit = cur;
   }
   const target = strongHit || weakHit || bestEl.el;
-  console.log(`[IG Tracker] _findDestinationHeaderRow: ${strongHit ? "lenient-strong" : weakHit ? "lenient-weak" : "leaf"} → ${_describe(target)}`);
+  console.log(`[Social Climber] _findDestinationHeaderRow: ${strongHit ? "lenient-strong" : weakHit ? "lenient-weak" : "leaf"} → ${_describe(target)}`);
   return target;
 }
 
@@ -1190,7 +1190,7 @@ async function _navigateBackToFixDestInner() {
   // mechanism — covers the case where one strategy hits a wrapper
   // that doesn't fire React's handler while another does.
   if (findByText("Export to external service")) {
-    console.log("[IG Tracker] dest-fix: Layout A — chooser inline, running multi-strategy");
+    console.log("[Social Climber] dest-fix: Layout A — chooser inline, running multi-strategy");
     _traceVisibleButtons("dest-fix Layout A entry");
 
     const strategies = [
@@ -1201,7 +1201,7 @@ async function _navigateBackToFixDestInner() {
         fn: async () => {
           const btn = _findStrictButton("Export to external service");
           if (!btn) return false;
-          console.log(`[IG Tracker] dest-fix S1 strict-button → ${_describe(btn)}`);
+          console.log(`[Social Climber] dest-fix S1 strict-button → ${_describe(btn)}`);
           await _trustedClick(btn);
           return true;
         },
@@ -1212,7 +1212,7 @@ async function _navigateBackToFixDestInner() {
         name: "fixed-offset",
         fn: async () => {
           if (!_findStrictButton("Export to device")) return false;
-          console.log(`[IG Tracker] dest-fix S2 fixed-offset (53px below 'Export to device')`);
+          console.log(`[Social Climber] dest-fix S2 fixed-offset (53px below 'Export to device')`);
           return await _clickAtOffsetFromButton("Export to device", 0, 53);
         },
       },
@@ -1225,7 +1225,7 @@ async function _navigateBackToFixDestInner() {
           if (!leaf) return false;
           let cur = leaf;
           for (let lvl = 0; cur && cur !== document.body && lvl < 6; lvl++, cur = cur.parentElement) {
-            console.log(`[IG Tracker] dest-fix S3 ancestor-walk L${lvl} → ${_describe(cur)}`);
+            console.log(`[Social Climber] dest-fix S3 ancestor-walk L${lvl} → ${_describe(cur)}`);
             await _trustedClick(cur);
             await sleep(700);
             if (_destFixAdvanced()) return true;
@@ -1244,7 +1244,7 @@ async function _navigateBackToFixDestInner() {
           const r = btn.getBoundingClientRect();
           const cx = Math.round(r.left + r.width / 2);
           const cy = Math.round(r.top + r.height / 2);
-          console.log(`[IG Tracker] dest-fix S4 pointer-sequence → ${_describe(btn)} @ (${cx},${cy})`);
+          console.log(`[Social Climber] dest-fix S4 pointer-sequence → ${_describe(btn)} @ (${cx},${cy})`);
           // Synthesize a richer event sequence including hover.
           const opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 };
           try { btn.dispatchEvent(new PointerEvent("pointerover",  { ...opts, pointerType: "mouse" })); } catch (_) {}
@@ -1263,24 +1263,24 @@ async function _navigateBackToFixDestInner() {
       // Halt immediately if user clicked anything during dest-fix.
       // (See _userClickedDuringDestFix wiring above.)
       if (_userClickedDuringDestFix) {
-        console.warn(`[IG Tracker] dest-fix: user click detected — halting before strategy "${s.name}"`);
+        console.warn(`[Social Climber] dest-fix: user click detected — halting before strategy "${s.name}"`);
         _setStatusFinal("error", "You clicked during auto-fix — halted",
           "Don't click anything while the bot is running the destination fix. Re-run from popup.", 60000);
         return false;
       }
-      console.log(`[IG Tracker] dest-fix: trying strategy "${s.name}"`);
+      console.log(`[Social Climber] dest-fix: trying strategy "${s.name}"`);
       try {
         const ok = await s.fn();
-        if (!ok) { console.log(`[IG Tracker] dest-fix: strategy "${s.name}" couldn't run`); continue; }
+        if (!ok) { console.log(`[Social Climber] dest-fix: strategy "${s.name}" couldn't run`); continue; }
       } catch (e) {
-        console.warn(`[IG Tracker] dest-fix: strategy "${s.name}" threw: ${e.message}`);
+        console.warn(`[Social Climber] dest-fix: strategy "${s.name}" threw: ${e.message}`);
         continue;
       }
       // IMMEDIATE check before any wait — captures whether the click
       // had instant effect (no time for user interference).
       const immediate = _destFixAdvanced();
       if (immediate) {
-        console.log(`[IG Tracker] dest-fix: strategy "${s.name}" advanced IMMEDIATELY → ${immediate}`);
+        console.log(`[Social Climber] dest-fix: strategy "${s.name}" advanced IMMEDIATELY → ${immediate}`);
         advanced = true;
         break;
       }
@@ -1293,21 +1293,21 @@ async function _navigateBackToFixDestInner() {
       // User-click check before re-evaluating — if user clicked
       // during the 400ms, the post-wait state is contaminated.
       if (_userClickedDuringDestFix) {
-        console.warn(`[IG Tracker] dest-fix: user click during wait after "${s.name}" — halting`);
+        console.warn(`[Social Climber] dest-fix: user click during wait after "${s.name}" — halting`);
         return false;
       }
       const result = _destFixAdvanced();
       if (result) {
-        console.log(`[IG Tracker] dest-fix: strategy "${s.name}" advanced after wait → ${result}`);
+        console.log(`[Social Climber] dest-fix: strategy "${s.name}" advanced after wait → ${result}`);
         advanced = true;
         break;
       } else {
-        console.log(`[IG Tracker] dest-fix: strategy "${s.name}" clicked but page didn't advance`);
+        console.log(`[Social Climber] dest-fix: strategy "${s.name}" clicked but page didn't advance`);
       }
     }
 
     if (!advanced) {
-      console.warn("[IG Tracker] dest-fix: all 4 strategies failed on Layout A");
+      console.warn("[Social Climber] dest-fix: all 4 strategies failed on Layout A");
       _dumpDOMSnapshot("dest-fix Layout A all-failed", { matchText: "export to external" });
       _dumpDOMSnapshot("dest-fix Layout A all-failed (device button area)", { matchText: "export to device" });
       return false;
@@ -1326,8 +1326,8 @@ async function _navigateBackToFixDestInner() {
     // does work — we've seen it succeed in past logs). Poll for the
     // chooser to appear (Layout A becomes visible). Once it does,
     // resume into the multi-strategy click below.
-    console.warn("[IG Tracker] dest-fix: Layout B (chooser collapsed) — programmatic header click is known-broken");
-    console.log("[IG Tracker] dest-fix: surfacing manual prompt; waiting for chooser to open");
+    console.warn("[Social Climber] dest-fix: Layout B (chooser collapsed) — programmatic header click is known-broken");
+    console.log("[Social Climber] dest-fix: surfacing manual prompt; waiting for chooser to open");
     _setStatus({
       state: "needs-help",
       step: "👆 Click the destination row at the top of the modal",
@@ -1350,10 +1350,10 @@ async function _navigateBackToFixDestInner() {
     }
     _hideManualPrompt();
     if (!chooserOpen) {
-      console.warn("[IG Tracker] dest-fix: chooser didn't open within 5 min — giving up");
+      console.warn("[Social Climber] dest-fix: chooser didn't open within 5 min — giving up");
       return false;
     }
-    console.log("[IG Tracker] dest-fix: chooser opened — running multi-strategy click");
+    console.log("[Social Climber] dest-fix: chooser opened — running multi-strategy click");
     _setStatus({ state: "running", step: "Resuming…", detail: "Chooser is open — clicking external service." });
     // Recursively call the same function — now that "Export to
     // external service" is visible, the Layout A branch will run
@@ -1373,19 +1373,19 @@ async function _navigateBackToFixDestInner() {
     const hasDeviceHeader = /(?:export|download|save)\s+to\s+(?:your\s+)?device\s*[·•]\s*(?:once|daily|monthly|yearly)\b/i.test(t);
     const hasDriveHeader = /(?:export|send|transfer)\s+to\s+(?:google\s+)?drive\s*[·•]\s*(?:once|daily|monthly|yearly)\b/i.test(t);
     if (hasDriveHeader && !hasDeviceHeader) {
-      console.log(`[IG Tracker] dest-fix: confirm now shows Drive after iter ${i} ✓`);
+      console.log(`[Social Climber] dest-fix: confirm now shows Drive after iter ${i} ✓`);
       return true;
     }
 
     // Service chooser: pick Google Drive if visible.
     if (findByText("Google Drive")) {
-      console.log(`[IG Tracker] dest-fix: iter ${i} — clicking Google Drive`);
+      console.log(`[Social Climber] dest-fix: iter ${i} — clicking Google Drive`);
       await _clickButtonByText("Google Drive");
       await sleep(1200);
       // After picking Drive, click Next/Continue/Save if present.
       for (const lbl of ["Next", "Continue", "Save", "Done"]) {
         if (await _clickButtonByText(lbl)) {
-          console.log(`[IG Tracker] dest-fix: iter ${i} — clicked "${lbl}" after Google Drive`);
+          console.log(`[Social Climber] dest-fix: iter ${i} — clicked "${lbl}" after Google Drive`);
           await sleep(1500);
           break;
         }
@@ -1395,7 +1395,7 @@ async function _navigateBackToFixDestInner() {
 
     // howOften screen mid-flow.
     if (/choose how often|how often you want to export/i.test(t)) {
-      console.log(`[IG Tracker] dest-fix: iter ${i} — howOften, clicking Next`);
+      console.log(`[Social Climber] dest-fix: iter ${i} — howOften, clicking Next`);
       if (!(await _clickButtonByText("Next"))) {
         await _clickButtonByText("Continue");
       }
@@ -1405,17 +1405,17 @@ async function _navigateBackToFixDestInner() {
 
     // connect screen mid-flow.
     if (/connect to google drive/i.test(t)) {
-      console.log(`[IG Tracker] dest-fix: iter ${i} — connect, clicking Connect`);
+      console.log(`[Social Climber] dest-fix: iter ${i} — connect, clicking Connect`);
       await _clickButtonByText("Connect");
       await sleep(8000);
       continue;
     }
 
     // Nothing actionable yet — give the page a beat.
-    console.log(`[IG Tracker] dest-fix: iter ${i} — waiting (no actionable element)`);
+    console.log(`[Social Climber] dest-fix: iter ${i} — waiting (no actionable element)`);
     await sleep(1200);
   }
-  console.warn("[IG Tracker] dest-fix: hit iteration cap without reaching drive");
+  console.warn("[Social Climber] dest-fix: hit iteration cap without reaching drive");
   _traceVisibleButtons("dest-fix: final state");
   return false;
 }
@@ -1511,9 +1511,9 @@ async function _armKeepAwake() {
       osc.start();
       window.__igtKeepAliveCtx = ctx;
       try { ctx.addEventListener("statechange", _updateWizardAwakeIndicator); } catch (_) {}
-      console.log(`[IG Tracker] keepalive: AudioContext lazy-created, state=${ctx.state}`);
+      console.log(`[Social Climber] keepalive: AudioContext lazy-created, state=${ctx.state}`);
     } catch (e) {
-      console.log("[IG Tracker] keepalive: lazy-create failed:", e.message);
+      console.log("[Social Climber] keepalive: lazy-create failed:", e.message);
       _updateWizardAwakeIndicator();
       return false;
     }
@@ -1523,18 +1523,18 @@ async function _armKeepAwake() {
   if (ctx.state === "running") return true;
   try {
     await ctx.resume();
-    console.log(`[IG Tracker] keepalive: ARMED, AudioContext state=${ctx.state}`);
+    console.log(`[Social Climber] keepalive: ARMED, AudioContext state=${ctx.state}`);
     _updateWizardAwakeIndicator();
     return ctx.state === "running";
   } catch (e) {
-    console.log("[IG Tracker] keepalive: resume failed:", e.message);
+    console.log("[Social Climber] keepalive: resume failed:", e.message);
     _updateWizardAwakeIndicator();
     return false;
   }
 }
 
 async function runWizard() {
-  console.log("[IG Tracker] Auto-export starting…");
+  console.log("[Social Climber] Auto-export starting…");
   _initKeepAwake();
   // Activate the danger-click guard. _initUserClickTracker() is
   // called from main(), but we use this flag specifically to scope
@@ -1558,7 +1558,7 @@ async function runWizard() {
     // Drive token before painting the Confirm screen.
     const initialTimeout = (i === 0) ? 25000 : 4000;
     const screen = await detectCurrentScreen(initialTimeout);
-    console.log(`[IG Tracker] Step ${i}: screen=${screen}`);
+    console.log(`[Social Climber] Step ${i}: screen=${screen}`);
     _setStatus({ step: `Step ${i}: ${screen}`, detail: "" });
 
     if (screen === "confirm") break;
@@ -1570,11 +1570,11 @@ async function runWizard() {
         // post-OAuth landing eventually catches.
         for (let retry = 1; retry <= 3; retry++) {
           const waitMs = 5000 + retry * 3000; // 8s, 11s, 14s
-          console.log(`[IG Tracker] Screen unknown — retry ${retry}/3 after ${waitMs}ms wait`);
+          console.log(`[Social Climber] Screen unknown — retry ${retry}/3 after ${waitMs}ms wait`);
           await sleep(waitMs);
           const probe = await detectCurrentScreen(10000);
           if (probe !== "unknown") {
-            console.log(`[IG Tracker] Settled to screen=${probe} after ${retry} retries.`);
+            console.log(`[Social Climber] Settled to screen=${probe} after ${retry} retries.`);
             // Restart the outer loop with the known screen. For
             // probe=="confirm" the outer loop's `if (screen === "confirm") break;`
             // exits Stage 1 and falls through to Stage 2 (the row
@@ -1602,7 +1602,7 @@ async function runWizard() {
           const btnCount = document.querySelectorAll("button, [role='button']").length;
           const inputCount = document.querySelectorAll("input").length;
           console.warn(
-            `[IG Tracker] Couldn't identify starting screen. ` +
+            `[Social Climber] Couldn't identify starting screen. ` +
             `text="${snippet}", html=${htmlLen}b, buttons=${btnCount}, inputs=${inputCount}, ` +
             `title="${document.title}", url="${window.location.href.slice(0, 120)}"`
           );
@@ -1626,14 +1626,14 @@ async function runWizard() {
             window.location.search.includes("code=") &&
             window.location.search.includes("state=");
           const pageIsBlank = htmlLen < 5000 || (snippet === "" && btnCount < 3);
-          const alreadyReloaded = sessionStorage.getItem("igtracker_oauth_reloaded") === "1";
+          const alreadyReloaded = sessionStorage.getItem("socialclimber_oauth_reloaded") === "1";
           // Stuck-shell signal: empty visible text but lots of HTML +
           // some buttons (i.e., shell rendered, wizard didn't).
           const stuckShell = snippet === "" && htmlLen > 100000 && btnCount > 0;
 
           if (urlHasOAuthCode && pageIsBlank && !alreadyReloaded) {
-            console.warn("[IG Tracker] Empty page after OAuth redirect — auto-reloading to clean URL");
-            sessionStorage.setItem("igtracker_oauth_reloaded", "1");
+            console.warn("[Social Climber] Empty page after OAuth redirect — auto-reloading to clean URL");
+            sessionStorage.setItem("socialclimber_oauth_reloaded", "1");
             // Strip the OAuth params so Meta starts fresh instead of
             // re-attempting to exchange a now-used code.
             const cleanUrl = window.location.origin + window.location.pathname;
@@ -1641,8 +1641,8 @@ async function runWizard() {
             return;
           }
           if (stuckShell && !alreadyReloaded) {
-            console.warn("[IG Tracker] Wizard URL loaded but shell-only (no wizard) — reloading once");
-            sessionStorage.setItem("igtracker_oauth_reloaded", "1");
+            console.warn("[Social Climber] Wizard URL loaded but shell-only (no wizard) — reloading once");
+            sessionStorage.setItem("socialclimber_oauth_reloaded", "1");
             window.location.reload();
             return;
           }
@@ -1651,7 +1651,7 @@ async function runWizard() {
         }
         continue;
       }
-      console.log("[IG Tracker] Screen unknown — likely OAuth in progress. Bailing; will resume on next page load.");
+      console.log("[Social Climber] Screen unknown — likely OAuth in progress. Bailing; will resume on next page load.");
       return;
     }
 
@@ -1704,7 +1704,7 @@ async function runWizard() {
       // candidates returning null even though the elements were
       // about to render.
       if (!hasCreateExport()) {
-        console.log("[IG Tracker] start: step 1 — opening wizard modal");
+        console.log("[Social Climber] start: step 1 — opening wizard modal");
         const findAnyNav = () => {
           for (const lbl of navCandidates) {
             const el = findByText(lbl);
@@ -1719,7 +1719,7 @@ async function runWizard() {
           firstSeen = findAnyNav();
         }
         if (!firstSeen && !hasCreateExport()) {
-          console.warn(`[IG Tracker] start: step 1 — no candidate findable after ${Date.now() - t0}ms; matchers all null`);
+          console.warn(`[Social Climber] start: step 1 — no candidate findable after ${Date.now() - t0}ms; matchers all null`);
         }
         for (const lbl of navCandidates) {
           const el = findByText(lbl);
@@ -1727,11 +1727,11 @@ async function runWizard() {
           let cur = el;
           for (let level = 0; level < 6; level++) {
             if (!cur || cur === document.body) break;
-            console.log(`[IG Tracker] start: nav click "${lbl}" L${level} → ${_describe(cur)}`);
+            console.log(`[Social Climber] start: nav click "${lbl}" L${level} → ${_describe(cur)}`);
             await _trustedClick(cur);
             await sleep(700);
             if (hasCreateExport() || advancedPastStart()) {
-              console.log(`[IG Tracker] start: modal opened (or skipped to next screen) after "${lbl}" L${level}`);
+              console.log(`[Social Climber] start: modal opened (or skipped to next screen) after "${lbl}" L${level}`);
               break;
             }
             cur = cur.parentElement;
@@ -1752,13 +1752,13 @@ async function runWizard() {
       if (advancedPastStart()) {
         advanced = true;
       } else if (hasCreateExport()) {
-        console.log("[IG Tracker] start: step 2 — clicking Create export");
+        console.log("[Social Climber] start: step 2 — clicking Create export");
         const ce = findByText("Create export");
         if (ce) {
           let cur = ce;
           for (let level = 0; level < 2; level++) {
             if (!cur || cur === document.body) break;
-            console.log(`[IG Tracker] start: Create-export click L${level} → ${_describe(cur)}`);
+            console.log(`[Social Climber] start: Create-export click L${level} → ${_describe(cur)}`);
             await _trustedClick(cur);
             // Poll for advancement up to 3s, exiting as soon as it
             // happens. 100ms granularity catches fast renders;
@@ -1770,7 +1770,7 @@ async function runWizard() {
             }
             if (advancedPastStart()) {
               advanced = true;
-              console.log(`[IG Tracker] start: advanced past start after Create-export L${level} (${Date.now() - tStart}ms wait)`);
+              console.log(`[Social Climber] start: advanced past start after Create-export L${level} (${Date.now() - tStart}ms wait)`);
               break;
             }
             cur = cur.parentElement;
@@ -1779,7 +1779,7 @@ async function runWizard() {
       }
 
       if (!advanced) {
-        console.warn("[IG Tracker] start: auto-attempts exhausted — manual fallback");
+        console.warn("[Social Climber] start: auto-attempts exhausted — manual fallback");
         // Look at what's actually on the page right now and tailor
         // the prompt to that. The previous prompt always said "Click
         // Create export" even when the user had already advanced and
@@ -1819,7 +1819,7 @@ async function runWizard() {
           await sleep(1500);
           await _abortIfStopped();
           if (advancedPastStart()) {
-            console.log("[IG Tracker] start: user advanced manually, resuming");
+            console.log("[Social Climber] start: user advanced manually, resuming");
             _hideManualPrompt();
             _setStatus({ state: "running", step: "Resuming…", detail: "Picking up from here." });
             advanced = true;
@@ -1849,7 +1849,7 @@ async function runWizard() {
       ]) {
         if (await _clickButtonByText(lbl)) { whereOk = true; break; }
       }
-      if (!whereOk) console.warn("[IG Tracker] chooseWhere: no candidate button found");
+      if (!whereOk) console.warn("[Social Climber] chooseWhere: no candidate button found");
       await _settle();
     } else if (screen === "chooseService") {
       // Pick Google Drive from the radio list, then click Next.
@@ -1859,7 +1859,7 @@ async function runWizard() {
       for (const lbl of ["Google Drive"]) {
         if (await _clickButtonByText(lbl)) { serviceOk = true; break; }
       }
-      if (!serviceOk) console.warn("[IG Tracker] chooseService: Google Drive not found");
+      if (!serviceOk) console.warn("[Social Climber] chooseService: Google Drive not found");
       await _settle();
       await sleep(600);
       // Wait for Next to enable (radio takes a moment to register).
@@ -1924,9 +1924,9 @@ async function runWizard() {
       };
 
       const dStart = nextDisabled();
-      console.log(`[IG Tracker] howOften: entry — Next disabled=${dStart}, found="${_describe(findNextBtn())}"`);
+      console.log(`[Social Climber] howOften: entry — Next disabled=${dStart}, found="${_describe(findNextBtn())}"`);
       if (!dStart) {
-        console.log("[IG Tracker] howOften: Next already enabled — advancing");
+        console.log("[Social Climber] howOften: Next already enabled — advancing");
       } else {
         // Walk up parents and click each level until Next actually
         // enables. Diagnostic in the v1.0.64 log showed the matcher
@@ -1943,11 +1943,11 @@ async function runWizard() {
           let advanced = false;
           for (let level = 0; level < 7; level++) {
             if (!cur || cur === document.body) break;
-            console.log(`[IG Tracker] howOften: click attempt L${level} → ${_describe(cur)}`);
+            console.log(`[Social Climber] howOften: click attempt L${level} → ${_describe(cur)}`);
             await _trustedClick(cur);
             await sleep(800);
             if (!nextDisabled()) {
-              console.log(`[IG Tracker] howOften: Next ENABLED after L${level} click`);
+              console.log(`[Social Climber] howOften: Next ENABLED after L${level} click`);
               advanced = true;
               break;
             }
@@ -1957,12 +1957,12 @@ async function runWizard() {
             // Hidden-radio fallback: if Meta's pill is wrapping an
             // <input type="radio">, set checked + dispatch change
             // directly — that bypasses any onClick handler shenanigans.
-            console.log("[IG Tracker] howOften: walking-click failed — trying hidden radio");
+            console.log("[Social Climber] howOften: walking-click failed — trying hidden radio");
             const radios = document.querySelectorAll("input[type='radio']");
             for (const r of radios) {
               const txt = (r.closest("label")?.innerText || r.parentElement?.innerText || "").toLowerCase();
               if (/once|just\s+once/i.test(txt)) {
-                console.log(`[IG Tracker] howOften: found hidden radio for Once — checking it`);
+                console.log(`[Social Climber] howOften: found hidden radio for Once — checking it`);
                 _setReactValue && r; // (no-op; radios don't use the React value setter)
                 r.checked = true;
                 r.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1972,9 +1972,9 @@ async function runWizard() {
               }
             }
           }
-          console.log(`[IG Tracker] howOften: post-attempts Next disabled=${nextDisabled()}`);
+          console.log(`[Social Climber] howOften: post-attempts Next disabled=${nextDisabled()}`);
         } else {
-          console.log("[IG Tracker] howOften: no 'Once' option visible — proceeding to Next");
+          console.log("[Social Climber] howOften: no 'Once' option visible — proceeding to Next");
         }
       }
       // Click Next via trusted-click first (the standard stepClickAny
@@ -1983,7 +1983,7 @@ async function runWizard() {
       // current location is up to date.
       const nextForFirstClick = findNextBtn();
       if (nextForFirstClick) {
-        console.log(`[IG Tracker] howOften: trusted-click Next → ${_describe(nextForFirstClick)}`);
+        console.log(`[Social Climber] howOften: trusted-click Next → ${_describe(nextForFirstClick)}`);
         await _trustedClick(nextForFirstClick);
         await sleep(900);
       } else {
@@ -1996,21 +1996,21 @@ async function runWizard() {
       };
       await sleep(2000);
       if (isOnHowOften()) {
-        console.log("[IG Tracker] howOften: Next click didn't advance — walking Next ancestors");
+        console.log("[Social Climber] howOften: Next click didn't advance — walking Next ancestors");
         const nextEl = findNextBtn();
         if (nextEl) {
           let cur = nextEl;
           for (let level = 0; level < 6; level++) {
             if (!cur || cur === document.body) break;
-            console.log(`[IG Tracker] howOften: Next click L${level} → ${_describe(cur)}`);
+            console.log(`[Social Climber] howOften: Next click L${level} → ${_describe(cur)}`);
             await _trustedClick(cur);
             await sleep(700);
-            if (!isOnHowOften()) { console.log(`[IG Tracker] howOften: advanced after Next L${level}`); break; }
+            if (!isOnHowOften()) { console.log(`[Social Climber] howOften: advanced after Next L${level}`); break; }
             cur = cur.parentElement;
           }
         }
         if (isOnHowOften()) {
-          console.log("[IG Tracker] howOften: still stuck — sending Enter keypress");
+          console.log("[Social Climber] howOften: still stuck — sending Enter keypress");
           const focused = document.activeElement || document.body;
           for (const ev of ["keydown", "keypress", "keyup"]) {
             focused.dispatchEvent(new KeyboardEvent(ev, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
@@ -2025,7 +2025,7 @@ async function runWizard() {
         // Stage 2 automatically. 5-minute window so the user can be
         // away from the desk briefly.
         if (isOnHowOften()) {
-          console.warn("[IG Tracker] howOften: all auto-attempts exhausted — entering manual-fallback mode");
+          console.warn("[Social Climber] howOften: all auto-attempts exhausted — entering manual-fallback mode");
           _setStatus({
             state: "needs-help",
             step: "👆 Manual step needed: click 'Once' then 'Next'",
@@ -2040,7 +2040,7 @@ async function runWizard() {
             await sleep(1500);
             await _abortIfStopped();
             if (!isOnHowOften()) {
-              console.log("[IG Tracker] howOften: user advanced manually, resuming Stage 2");
+              console.log("[Social Climber] howOften: user advanced manually, resuming Stage 2");
               _hideManualPrompt();
               _setStatus({ state: "running", step: "Resuming…", detail: "Thanks, picking up from here." });
               break;
@@ -2072,13 +2072,13 @@ async function runWizard() {
     const newScreen = await waitForScreenChange(screen, budget);
     if (newScreen === screen) {
       stuckCount += 1;
-      console.warn(`[IG Tracker] Screen still '${screen}' after click — retrying (${stuckCount}/2).`);
+      console.warn(`[Social Climber] Screen still '${screen}' after click — retrying (${stuckCount}/2).`);
       if (stuckCount >= 2) {
         throw new Error(`Stuck on screen '${screen}' — click didn't advance the wizard.`);
       }
     } else {
       stuckCount = 0;
-      console.log(`[IG Tracker] Advanced: ${screen} → ${newScreen}`);
+      console.log(`[Social Climber] Advanced: ${screen} → ${newScreen}`);
     }
   }
 
@@ -2099,9 +2099,9 @@ async function runWizard() {
   }
   const readyMs = Date.now() - stage2Ready;
   if (!findRowByLabel("Format")) {
-    console.warn(`[IG Tracker] Stage 2: Format row not findable after ${readyMs}ms — proceeding anyway`);
+    console.warn(`[Social Climber] Stage 2: Format row not findable after ${readyMs}ms — proceeding anyway`);
   } else if (readyMs > 0) {
-    console.log(`[IG Tracker] Stage 2: rows ready after ${readyMs}ms — starting`);
+    console.log(`[Social Climber] Stage 2: rows ready after ${readyMs}ms — starting`);
   }
 
   // Destination safety check (position-based). The active destination
@@ -2162,7 +2162,7 @@ async function runWizard() {
     // over-halt than wrong-submit.
     const deviceRe = /(?:export|download|save)\s+to\s+(?:your\s+)?device\s*[·•]\s*(?:once|daily|monthly|yearly)\b/i;
     if (deviceRe.test(t) && kind !== "device") {
-      console.warn("[IG Tracker] dest-detect: safety net triggered — body has 'X to device · Once' pattern, overriding to device");
+      console.warn("[Social Climber] dest-detect: safety net triggered — body has 'X to device · Once' pattern, overriding to device");
       kind = "device";
       needle = "device-safety-net";
     }
@@ -2170,7 +2170,7 @@ async function runWizard() {
   };
 
   let destInfo = detectActiveDestination();
-  console.log(`[IG Tracker] Stage 2: active destination detection — kind=${destInfo.kind} needle="${destInfo.needle}" pos=${destInfo.idx}`);
+  console.log(`[Social Climber] Stage 2: active destination detection — kind=${destInfo.kind} needle="${destInfo.needle}" pos=${destInfo.idx}`);
 
   if (destInfo.kind && destInfo.kind !== "drive") {
     // Destination is wrong. We've spent days trying every
@@ -2180,7 +2180,7 @@ async function runWizard() {
     // Meta's React handler from chrome.debugger.Input.dispatchMouseEvent.
     // The honest path: halt cleanly, wait for the user to do the
     // one click manually, then resume.
-    console.warn(`[IG Tracker] Stage 2: dest=${destInfo.kind} on confirm — halting, asking user to switch manually`);
+    console.warn(`[Social Climber] Stage 2: dest=${destInfo.kind} on confirm — halting, asking user to switch manually`);
     _setStatus({
       state: "needs-help",
       step: "👆 Switch destination to Google Drive",
@@ -2200,7 +2200,7 @@ async function runWizard() {
       }
       const re = detectActiveDestination();
       if (re.kind === "drive") {
-        console.log("[IG Tracker] Stage 2: user switched destination to Google Drive ✓");
+        console.log("[Social Climber] Stage 2: user switched destination to Google Drive ✓");
         resolved = true;
         break;
       }
@@ -2217,12 +2217,12 @@ async function runWizard() {
     }
     _setStatus({ state: "running", step: "Resuming…", detail: "Destination is Google Drive — picking up." });
   } else if (destInfo.kind === "drive") {
-    console.log("[IG Tracker] Stage 2: active destination verified Google Drive ✓");
+    console.log("[Social Climber] Stage 2: active destination verified Google Drive ✓");
   } else {
     // No destination phrase found at all — could be a layout we
     // don't recognize. Surface a warning but don't auto-abort, in
     // case the user's Meta layout uses different wording.
-    console.warn("[IG Tracker] Stage 2: no destination phrase detected — proceeding cautiously");
+    console.warn("[Social Climber] Stage 2: no destination phrase detected — proceeding cautiously");
     _setStatus({
       state: "needs-help",
       step: "⚠ Verify destination before continuing",
@@ -2264,12 +2264,12 @@ async function runWizard() {
         await typeRealistic(input, email);
         await _settle();
       } else {
-        console.warn("[IG Tracker] Notify: couldn't find email input field");
+        console.warn("[Social Climber] Notify: couldn't find email input field");
       }
     }
     await stepClick("Save");
   } catch (e) {
-    console.log("[IG Tracker] Notify step skipped:", e.message);
+    console.log("[Social Climber] Notify step skipped:", e.message);
   }
 
   // Terminal step. Meta has shipped this CTA as "Start export",
@@ -2283,7 +2283,7 @@ async function runWizard() {
   // probe), we abort instead of submitting to the wrong destination.
   const finalDest = detectActiveDestination();
   if (finalDest.kind && finalDest.kind !== "drive") {
-    console.warn(`[IG Tracker] Stage 2: FINAL CHECK — destination is ${finalDest.kind}, refusing to click Start export`);
+    console.warn(`[Social Climber] Stage 2: FINAL CHECK — destination is ${finalDest.kind}, refusing to click Start export`);
     _setStatusFinal(
       "error",
       `BLOCKED — destination is ${finalDest.kind}`,
@@ -2292,7 +2292,7 @@ async function runWizard() {
     );
     throw new Error(`Final-check destination is ${finalDest.kind}, not Google Drive — refused to submit`);
   }
-  console.log(`[IG Tracker] Stage 2: final-check destination = ${finalDest.kind || 'unknown'} — proceeding with Start export`);
+  console.log(`[Social Climber] Stage 2: final-check destination = ${finalDest.kind || 'unknown'} — proceeding with Start export`);
 
   await stepClickAny([
     "Start export",
@@ -2301,7 +2301,7 @@ async function runWizard() {
     "Done",
   ]);
   await consumeWizardFlag();
-  console.log("[IG Tracker] Wizard reached final step. Watching for password prompt…");
+  console.log("[Social Climber] Wizard reached final step. Watching for password prompt…");
   _setStatusFinal("done", "Export submitted ✓", "Watching for password prompt if Meta asks.");
   // Tell the SW to detach the debugger — clears Chrome's yellow
   // "is debugging this browser" infobar now that we're done. The
@@ -2338,14 +2338,14 @@ function findEmailInput() {
 
 async function stepClick(text) {
   const el = await waitFor(() => findByText(text), { label: `click: ${text}` });
-  console.log(`[IG Tracker] Click "${text}" → ${_describe(el)}`);
+  console.log(`[Social Climber] Click "${text}" → ${_describe(el)}`);
   clickElement(el);
   await _settle();
 }
 
 async function stepClickRow(label) {
   const el = await waitFor(() => findRowByLabel(label), { label: `row: ${label}` });
-  console.log(`[IG Tracker] Open row "${label}" → ${_describe(el)}`);
+  console.log(`[Social Climber] Open row "${label}" → ${_describe(el)}`);
   clickElement(el);
   await _settle();
 }
@@ -2362,7 +2362,7 @@ async function stepClickAny(labels) {
     }
     return null;
   }, { label: `click any: ${labels.join(" | ")}` });
-  console.log(`[IG Tracker] Click any-of [${labels.join(", ")}] → ${_describe(el)}`);
+  console.log(`[Social Climber] Click any-of [${labels.join(", ")}] → ${_describe(el)}`);
   clickElement(el);
   await _settle();
 }
@@ -2380,10 +2380,10 @@ async function uncheckAll() {
   for (let pass = 0; pass < 6; pass++) {
     const checkedBoxes = Array.from(document.querySelectorAll(SELECTOR));
     if (checkedBoxes.length === 0) {
-      if (pass === 0) console.log("[IG Tracker] uncheckAll: nothing was checked");
+      if (pass === 0) console.log("[Social Climber] uncheckAll: nothing was checked");
       break;
     }
-    console.log(`[IG Tracker] uncheckAll pass ${pass + 1}: ${checkedBoxes.length} box(es)`);
+    console.log(`[Social Climber] uncheckAll pass ${pass + 1}: ${checkedBoxes.length} box(es)`);
     for (const box of checkedBoxes) {
       box.scrollIntoView({ block: "center", behavior: "instant" });
       // Mark the click as bot-fired so the user-click tracker doesn't
@@ -2463,7 +2463,7 @@ async function passwordWatchdog() {
   while (Date.now() - t0 < MAX_WATCH_MS) {
     const pw = document.querySelector("input[type='password']:not([data-igt-filled])");
     if (pw) {
-      console.log("[IG Tracker] Password field detected — autofilling.");
+      console.log("[Social Climber] Password field detected — autofilling.");
       pw.dataset.igtFilled = "1";
       pw.focus();
       await sleep(150);
@@ -2483,10 +2483,10 @@ async function passwordWatchdog() {
         findByText("Continue") ||
         findByText("Confirm");
       if (submit) {
-        console.log(`[IG Tracker] Submitting password → ${_describe(submit)}`);
+        console.log(`[Social Climber] Submitting password → ${_describe(submit)}`);
         clickElement(submit);
       } else {
-        console.warn("[IG Tracker] Password typed but Continue button not found.");
+        console.warn("[Social Climber] Password typed but Continue button not found.");
       }
       return;
     }
@@ -2527,14 +2527,14 @@ async function typeRealistic(el, text) {
   el.dispatchEvent(new Event("blur", { bubbles: true }));
 }
 
-// Ring buffer of [IG Tracker] console messages so the popup's
+// Ring buffer of [Social Climber] console messages so the popup's
 // "Copy debug log" can pull them out without DevTools.
 const _DEBUG_LOG = [];
 const _DEBUG_LOG_MAX = 300;
 function _logCapture(level, args) {
   try {
     const first = args[0];
-    if (typeof first !== "string" || !first.includes("[IG Tracker]")) return;
+    if (typeof first !== "string" || !first.includes("[Social Climber]")) return;
     const text = args.map((a) => {
       if (typeof a === "string") return a;
       try { return JSON.stringify(a); } catch { return String(a); }
@@ -2556,7 +2556,7 @@ function _logCapture(level, args) {
 
 // One-shot commands from the popup. Each runs a single discrete step
 // of the wizard so the user can drive most of it manually and just
-// click the IG Tracker button when they're on the right screen.
+// click the Social Climber button when they're on the right screen.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.type) return false;
   if (msg.type === "get-debug-log") {
@@ -2575,8 +2575,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const r = await handler(msg);
       sendResponse({ ok: true, ...(r || {}) });
     } catch (e) {
-      console.warn(`[IG Tracker] ${msg.type} failed:`, e.message);
-      showToast(`IG Tracker: ${e.message}`);
+      console.warn(`[Social Climber] ${msg.type} failed:`, e.message);
+      showToast(`Social Climber: ${e.message}`);
       sendResponse({ ok: false, error: e.message });
     }
   })();
@@ -2614,7 +2614,7 @@ const ONE_SHOT_HANDLERS = {
 
 (async function main() {
   // Always-on user-click tracker. Logs every user click on the wizard
-  // page to the [IG Tracker] debug log so it shows up in "Copy debug
+  // page to the [Social Climber] debug log so it shows up in "Copy debug
   // log" output. Filters out bot-fired clicks via _markBotClick coord
   // matching. Helps diagnose "I had to do X manually — where exactly
   // did I click?" by capturing element/role/text/path for replay.
@@ -2622,19 +2622,19 @@ const ONE_SHOT_HANDLERS = {
   if (!(await shouldRun())) {
     // Even when we don't actively drive the wizard, we should still be ready
     // to fill in the password if the user reaches that screen manually.
-    passwordWatchdog().catch((e) => console.warn("[IG Tracker] watchdog failed:", e));
+    passwordWatchdog().catch((e) => console.warn("[Social Climber] watchdog failed:", e));
     return;
   }
   // Start watching for the password before driving the wizard, so we don't
   // miss the prompt while we're clicking through earlier steps.
-  passwordWatchdog().catch((e) => console.warn("[IG Tracker] watchdog failed:", e));
+  passwordWatchdog().catch((e) => console.warn("[Social Climber] watchdog failed:", e));
   try {
     await runWizard();
-    console.log("[IG Tracker] Wizard auto-fill complete.");
+    console.log("[Social Climber] Wizard auto-fill complete.");
   } catch (e) {
-    console.warn("[IG Tracker] Wizard auto-fill stopped:", e.message);
+    console.warn("[Social Climber] Wizard auto-fill stopped:", e.message);
     _setStatusFinal("error", "Stopped", `${e.message} — click manually from here.`, 60000);
-    showToast(`IG Tracker auto-export stopped: ${e.message}. Click manually from here.`);
+    showToast(`Social Climber auto-export stopped: ${e.message}. Click manually from here.`);
     // Best-effort detach so the yellow infobar disappears even when
     // the wizard errored mid-flight.
     try { chrome.runtime.sendMessage({ type: "wizard-detach-debugger" }); } catch (_) {}
@@ -2665,10 +2665,10 @@ const ONE_SHOT_HANDLERS = {
 function _showManualPrompt(title = "One manual click needed", detailHtml = "Resume automatically once you advance the wizard.") {
   // If a prompt is already up, refresh its text so a later callsite
   // can override an earlier (now-stale) instruction.
-  let prompt = document.getElementById("igtracker-manual-prompt");
+  let prompt = document.getElementById("socialclimber-manual-prompt");
   if (!prompt) {
     prompt = document.createElement("div");
-    prompt.id = "igtracker-manual-prompt";
+    prompt.id = "socialclimber-manual-prompt";
     prompt.style.cssText = `
       position: fixed; inset: 0; pointer-events: none;
       z-index: 2147483646; display: flex;
@@ -2703,7 +2703,7 @@ function _showManualPrompt(title = "One manual click needed", detailHtml = "Resu
   `;
 }
 function _hideManualPrompt() {
-  document.getElementById("igtracker-manual-prompt")?.remove();
+  document.getElementById("socialclimber-manual-prompt")?.remove();
 }
 
 function showToast(msg) {
@@ -2725,10 +2725,10 @@ function showToast(msg) {
 // signal, which was useless when the user wasn't watching DevTools.
 // Sticks to the top-right; user can dismiss with the × button.
 function _statusPanel() {
-  let panel = document.getElementById("igtracker-export-status");
+  let panel = document.getElementById("socialclimber-export-status");
   if (panel) return panel;
   panel = document.createElement("div");
-  panel.id = "igtracker-export-status";
+  panel.id = "socialclimber-export-status";
   panel.style.cssText = `
     position: fixed; top: 16px; right: 16px;
     background: #18181b; color: #f1f1f3;
@@ -2789,6 +2789,6 @@ function _setStatus({ state, step, detail } = {}) {
 // for the user to see the outcome without leaving permanent clutter.
 function _setStatusFinal(state, step, detail, dismissAfterMs = 30000) {
   _setStatus({ state, step, detail });
-  const panel = document.getElementById("igtracker-export-status");
+  const panel = document.getElementById("socialclimber-export-status");
   if (panel) setTimeout(() => panel.remove(), dismissAfterMs);
 }

@@ -1,18 +1,18 @@
-# IG Tracker companion — browser extension
+# Social Climber companion — browser extension
 
 Two features, one extension:
 
 1. **Auto-fill the Meta data export wizard.** Click the toolbar icon → "Run export" → the wizard opens and fills itself in (JSON, followers + following, all time, Google Drive). You handle the password prompt if Meta asks for one.
 2. **Profile overlay on instagram.com.** When you visit any IG profile, a small panel appears in the top-right showing your tracker's history of that person — when you followed them, mutual since, tags, etc. The six tag buttons toggle live.
 
-The extension never talks to Meta's servers itself. It only reacts to pages your browser is already loading, and calls your local IG Tracker app at `localhost:8000`.
+The extension never talks to Meta's servers itself. It only reacts to pages your browser is already loading, and calls your local Social Climber at `localhost:8000`.
 
 ## Install on Chrome
 
-1. Make sure your IG Tracker app is running (`./run.sh` from the repo root).
+1. Make sure your Social Climber is running (`./run.sh` from the repo root).
 2. Open `chrome://extensions` → toggle **Developer mode** on (top-right).
 3. Click **Load unpacked** → pick this `extension/chrome/` folder.
-4. The IG Tracker icon appears in the toolbar. Click it → confirm the tracker URL is `http://127.0.0.1:8000` → Save settings.
+4. The Social Climber icon appears in the toolbar. Click it → confirm the tracker URL is `http://127.0.0.1:8000` → Save settings.
 5. (Optional) Set a saved IG password in the popup if you want fully no-touch exports. Default is empty (= you type it manually when Meta asks).
 6. (Optional) Tick "Auto-click Continue on Google OAuth" if you want the Google permission step to also self-advance.
 
@@ -21,12 +21,12 @@ The extension never talks to Meta's servers itself. It only reacts to pages your
 Safari needs a one-time conversion step to turn the Chrome extension into a Safari one (Apple Developer membership required, which you have).
 
 ```bash
-xcrun safari-web-extension-converter extension/chrome --project-location /tmp/igtracker-safari --bundle-identifier com.joshuayeung.igtracker
+xcrun safari-web-extension-converter extension/chrome --project-location /tmp/social-climber-safari --bundle-identifier com.example.socialclimber
 ```
 
-This generates an Xcode project in `/tmp/igtracker-safari`. Open it in Xcode, build and run, and Safari picks up the extension. After that:
+This generates an Xcode project in `/tmp/social-climber-safari`. Open it in Xcode, build and run, and Safari picks up the extension. After that:
 
-1. Safari → Settings → Extensions → enable "IG Tracker companion".
+1. Safari → Settings → Extensions → enable "Social Climber companion".
 2. Safari → Settings → Websites → Extensions → grant the extension permission for `instagram.com`, `accountscenter.instagram.com`, and `accounts.google.com`.
 
 ## Permissions explained
@@ -85,7 +85,7 @@ If any step doesn't land where the script expects (Meta tweaked the wording, slo
 
 **Overlay doesn't appear on IG profiles** → Check that "Show profile overlay on instagram.com" is enabled in the popup. Reload the IG page. Make sure the tracker is reachable.
 
-**Auto-export gets stuck** → Meta occasionally changes form field names or adds new screens. Open the Chrome devtools console on the export page; the script logs `[IG Tracker]` at every step so you can see where it stalled. Ping the issue tracker with the log.
+**Auto-export gets stuck** → Meta occasionally changes form field names or adds new screens. Open the Chrome devtools console on the export page; the script logs `[Social Climber]` at every step so you can see where it stalled. Ping the issue tracker with the log.
 
 ## Code layout
 

@@ -530,8 +530,8 @@ async function loadHome() {
 // has finished). Persistent until manually dismissed; survives tab
 // navigation and page reloads via localStorage of the last-shown
 // completed_id (so the user only ever sees each calibration once).
-const CAL_LS_LAST_ACKED = "igtracker:calibration:lastAcked";
-const CAL_LS_LAST_DISPLAYED_DONE = "igtracker:calibration:lastDisplayedDone";
+const CAL_LS_LAST_ACKED = "socialclimber:calibration:lastAcked";
+const CAL_LS_LAST_DISPLAYED_DONE = "socialclimber:calibration:lastDisplayedDone";
 let _calibrationPollTimer = null;
 let _calibrationLastState = null;
 
@@ -2213,7 +2213,7 @@ function exportCurrentListCsv() {
   const date = new Date().toISOString().slice(0, 10);
   const suffix = _intersectKinds.size ? "-intersection" : "";
   a.href = url;
-  a.download = `igtracker-${kind}${suffix}-${date}.csv`;
+  a.download = `socialclimber-${kind}${suffix}-${date}.csv`;
   document.body.appendChild(a);
   a.click();
   a.remove();

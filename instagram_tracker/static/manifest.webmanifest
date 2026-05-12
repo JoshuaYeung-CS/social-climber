@@ -1,6 +1,6 @@
 {
-  "name": "Instagram Tracker",
-  "short_name": "IG Tracker",
+  "name": "Social Climber",
+  "short_name": "Social Climber",
   "description": "Local Instagram follow audit tool",
   "start_url": "/",
   "display": "standalone",

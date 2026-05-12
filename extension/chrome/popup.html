@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <link rel="stylesheet" href="popup.css" />
-  <title>IG Tracker</title>
+  <title>Social Climber</title>
 </head>
 <body>
   <header class="head">
-    <h1>IG Tracker</h1>
+    <h1>Social Climber</h1>
     <span class="status" id="status">checking…</span>
   </header>
 
@@ -40,7 +40,7 @@
   <section class="card">
     <h2>Tools</h2>
     <button class="secondary" id="save-all-tabs">Save all open IG tabs to follow queue</button>
-    <button class="secondary" id="copy-debug-log" style="margin-top:6px" title="Copy the recent [IG Tracker] console output to your clipboard">📋 Copy debug log</button>
+    <button class="secondary" id="copy-debug-log" style="margin-top:6px" title="Copy the recent [Social Climber] console output to your clipboard">📋 Copy debug log</button>
   </section>
 
   <section class="card collapsible">
@@ -73,7 +73,7 @@
         <input type="checkbox" id="show-overlay" checked />
         <span>Show profile overlay on instagram.com</span>
       </label>
-      <p class="muted" style="font-size:11px; margin: 6px 0;">Failure alerts (push to phone on 2+ consecutive failures) are configured server-side at <code>~/.config/igtracker/push.json</code>. iMessage to your own number is recommended — no third-party app, E2E by Apple. See the server <code>/api/push</code> docs.</p>
+      <p class="muted" style="font-size:11px; margin: 6px 0;">Failure alerts (push to phone on 2+ consecutive failures) are configured server-side at <code>~/.config/social-climber/push.json</code>. iMessage to your own number is recommended — no third-party app, E2E by Apple. See the server <code>/api/push</code> docs.</p>
       <button class="secondary" id="save-settings">Save settings</button>
     </div>
   </section>

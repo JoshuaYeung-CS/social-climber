@@ -2,7 +2,7 @@
    sized to coexist with IG's own UI without colliding. Uses our own colors
    so it visually identifies as the tracker, not as IG. */
 
-.igtracker-overlay {
+.socialclimber-overlay {
   position: fixed;
   top: 76px;        /* clear IG's sticky header */
   right: 16px;
@@ -19,7 +19,7 @@
   overflow: hidden;
   /* IG sometimes uses very dark themes; the border + shadow keep it visible. */
 }
-.igtracker-overlay.collapsed {
+.socialclimber-overlay.collapsed {
   width: auto;
   background: transparent;
   border: 0;
@@ -214,10 +214,10 @@
 .igt-pill:hover { border-color: #4f8cff; color: #4f8cff; }
 
 /* IG forces some annoying global styles; reset what we need to. */
-.igtracker-overlay,
-.igtracker-overlay * {
+.socialclimber-overlay,
+.socialclimber-overlay * {
   box-sizing: border-box;
 }
-.igtracker-overlay button {
+.socialclimber-overlay button {
   font-family: inherit;
 }

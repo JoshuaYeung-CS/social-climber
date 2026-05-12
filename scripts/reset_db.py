@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reset the IG Tracker DB while preserving manual tags + the follow queue.
+"""Reset the Social Climber DB while preserving manual tags + the follow queue.
 
 Wipes all snapshot-derived data so the user can re-import their exports
 from a clean slate. Useful when historical imports captured corrupted
@@ -59,7 +59,7 @@ PRESERVE_TABLES = [
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Reset IG Tracker DB, preserving tags.")
+    p = argparse.ArgumentParser(description="Reset Social Climber DB, preserving tags.")
     p.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
     args = p.parse_args()
 

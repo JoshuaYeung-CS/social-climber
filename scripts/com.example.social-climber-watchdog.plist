@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.example.igtracker-watchdog</string>
+    <string>com.example.social-climber-watchdog</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>$HOME/git-repos/instagram-tracker/scripts/igtracker-watchdog.sh</string>
+        <string>$HOME/git-repos/social-climber/scripts/social-climber-watchdog.sh</string>
     </array>
 
     <key>StartInterval</key>
@@ -17,10 +17,10 @@
     <false/>
 
     <key>StandardOutPath</key>
-    <string>$HOME/Library/Logs/igtracker-watchdog.log</string>
+    <string>$HOME/Library/Logs/social-climber-watchdog.log</string>
 
     <key>StandardErrorPath</key>
-    <string>$HOME/Library/Logs/igtracker-watchdog.err.log</string>
+    <string>$HOME/Library/Logs/social-climber-watchdog.err.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>

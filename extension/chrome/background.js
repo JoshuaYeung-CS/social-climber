@@ -112,7 +112,7 @@ async function refreshExportAlarm() {
   const { minH, maxH } = await _resolveScheduleHours();
   await chrome.alarms.clear(SCHEDULE_ALARM);
   if (minH <= 0) {
-    console.log("[IG Tracker] Scheduled export disabled.");
+    console.log("[Social Climber] Scheduled export disabled.");
     return;
   }
   const minMin = Math.max(1, minH * 60);
@@ -120,9 +120,9 @@ async function refreshExportAlarm() {
   const next = minMin + Math.random() * (maxMin - minMin);
   chrome.alarms.create(SCHEDULE_ALARM, { delayInMinutes: next });
   if (maxMin > minMin) {
-    console.log(`[IG Tracker] Next scheduled export in ${next.toFixed(1)} min (random ${minMin.toFixed(1)}–${maxMin.toFixed(1)}).`);
+    console.log(`[Social Climber] Next scheduled export in ${next.toFixed(1)} min (random ${minMin.toFixed(1)}–${maxMin.toFixed(1)}).`);
   } else {
-    console.log(`[IG Tracker] Next scheduled export in ${next.toFixed(1)} min (fixed).`);
+    console.log(`[Social Climber] Next scheduled export in ${next.toFixed(1)} min (fixed).`);
   }
 }
 
@@ -160,13 +160,13 @@ async function _reportBotEvent(payload) {
       body: JSON.stringify({ ...payload, extensionVersion: ext.version }),
     });
   } catch (e) {
-    console.warn("[IG Tracker] bot-event report failed:", e?.message || e);
+    console.warn("[Social Climber] bot-event report failed:", e?.message || e);
   }
 }
 
 // Phone push: routes through the local server's /api/push endpoint,
 // which decides delivery method (iMessage / email / ntfy) based on
-// ~/.config/igtracker/push.json. Centralising in the server keeps
+// ~/.config/social-climber/push.json. Centralising in the server keeps
 // the user's phone number / smtp creds OUT of the extension and out
 // of git.
 async function _phonePush(title, body, priority = "default") {
@@ -180,12 +180,12 @@ async function _phonePush(title, body, priority = "default") {
     });
     const j = await r.json().catch(() => ({}));
     if (j.ok) {
-      console.log(`[IG Tracker] push (${j.method}) sent: ${title}`);
+      console.log(`[Social Climber] push (${j.method}) sent: ${title}`);
     } else {
-      console.warn(`[IG Tracker] push failed: ${j.method || "?"} — ${j.error || j.info || "unknown"}`);
+      console.warn(`[Social Climber] push failed: ${j.method || "?"} — ${j.error || j.info || "unknown"}`);
     }
   } catch (e) {
-    console.warn("[IG Tracker] push failed:", e?.message || e);
+    console.warn("[Social Climber] push failed:", e?.message || e);
   }
 }
 
@@ -201,7 +201,7 @@ async function _scheduleAutoRetry(reason) {
   const dayMatches = autoRetryCount.day === today;
   const count = dayMatches ? Number(autoRetryCount.count) || 0 : 0;
   if (count >= AUTO_RETRY_MAX_PER_DAY) {
-    console.log(`[IG Tracker] Auto-retry: cap reached for ${today} (${count}/${AUTO_RETRY_MAX_PER_DAY}); waiting for next regular slot.`);
+    console.log(`[Social Climber] Auto-retry: cap reached for ${today} (${count}/${AUTO_RETRY_MAX_PER_DAY}); waiting for next regular slot.`);
     return;
   }
   await chrome.storage.local.set({
@@ -209,7 +209,7 @@ async function _scheduleAutoRetry(reason) {
   });
   await chrome.alarms.clear(RETRY_ALARM);
   chrome.alarms.create(RETRY_ALARM, { delayInMinutes: AUTO_RETRY_DELAY_MIN });
-  console.log(`[IG Tracker] Auto-retry armed in ${AUTO_RETRY_DELAY_MIN} min (reason: ${reason}, today's count: ${count + 1}/${AUTO_RETRY_MAX_PER_DAY}).`);
+  console.log(`[Social Climber] Auto-retry armed in ${AUTO_RETRY_DELAY_MIN} min (reason: ${reason}, today's count: ${count + 1}/${AUTO_RETRY_MAX_PER_DAY}).`);
 }
 
 // Check consecutive-failure count via /api/bot-health and push to ntfy
@@ -272,13 +272,13 @@ async function _onScheduledExportFire({ manual = false } = {}) {
     const minGapMs = Math.max(60_000, (minH * 60_000) - 60_000);  // interval minus 1 min, minimum 1 min
     const sinceMs = Date.now() - lastScheduledFireAt;
     if (sinceMs < minGapMs) {
-      console.log(`[IG Tracker] Scheduled export: alarm-replay protection — last fire ${Math.round(sinceMs/1000)}s ago (need ${Math.round(minGapMs/1000)}s+). Skipping.`);
+      console.log(`[Social Climber] Scheduled export: alarm-replay protection — last fire ${Math.round(sinceMs/1000)}s ago (need ${Math.round(minGapMs/1000)}s+). Skipping.`);
       return;
     }
   }
   await chrome.storage.local.set({ lastScheduledFireAt: Date.now() });
 
-  console.log("[IG Tracker] Scheduled export alarm fired — opening wizard.");
+  console.log("[Social Climber] Scheduled export alarm fired — opening wizard.");
   const startedAt = Date.now();
   // Open in a SEPARATE non-focused window rather than a background
   // tab in the user's main window. Why: background tabs get
@@ -302,7 +302,7 @@ async function _onScheduledExportFire({ manual = false } = {}) {
     // Fallback: if windows.create fails (e.g., insufficient permissions
     // on some platforms), fall back to a foreground tab. Worse UX
     // but at least the wizard runs.
-    console.warn("[IG Tracker] windows.create failed, falling back to active tab:", e?.message || e);
+    console.warn("[Social Climber] windows.create failed, falling back to active tab:", e?.message || e);
     const tab = await chrome.tabs.create({
       url: "https://accountscenter.instagram.com/info_and_permissions/dyi/",
       active: true,
@@ -310,7 +310,7 @@ async function _onScheduledExportFire({ manual = false } = {}) {
     tabId = tab?.id ?? null;
   }
   const arrivalWindow = await _arrivalWindowMin();
-  console.log(`[IG Tracker] Arrival poll window: first check at +${arrivalWindow.firstMin}m, give up at +${arrivalWindow.giveUpMin}m (${arrivalWindow.basis}).`);
+  console.log(`[Social Climber] Arrival poll window: first check at +${arrivalWindow.firstMin}m, give up at +${arrivalWindow.giveUpMin}m (${arrivalWindow.basis}).`);
   // pendingArrival captures the window at alarm-creation time so a
   // mid-run history change doesn't move the goalpost.
   await chrome.storage.local.set({
@@ -339,7 +339,7 @@ async function _onArrivalPollFire() {
   const elapsedMin = elapsedMs / 60000;
   const giveUpMin = Number.isFinite(pendingArrival.giveUpMin) ? pendingArrival.giveUpMin : ARRIVAL_DEFAULT_GIVE_UP_MIN;
   if (elapsedMin > giveUpMin) {
-    console.warn(`[IG Tracker] Drive arrival poll: gave up after ${elapsedMin.toFixed(0)}min.`);
+    console.warn(`[Social Climber] Drive arrival poll: gave up after ${elapsedMin.toFixed(0)}min.`);
     await chrome.alarms.clear(ARRIVAL_POLL_ALARM);
     await chrome.storage.local.set({ pendingArrival: null });
     const elapsedSec = Math.round(elapsedMs / 1000);
@@ -353,7 +353,7 @@ async function _onArrivalPollFire() {
     await _checkAndPushOnConsecutive();
     return;
   }
-  console.log(`[IG Tracker] Drive arrival poll: scanning (elapsed ${elapsedMin.toFixed(0)}min).`);
+  console.log(`[Social Climber] Drive arrival poll: scanning (elapsed ${elapsedMin.toFixed(0)}min).`);
   const result = await _trackerScan(pendingArrival.startedAt);
   if (!result) return;
   const newImports = Number(result.imported) || 0;
@@ -366,7 +366,7 @@ async function _onArrivalPollFire() {
     const reason = newImports > 0
       ? `${newImports} new import(s)`
       : `${newSince} new file(s) in Drive (deduped against existing snapshots)`;
-    console.log(`[IG Tracker] Drive arrival! ${reason} after ${elapsedSec}s.`);
+    console.log(`[Social Climber] Drive arrival! ${reason} after ${elapsedSec}s.`);
     await chrome.alarms.clear(ARRIVAL_POLL_ALARM);
     await chrome.storage.local.set({ pendingArrival: null });
     await _appendTiming(elapsedSec);
@@ -403,7 +403,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     // again if we ask for it.
     await refreshExportAlarm();
   } else if (alarm.name === RETRY_ALARM) {
-    console.log("[IG Tracker] Auto-retry firing.");
+    console.log("[Social Climber] Auto-retry firing.");
     await _onScheduledExportFire();
     // Don't re-arm the regular schedule from the retry path — the
     // regular schedule's next fire is already armed independently.
@@ -414,7 +414,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (Number.isFinite(tabId)) {
       try { await chrome.tabs.remove(tabId); }
       catch (_) { /* tab already closed by user */ }
-      console.log(`[IG Tracker] Wizard tab ${tabId} closed (post-submit alarm)`);
+      console.log(`[Social Climber] Wizard tab ${tabId} closed (post-submit alarm)`);
     }
 });
 
@@ -466,11 +466,11 @@ chrome.runtime.onStartup.addListener(async () => {
   try {
     const sched = await chrome.alarms.get(SCHEDULE_ALARM);
     if (!sched) {
-      console.log("[IG Tracker] Boot: SCHEDULE_ALARM missing, re-arming.");
+      console.log("[Social Climber] Boot: SCHEDULE_ALARM missing, re-arming.");
       await refreshExportAlarm();
     }
   } catch (e) {
-    console.warn("[IG Tracker] Boot alarm check failed:", e?.message || e);
+    console.warn("[Social Climber] Boot alarm check failed:", e?.message || e);
     refreshExportAlarm().catch(() => {});
   }
 })();
@@ -501,10 +501,10 @@ async function _attachDebugger(tabId) {
   try {
     await chrome.debugger.attach({ tabId }, "1.3");
     _debuggerTabs.add(tabId);
-    console.log(`[IG Tracker] debugger: attached to tab ${tabId}`);
+    console.log(`[Social Climber] debugger: attached to tab ${tabId}`);
     return true;
   } catch (e) {
-    console.warn(`[IG Tracker] debugger: attach failed for tab ${tabId}:`, e?.message || e);
+    console.warn(`[Social Climber] debugger: attach failed for tab ${tabId}:`, e?.message || e);
     return false;
   }
 }
@@ -514,7 +514,7 @@ async function _detachDebugger(tabId) {
   _debuggerTabs.delete(tabId);
   try {
     await chrome.debugger.detach({ tabId });
-    console.log(`[IG Tracker] debugger: detached from tab ${tabId}`);
+    console.log(`[Social Climber] debugger: detached from tab ${tabId}`);
   } catch (e) {
     // Tab might already be closed; ignore.
   }
@@ -526,7 +526,7 @@ async function _detachDebugger(tabId) {
 chrome.debugger.onDetach.addListener(({ tabId }) => {
   if (tabId != null && _debuggerTabs.has(tabId)) {
     _debuggerTabs.delete(tabId);
-    console.log(`[IG Tracker] debugger: external detach for tab ${tabId}`);
+    console.log(`[Social Climber] debugger: external detach for tab ${tabId}`);
   }
 });
 
@@ -555,10 +555,10 @@ async function _dispatchTrustedClick(tabId, x, y) {
       tapCount: 1,
       gestureSourceType: "default",
     });
-    console.log(`[IG Tracker] trusted-click: synthesizeTapGesture @ (${x},${y}) ✓`);
+    console.log(`[Social Climber] trusted-click: synthesizeTapGesture @ (${x},${y}) ✓`);
     return;
   } catch (e) {
-    console.warn(`[IG Tracker] trusted-click: synthesizeTapGesture failed (${e?.message || e}) — falling back to dispatchMouseEvent`);
+    console.warn(`[Social Climber] trusted-click: synthesizeTapGesture failed (${e?.message || e}) — falling back to dispatchMouseEvent`);
   }
   // Strategy B: legacy dispatchMouseEvent (mouseMoved → mousePressed
   // → mouseReleased). Kept as fallback in case the gesture API isn't
@@ -572,7 +572,7 @@ async function _dispatchTrustedClick(tabId, x, y) {
   await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
     type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1,
   });
-  console.log(`[IG Tracker] trusted-click: dispatchMouseEvent @ (${x},${y}) ✓ [fallback]`);
+  console.log(`[Social Climber] trusted-click: dispatchMouseEvent @ (${x},${y}) ✓ [fallback]`);
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -632,7 +632,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await chrome.alarms.create(`${CLOSE_WIZARD_TAB_PREFIX}${tabId}`, {
           delayInMinutes: 1,
         });
-        console.log(`[IG Tracker] Wizard finished, closing tab ${tabId} in 1 min (alarm)`);
+        console.log(`[Social Climber] Wizard finished, closing tab ${tabId} in 1 min (alarm)`);
       }
       sendResponse({ ok: true });
     })();
@@ -658,7 +658,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         },
       });
       await _appendHistory({ ts: startedAt, status: "triggered-manual" });
-      console.log(`[IG Tracker] Arrival poll window: first +${arrivalWindow.firstMin}m, give up +${arrivalWindow.giveUpMin}m (${arrivalWindow.basis}).`);
+      console.log(`[Social Climber] Arrival poll window: first +${arrivalWindow.firstMin}m, give up +${arrivalWindow.giveUpMin}m (${arrivalWindow.basis}).`);
       await chrome.alarms.clear(ARRIVAL_POLL_ALARM);
       chrome.alarms.create(ARRIVAL_POLL_ALARM, {
         delayInMinutes: arrivalWindow.firstMin,
@@ -684,7 +684,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       for (const tid of Array.from(_debuggerTabs)) {
         await _detachDebugger(tid);
       }
-      console.log("[IG Tracker] Export stopped by user — alarm cleared.");
+      console.log("[Social Climber] Export stopped by user — alarm cleared.");
       sendResponse({ ok: true });
     })();
     return true;
@@ -703,7 +703,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           giveUpMin: arrivalWindow.giveUpMin,
         },
       });
-      console.log(`[IG Tracker] Arrival poll window: first +${arrivalWindow.firstMin}m, give up +${arrivalWindow.giveUpMin}m (${arrivalWindow.basis}).`);
+      console.log(`[Social Climber] Arrival poll window: first +${arrivalWindow.firstMin}m, give up +${arrivalWindow.giveUpMin}m (${arrivalWindow.basis}).`);
       await chrome.alarms.clear(ARRIVAL_POLL_ALARM);
       chrome.alarms.create(ARRIVAL_POLL_ALARM, {
         delayInMinutes: arrivalWindow.firstMin,
@@ -814,7 +814,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         } catch (e1) {
           // CORS rejection or network error with credentials — retry
           // cookieless. Most non-IG CDNs work this way.
-          console.log(`[IG Tracker SW] credentialed fetch failed (${e1.message}), retrying cookieless: ${msg.url.slice(0, 80)}`);
+          console.log(`[Social Climber SW] credentialed fetch failed (${e1.message}), retrying cookieless: ${msg.url.slice(0, 80)}`);
           result = await fetchOnce("omit");
         }
         sendResponse(result);

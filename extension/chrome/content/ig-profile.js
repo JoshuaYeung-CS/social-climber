@@ -1,6 +1,6 @@
 // Profile overlay for instagram.com. When the user navigates to a profile
-// page, fetches that profile's history from the local IG Tracker app and
-// renders a small panel pinned to the top-right of the IG page.
+// page, fetches that profile's history from the local Social Climber app
+// and renders a small panel pinned to the top-right of the IG page.
 //
 // Instagram is a single-page app, so we can't rely on document_idle alone —
 // we also watch URL changes via a MutationObserver on the document title
@@ -430,8 +430,8 @@ function detectAccountUnavailable() {
 
 function buildPanel() {
   const panel = document.createElement("div");
-  panel.id = "igtracker-overlay";
-  panel.className = "igtracker-overlay";
+  panel.id = "socialclimber-overlay";
+  panel.className = "socialclimber-overlay";
   document.body.appendChild(panel);
   return panel;
 }
@@ -609,7 +609,7 @@ async function handleUnavailable(panel, username, data) {
   }).catch(() => {});
   panel.innerHTML = `
     <div class="igt-head">
-      <span class="igt-title">IG Tracker</span>
+      <span class="igt-title">Social Climber</span>
       <button class="igt-icon" data-action="collapse" title="Minimize">−</button>
       <button class="igt-icon" data-action="close" title="Close">✕</button>
     </div>
@@ -630,7 +630,7 @@ async function handleUnavailable(panel, username, data) {
 function renderEmpty(panel, username, reason) {
   panel.innerHTML = `
     <div class="igt-head">
-      <span class="igt-title">IG Tracker</span>
+      <span class="igt-title">Social Climber</span>
       <button class="igt-icon" data-action="collapse" title="Minimize">−</button>
       <button class="igt-icon" data-action="close" title="Close">✕</button>
     </div>
@@ -863,7 +863,7 @@ function renderPanel(panel, username, data) {
 
   panel.innerHTML = `
     <div class="igt-head">
-      <span class="igt-title">IG Tracker</span>
+      <span class="igt-title">Social Climber</span>
       <button class="igt-icon" data-action="collapse" title="Minimize">−</button>
       <button class="igt-icon" data-action="close" title="Close">✕</button>
     </div>
@@ -996,7 +996,7 @@ async function refreshOverlay(username) {
   // Show loading state immediately so the user knows the extension responded.
   _panelEl.innerHTML = `
     <div class="igt-head">
-      <span class="igt-title">IG Tracker</span>
+      <span class="igt-title">Social Climber</span>
       <button class="igt-icon" data-action="collapse" title="Minimize">−</button>
       <button class="igt-icon" data-action="close" title="Close">✕</button>
     </div>
@@ -1049,7 +1049,7 @@ const _DEBUG_LOG_MAX = 300;
 function _logCapture(level, args) {
   try {
     const first = args[0];
-    if (typeof first !== "string" || !first.includes("[IG Tracker]")) return;
+    if (typeof first !== "string" || !first.includes("[Social Climber]")) return;
     const text = args.map((a) => {
       if (typeof a === "string") return a;
       try { return JSON.stringify(a); } catch { return String(a); }
@@ -1071,7 +1071,7 @@ function _logCapture(level, args) {
 }
 
 // Listen for one-shot commands from the popup. Currently:
-//   get-debug-log — returns the captured [IG Tracker] console output as
+//   get-debug-log — returns the captured [Social Climber] console output as
 //     a single newline-joined string, for the popup's Copy button.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return false;

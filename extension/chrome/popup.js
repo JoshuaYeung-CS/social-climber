@@ -1,4 +1,4 @@
-// Popup UI for the IG Tracker companion extension. Handles:
+// Popup UI for the Social Climber companion extension. Handles:
 //   - Showing whether the local app is reachable
 //   - "Run export" button → opens the Meta export page so the content
 //     script there can take over and auto-fill the wizard
@@ -404,7 +404,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 
   el("copy-debug-log").addEventListener("click", async () => {
-    // Pull the [IG Tracker] log out of the active tab's content
+    // Pull the [Social Climber] log out of the active tab's content
     // script. We don't know up front whether we're on instagram.com
     // (ig-profile.js) or accountscenter.instagram.com (meta-export.js)
     // so just try the active tab — both content scripts respond to
@@ -418,7 +418,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       const err = chrome.runtime.lastError;
       if (err) {
         if (/Receiving end does not exist/i.test(err.message || "")) {
-          flashStatus("no IG Tracker logs on this tab — open instagram.com");
+          flashStatus("no Social Climber logs on this tab — open instagram.com");
         } else {
           flashStatus(`failed: ${err.message}`);
         }
@@ -428,7 +428,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         flashStatus("no logs available");
         return;
       }
-      const header = `# IG Tracker debug log\n# url: ${resp.url}\n# entries: ${resp.count}\n# extension version: ${chrome.runtime.getManifest().version}\n\n`;
+      const header = `# Social Climber debug log\n# url: ${resp.url}\n# entries: ${resp.count}\n# extension version: ${chrome.runtime.getManifest().version}\n\n`;
       const text = header + (resp.log || "(empty)");
       try {
         await navigator.clipboard.writeText(text);

@@ -123,7 +123,7 @@ function findAccountRow(email) {
   // independent opt-in for users who don't set an email.
   const wantContinue = !!stored.autosubmitGoogle || wantPickAccount;
   if (!wantContinue && !wantPickAccount) return;
-  console.log(`[IG Tracker] OAuth helper active (pickEmail=${targetEmail || "—"}, autoContinue=${wantContinue})`);
+  console.log(`[Social Climber] OAuth helper active (pickEmail=${targetEmail || "—"}, autoContinue=${wantContinue})`);
 
   // Single polling loop that handles both screens (account picker
   // → consent). Google's OAuth flow uses SPA navigation between these
@@ -136,7 +136,7 @@ function findAccountRow(email) {
     await new Promise(r => setTimeout(r, 300));
     if (!pageMentionsMeta()) {
       if (i > 0 && i % 10 === 0) {
-        console.log(`[IG Tracker] OAuth: waiting for Meta-branded page text… (iter ${i})`);
+        console.log(`[Social Climber] OAuth: waiting for Meta-branded page text… (iter ${i})`);
       }
       continue;
     }
@@ -144,14 +144,14 @@ function findAccountRow(email) {
     if (!pickDone) {
       const row = findAccountRow(targetEmail);
       if (row) {
-        console.log(`[IG Tracker] Auto-picking Google account ${targetEmail}.`);
+        console.log(`[Social Climber] Auto-picking Google account ${targetEmail}.`);
         row.click();
         pickDone = true;
         // Keep looping — the consent screen mounts via SPA nav, no
         // page reload, so we need to find Continue on a later iter.
         continue;
       } else if (i - lastWarn > 6) {
-        console.warn(`[IG Tracker] OAuth: account row for ${targetEmail} not found yet; still waiting.`);
+        console.warn(`[Social Climber] OAuth: account row for ${targetEmail} not found yet; still waiting.`);
         lastWarn = i;
       }
     }
@@ -159,11 +159,11 @@ function findAccountRow(email) {
     if (wantContinue) {
       const btn = findContinueButton();
       if (btn) {
-        console.log("[IG Tracker] Auto-clicking Google OAuth Continue.");
+        console.log("[Social Climber] Auto-clicking Google OAuth Continue.");
         btn.click();
         return;
       }
     }
   }
-  console.warn("[IG Tracker] OAuth: gave up after polling — page never matched, or click target not found.");
+  console.warn("[Social Climber] OAuth: gave up after polling — page never matched, or click target not found.");
 })();

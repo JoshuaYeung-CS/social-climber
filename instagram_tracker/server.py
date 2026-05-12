@@ -28,7 +28,7 @@ from .config import DB_PATH, STATIC_DIR
 from .deps import db_conn
 from .parsers import normalize_account_input
 
-app = FastAPI(title="Instagram Tracker", version="1.0.0")
+app = FastAPI(title="Social Climber", version="1.0.0")
 
 # CORS allowlist for the companion browser extension. The local UI lives at
 # 127.0.0.1 and is same-origin (no CORS needed), but the extension's content
@@ -555,7 +555,7 @@ def audit_log(limit: int = 200):
 #
 # The extension and the watchdog don't need to know HOW pushes get
 # delivered — they POST to /api/push and the server decides based on
-# ~/.config/igtracker/push.json. This keeps the user's phone number /
+# ~/.config/social-climber/push.json. This keeps the user's phone number /
 # email / ntfy topic OUT of the extension and OUT of git.
 #
 # Config file format (JSON):
@@ -572,7 +572,7 @@ def audit_log(limit: int = 200):
 # approve once.
 
 _PUSH_CONFIG_PATH = (
-    __import__("pathlib").Path.home() / ".config" / "igtracker" / "push.json"
+    __import__("pathlib").Path.home() / ".config" / "social-climber" / "push.json"
 )
 
 
@@ -643,7 +643,7 @@ def _send_email(recipient: str, smtp: dict, title: str, body: str) -> tuple[bool
     from email.message import EmailMessage
     msg = EmailMessage()
     msg["Subject"] = title or "(no subject)"
-    msg["From"] = smtp.get("from") or smtp.get("user") or "igtracker@localhost"
+    msg["From"] = smtp.get("from") or smtp.get("user") or "socialclimber@localhost"
     msg["To"] = recipient
     msg.set_content(body or "")
     try:
@@ -682,7 +682,7 @@ def _send_ntfy(topic: str, title: str, body: str, priority: str) -> tuple[bool, 
 @app.post("/api/push")
 def api_push(payload: dict = Body(...)):
     """Send a push via whatever method is configured in
-    ~/.config/igtracker/push.json. Body: {title, message, priority}."""
+    ~/.config/social-climber/push.json. Body: {title, message, priority}."""
     title = (payload.get("title") or "").strip()
     body = (payload.get("message") or "").strip()
     priority = (payload.get("priority") or "default").strip()
@@ -690,7 +690,7 @@ def api_push(payload: dict = Body(...)):
     method = (cfg.get("method") or "none").lower()
     recipient = (cfg.get("recipient") or "").strip()
     if method == "none":
-        return {"ok": False, "method": "none", "error": "push not configured (~/.config/igtracker/push.json)"}
+        return {"ok": False, "method": "none", "error": "push not configured (~/.config/social-climber/push.json)"}
     # Reminders doesn't need a recipient — it's local-to-iCloud.
     if method != "reminders" and not recipient:
         return {"ok": False, "method": method, "error": "no recipient configured"}

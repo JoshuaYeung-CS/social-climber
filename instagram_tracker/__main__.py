@@ -60,7 +60,7 @@ def main():
 
     print()
     print("=" * 60)
-    print("  Instagram Tracker" + ("  (HTTPS)" if https_on else ""))
+    print("  Social Climber" + ("  (HTTPS)" if https_on else ""))
     print("=" * 60)
     print(f"  Mac:    {scheme}://localhost:{port}")
     ip = lan_ip()
