@@ -3847,19 +3847,25 @@ function buildSeriesCheckboxes() {
   const wrap = $("#history-series");
   if (!wrap) return;
   wrap.innerHTML = HISTORY_SERIES.map((s) =>
-    `<label class="series-chk">
-       <input type="checkbox" data-series="${s.key}"${s.on ? " checked" : ""} />
-       <span class="swatch" style="background:${s.color}"></span>${s.label}
-     </label>`
+    `<button type="button" class="series-chip" data-series="${s.key}" data-on="${s.on}" aria-pressed="${s.on}" style="--chip-color:${s.color}">
+       <span class="series-chip-dot" aria-hidden="true"></span>
+       <span class="series-chip-label">${escapeHtml(s.label)}</span>
+     </button>`
   ).join("");
-  $$("input[data-series]", wrap).forEach((el) =>
-    el.addEventListener("change", () => {
+  $$("button.series-chip", wrap).forEach((el) =>
+    el.addEventListener("click", () => {
       const s = HISTORY_SERIES.find((x) => x.key === el.dataset.series);
-      if (s) s.on = el.checked;
+      if (!s) return;
+      s.on = !s.on;
+      el.dataset.on = String(s.on);
+      el.setAttribute("aria-pressed", String(s.on));
       renderHistory();
-      // Series checkboxes only filter the chart now — the detail panel
-      // below always shows every change at the clicked point regardless
-      // of which series are toggled. No re-render needed.
+      // Selection now filters the detail panel too — re-render in place
+      // so toggling a chip while a snapshot is open updates the visible
+      // blocks immediately.
+      if (_lastHistoryDetail) {
+        showHistoryDetail(_lastHistoryDetail.idx, _lastHistoryDetail.snaps);
+      }
     })
   );
 }
@@ -4135,6 +4141,43 @@ function shortDate(s) {
   return `${months[parseInt(mo, 10) - 1]} ${parseInt(d, 10)}`;
 }
 
+// Series-checkbox state filters the detail panel: blocks and count
+// cards only render when at least one of their related series is
+// visible. Lets the user focus on "just unfollowers" or "just pending
+// activity" without scanning past unrelated blocks.
+const HISTORY_DETAIL_BLOCK_TO_SERIES = {
+  new_followers:                ["followers", "mutuals", "new_followers"],
+  they_unfollowed_you:          ["followers", "mutuals", "cumulative_unfollowers"],
+  you_removed_as_follower:      ["followers", "mutuals"],
+  new_following:                ["following", "mutuals", "new_follows"],
+  you_unfollowed:               ["following", "mutuals"],
+  they_removed_you_as_follower: ["following", "mutuals"],
+  new_pending:                  ["pending", "new_outgoing_requests"],
+  resolved_pending:             ["pending", "new_follows"],
+};
+const HISTORY_DETAIL_COUNT_TO_SERIES = {
+  followers: ["followers", "new_followers"],
+  following: ["following", "new_follows"],
+  mutuals:   ["mutuals"],
+  pending:   ["pending", "new_outgoing_requests"],
+};
+function _historyVisibleSeriesKeys() {
+  const on = HISTORY_SERIES.filter((s) => s.on).map((s) => s.key);
+  // Empty selection treated as "show everything" so a fresh click never
+  // produces a blank detail panel.
+  return on.length ? new Set(on) : null;
+}
+function _detailBlockShouldShow(blockKey, visible) {
+  if (!visible) return true;
+  const m = HISTORY_DETAIL_BLOCK_TO_SERIES[blockKey];
+  return !m || m.some((k) => visible.has(k));
+}
+function _detailCountShouldShow(countKey, visible) {
+  if (!visible) return true;
+  const m = HISTORY_DETAIL_COUNT_TO_SERIES[countKey];
+  return !m || m.some((k) => visible.has(k));
+}
+
 // Tracks the most-recently-rendered detail panel so a series-checkbox
 // toggle can re-render it in place without the user having to re-click
 // the same snapshot point.
@@ -4150,38 +4193,40 @@ async function showHistoryDetail(idx, snaps) {
   const dP = prev ? curr.pending  - prev.pending  : 0;
   const arrow = (n) => n > 0 ? `<span class="up">+${n}</span>` : n < 0 ? `<span class="down">${n}</span>` : `<span class="muted">±0</span>`;
 
-  // The chart's series checkboxes used to filter the diff panel too;
-  // user feedback was that hiding diff blocks behind a chart toggle
-  // was confusing — clicking a point should always surface every
-  // change that happened at that moment. Filtering now lives on the
-  // chart alone.
+  const visible = _historyVisibleSeriesKeys();
 
   let diffHtml = "";
+  let totalChanges = 0;
+  let hiddenByFilter = 0;
   if (prev) {
     try {
       const d = await api.get(`/api/diff?old=${prev.snapshot_id}&new=${curr.snapshot_id}`);
       const sec = d.sections || {};
-      const block = (title, list, max = 8) => {
+      const block = (kind, title, list, max = 8) => {
         if (!list || !list.length) return "";
+        totalChanges += list.length;
+        if (!_detailBlockShouldShow(kind, visible)) {
+          hiddenByFilter += list.length;
+          return "";
+        }
         const shown = list.slice(0, max);
         const more = list.length > max ? ` <span class="muted">+${list.length - max} more</span>` : "";
         return `<div class="diff-block"><strong>${title}</strong> (${list.length})<div>${shown.map((u) => `<span class="diff-name" data-username="${escapeAttr(u)}">${escapeHtml(u)}<a class="diff-link" href="https://www.instagram.com/${encodeURIComponent(u)}/" target="_blank" rel="noopener" title="Open on Instagram">↗</a></span>`).join(" ")}${more}</div></div>`;
       };
       diffHtml = `
-        ${block("New followers", sec.new_followers)}
-        ${block("They unfollowed you", sec.they_unfollowed_you)}
-        ${block("You removed them as a follower", sec.you_removed_as_follower)}
-        ${block("New following (you followed)", sec.new_following)}
-        ${block("You unfollowed", sec.you_unfollowed)}
-        ${block("They removed you as a follower", sec.they_removed_you_as_follower)}
-        ${block("New pending requests", sec.new_pending)}
-        ${block("Resolved pending", sec.resolved_pending)}
+        ${block("new_followers", "New followers", sec.new_followers)}
+        ${block("they_unfollowed_you", "They unfollowed you", sec.they_unfollowed_you)}
+        ${block("you_removed_as_follower", "You removed them as a follower", sec.you_removed_as_follower)}
+        ${block("new_following", "New following (you followed)", sec.new_following)}
+        ${block("you_unfollowed", "You unfollowed", sec.you_unfollowed)}
+        ${block("they_removed_you_as_follower", "They removed you as a follower", sec.they_removed_you_as_follower)}
+        ${block("new_pending", "New pending requests", sec.new_pending)}
+        ${block("resolved_pending", "Resolved pending", sec.resolved_pending)}
       `;
-      // "Suppressed" section: transitions that DID happen at this
-      // snapshot but were hidden from the main blocks because the
-      // username is tagged unavailable / disabled / random. Surfaced
-      // here so the count-card deltas always reconcile with named
-      // people — "Followers -1" never leaves you wondering who.
+      // "Suppressed" section: transitions that happened at this snapshot
+      // but were filtered out of the main blocks because the username is
+      // tagged unavailable / disabled / random. Respect the series filter
+      // here too so "show only unfollowers" stays focused.
       const supp = d.suppressed_sections || {};
       const SUPP_LABELS = {
         new_followers: "New followers",
@@ -4194,7 +4239,7 @@ async function showHistoryDetail(idx, snaps) {
         resolved_pending: "Resolved pending",
       };
       const suppHtml = Object.entries(supp)
-        .filter(([, users]) => users && users.length)
+        .filter(([kind, users]) => users && users.length && _detailBlockShouldShow(kind, visible))
         .map(([kind, users]) => {
           const names = users.map((u) =>
             `<span class="diff-name" data-username="${escapeAttr(u)}">${escapeHtml(u)}<a class="diff-link" href="https://www.instagram.com/${encodeURIComponent(u)}/" target="_blank" rel="noopener" title="Open on Instagram">↗</a></span>`
@@ -4207,7 +4252,11 @@ async function showHistoryDetail(idx, snaps) {
         diffHtml += `<hr style="margin:10px 0; border:0; border-top:1px solid var(--border, #2a2a30);" />${suppHtml}`;
       }
       if (!diffHtml.trim()) {
-        diffHtml = `<div class="muted">No follower/following/pending changes between #${prev.snapshot_id} and #${curr.snapshot_id}.</div>`;
+        if (totalChanges > 0 && hiddenByFilter === totalChanges) {
+          diffHtml = `<div class="muted">${totalChanges} change${totalChanges === 1 ? "" : "s"} happened at this snapshot but none match your selected series. Tick more chips above to see other categories.</div>`;
+        } else {
+          diffHtml = `<div class="muted">No follower/following/pending changes between #${prev.snapshot_id} and #${curr.snapshot_id}.</div>`;
+        }
       }
     } catch (e) {
       diffHtml = `<div class="muted">Diff unavailable: ${escapeHtml(e.message)}</div>`;
@@ -4216,15 +4265,18 @@ async function showHistoryDetail(idx, snaps) {
     diffHtml = `<div class="muted">First snapshot in range — nothing to diff against.</div>`;
   }
 
-  // Count cards always render — same "click a point, see everything"
-  // principle as the diff blocks.
-  const countCard = (label, value, delta) =>
-    `<div>${label} <strong>${value}</strong> ${prev ? arrow(delta) : ""}</div>`;
+  // Count cards filter by the same series rule so a focused single-series
+  // view stays clean (e.g. only "Followers" ticked → only the Followers
+  // count card + Followers-related diff blocks render).
+  const countCard = (key, label, value, delta) => {
+    if (!_detailCountShouldShow(key, visible)) return "";
+    return `<div>${label} <strong>${value}</strong> ${prev ? arrow(delta) : ""}</div>`;
+  };
   const countsHtml = `
-    ${countCard("Followers", curr.followers, dF)}
-    ${countCard("Following", curr.following, dG)}
-    ${countCard("Mutuals", curr.mutuals, dM)}
-    ${countCard("Pending", curr.pending, dP)}
+    ${countCard("followers", "Followers", curr.followers, dF)}
+    ${countCard("following", "Following", curr.following, dG)}
+    ${countCard("mutuals", "Mutuals", curr.mutuals, dM)}
+    ${countCard("pending", "Pending", curr.pending, dP)}
   `;
 
   $("#history-detail").innerHTML = `
