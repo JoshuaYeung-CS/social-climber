@@ -209,6 +209,9 @@ function sendProfileObservation(username, profile, privacyDom, extra = {}) {
       follow_button_state: buttonState,
       button_state_changed: !!extra.button_state_changed,
     }),
+  });
+}
+
 async function downloadAndStoreProfilePic(username, picUrl) {
   if (!extensionAlive() || !picUrl) return;
   // Use the tracker-fetch-bytes channel (background SW) so we can

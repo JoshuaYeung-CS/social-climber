@@ -416,6 +416,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       catch (_) { /* tab already closed by user */ }
       console.log(`[Social Climber] Wizard tab ${tabId} closed (post-submit alarm)`);
     }
+  }
 });
 
 // Re-evaluate the alarm whenever any schedule field changes.
