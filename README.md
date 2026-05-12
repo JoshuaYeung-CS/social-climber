@@ -180,10 +180,9 @@ extension/chrome/
 ├── background.js         Service worker — scheduling, debugger orchestration, msg routing
 ├── popup.html / .js / .css   Settings + scheduling UI
 └── content/
-    ├── ig-network-interceptor.js   MAIN-world fetch/XHR patch (document_start)
-    ├── ig-profile.js               Profile overlay + page-state observer
-    ├── meta-export.js              Export wizard autopilot
-    └── google-oauth.js             OAuth account picker auto-select
+    ├── ig-profile.js     Profile overlay + page-state observer
+    ├── meta-export.js    Export wizard autopilot
+    └── google-oauth.js   OAuth account picker auto-select
 ```
 
 ---
@@ -249,6 +248,22 @@ Surface area for your data:
 - **Extension-side state bridging.** Instagram's export lags reality by ~25 minutes. The MV3 content script reads the actual "Follow / Requested / Following" button label every time you visit a profile and writes it to a `profile_observations` table. The home page's "Following: 2117" then = `(latest export's following set) − (your tagged-as-disabled/random) ∪ (extension-observed 'Following' newer than the export's taken_at)`, a freshness gate that prevents stale observations from inflating the count after you've unfollowed.
 - **Manifest V3 service worker scheduling.** `chrome.alarms` survives SW idle eviction; pure `setTimeout` does not. The export scheduler uses jittered `delayInMinutes` alarms; the per-run "arrival poll" uses a separate alarm so the SW can wake up minutes later to check Drive for delivery.
 - **`chrome.debugger` for trusted clicks.** Meta's React handlers gate critical destination-chooser clicks on `isTrusted=true`. The SW attaches the debugger and dispatches `Input.synthesizeTapGesture`, which Chrome's input layer treats as a real touch — slips past the gate.
+
+---
+
+## What this project exercises
+
+A non-exhaustive list of the disciplines this project actually does work in (as opposed to merely touching):
+
+- **Backend & API design** — FastAPI with ~40 endpoints, SWR caching with version-tracked invalidation, idempotent migrations, content-hash dedup, soft-delete + recovery, audit logging.
+- **Data engineering** — append-only snapshot ingestion, chronological-by-export-timestamp insertion, partial-export detection, schema-version backfill, bulk-discovery from nested zip / folder trees.
+- **Data analytics** — set-difference math over follower / following / pending / incoming snapshots; rename detection via shared IG-side timestamps; cumulative cross-snapshot views; reciprocity-gap bucketing.
+- **SQL** — heavy use of CTEs, window-like analytics over snapshot pairs, bulk `IN`-batching for per-username chronologies, careful index design to keep cold-cache compute under 30s on 50k+ row snapshot tables.
+- **Frontend / UX** — vanilla-JS single-page app, hand-rolled SVG timeline chart with drag-to-zoom and hover tooltips, virtualized activity log, PWA-installable, mobile-first.
+- **Browser extension engineering** — Manifest V3 service worker with alarm-driven scheduling, content scripts that survive Instagram's SPA navigations, `chrome.debugger` for trusted-click automation, cross-context message routing.
+- **Automation & operations** — jittered scheduling, push-on-failure to a configurable command, history-derived arrival-poll windows, macOS launchd helpers, soft-fail retry strategy.
+- **Privacy engineering** — strictly local data path, optional self-signed HTTPS for LAN access, no third-party requests, auditable surface area.
+- **Product thinking** — alerts that suppress themselves on partial exports, freshness gates that prevent stale extension observations from inflating counts, "no decay without positive evidence" rule baked into the diff engine.
 
 ---
 
