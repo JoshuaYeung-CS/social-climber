@@ -134,7 +134,7 @@ async function renderExportStats() {
   if (resp.nextFireAt) {
     const minsUntil = Math.max(0, Math.round((resp.nextFireAt - Date.now()) / 60000));
     const clock = new Date(resp.nextFireAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    summaryParts.push(`next auto-run at ${clock} (in ${minsUntil} min)`);
+    summaryParts.push(`next auto-run at ${clock} (${_fmtMinsUntil(minsUntil)})`);
   } else if (!resp.pending) {
     summaryParts.push(`next auto-run: not scheduled (toggle schedule off→on to arm)`);
   }
@@ -162,6 +162,18 @@ function _fmtHours(h) {
   if (h < 24) return `${h % 1 === 0 ? h : h.toFixed(1)} hr`;
   const days = h / 24;
   return `${days % 1 === 0 ? days : days.toFixed(1)} day${days === 1 ? "" : "s"}`;
+}
+
+// Friendly "time until" string. Bare minutes stop being readable past
+// an hour or two ("in 3427 min" → unreadable). This collapses to hr /
+// days the way humans actually think about countdowns.
+function _fmtMinsUntil(mins) {
+  if (mins < 1) return "in <1 min";
+  if (mins < 60) return `in ${mins} min`;
+  const hrs = mins / 60;
+  if (hrs < 24) return `in ${hrs % 1 === 0 ? hrs : hrs.toFixed(1)} hr`;
+  const days = hrs / 24;
+  return `in ${days % 1 === 0 ? days : days.toFixed(1)} day${days === 1 ? "" : "s"}`;
 }
 
 function _fmtScheduleStatus(minHours, maxHours) {
@@ -198,7 +210,18 @@ function initScheduleControls(initialMinHours, initialMaxHours) {
       exportScheduleMaxHours: maxH,
       exportScheduleHours: minH,  // keep legacy field in sync for any older readers
     });
-    statusEl.textContent = _fmtScheduleStatus(minH, maxH);
+    // Visual save-acknowledgement. Schedule auto-saves on every input
+    // event, but without feedback the user can't tell whether the value
+    // they just typed was actually captured. Flash a green ✓ next to
+    // the status text for ~1.4s then revert. clearTimeout on re-entry
+    // so rapid edits don't pile up overlapping fades.
+    const summary = _fmtScheduleStatus(minH, maxH);
+    statusEl.innerHTML =
+      `<span class="schedule-saved-ack">✓ saved</span> · ${summary}`;
+    clearTimeout(persist._ackTimer);
+    persist._ackTimer = setTimeout(() => {
+      statusEl.textContent = summary;
+    }, 1400);
   }
 
   onEl.addEventListener("change", persist);

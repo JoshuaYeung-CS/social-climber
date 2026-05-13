@@ -193,6 +193,15 @@ html, body {
   margin-left: auto;
   font-size: 11px;
 }
+.schedule-saved-ack {
+  color: #3ecf8e;
+  font-weight: 600;
+  animation: schedule-saved-fade-in 120ms ease-out;
+}
+@keyframes schedule-saved-fade-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 .row {
   display: block;
   margin: 8px 0;
