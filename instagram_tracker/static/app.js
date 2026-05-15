@@ -2534,6 +2534,14 @@ function goToList(kind, push = true) {
 // per-row exact timestamps (*_ts, unix seconds) where IG provides them; fall
 // back to ISO date strings (snapshot-label precision) when not.
 function rowDateKey(r) {
+  // Bucket-list rows (To-follow, Watchlist, Want-remove, etc.) carry a
+  // tag_added_at populated by the server — that's the "when did I tag
+  // this?" instant the user wants to sort by, so prefer it over any
+  // observation timestamps that also happen to be on the same row.
+  if (r.tag_added_at) {
+    const d = new Date(r.tag_added_at);
+    if (!isNaN(d)) return d.getTime();
+  }
   const exact = r.unfollowed_by_you_ts ?? r.last_followed_you_ts ??
                 r.followed_ts ?? r.first_followed_you_ts ??
                 r.pending_ts ?? r.incoming_ts ?? r.unfollowed_ts ??
@@ -2584,6 +2592,16 @@ const SORT_DATE_HINT = {
   ever_incoming_requests:        "by when they requested",
   incoming_request_dropped:      "by when they requested",
   ever_requested_outgoing:       "by when you started following them",
+  // Tag bucket lists — sort by when the user added the tag.
+  favorite:                      "by when you tagged them",
+  want_remove:                   "by when you tagged them",
+  watchlist:                     "by when you tagged them",
+  deactivated:                   "by when you tagged them",
+  unavailable:                   "by when you tagged them",
+  random_request:                "by when you tagged them",
+  now_public:                    "by when you tagged them",
+  to_follow:                     "by when you added them",
+  star:                          "by when you tagged them",
 };
 
 function refreshSortLabels(kind) {
