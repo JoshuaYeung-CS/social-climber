@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Social Climber",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Auto-fills the Instagram data export wizard and overlays your local Social Climber history on profile pages.",
   "permissions": [
     "storage",
