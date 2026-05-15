@@ -2999,20 +2999,29 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
 
         def build_row(u: str, kind: str) -> dict:
             rel, rel_kind = relationship(u)
+            user_flags = flagged.get(u, {})
             row = {
                 "username": u,
-                "favorite": flagged.get(u, {}).get("favorite", False),
-                "want_remove": flagged.get(u, {}).get("want_remove", False),
-                "watchlist": flagged.get(u, {}).get("watchlist", False),
-                "deactivated": flagged.get(u, {}).get("deactivated", False),
-                "unavailable": flagged.get(u, {}).get("unavailable", False),
-                "random_request": flagged.get(u, {}).get("random_request", False),
+                "favorite": user_flags.get("favorite", False),
+                "want_remove": user_flags.get("want_remove", False),
+                "watchlist": user_flags.get("watchlist", False),
+                "deactivated": user_flags.get("deactivated", False),
+                "unavailable": user_flags.get("unavailable", False),
+                "random_request": user_flags.get("random_request", False),
                 "currently_following": u in sd.following,
                 "currently_follower": u in sd.followers,
                 "currently_pending": u in sd.pending,
                 "relationship": rel,
                 "relationship_kind": rel_kind,
             }
+            # For bucket lists, surface 'when did I tag this?' so the row
+            # caption can render '📌 added 3d ago'. _TAG_FLAGS is the
+            # canonical set of bucket kinds; each tag has a <tag>_added_at
+            # column populated by tags.set_flag on every 0→1 transition.
+            if kind in _TAG_FLAGS:
+                added_at = user_flags.get(f"{kind}_added_at")
+                if added_at:
+                    row["tag_added_at"] = added_at
             if u in reengaged:
                 row["history_status"] = "re-engaged"
             priv = privacy_map.get(u)
@@ -3315,8 +3324,16 @@ def _build_bucket_row(ctx: dict, flagged: dict, u: str, kind: str) -> dict:
         "bucket_status_kind": bs[1],
     }
     # Tag flags from current state.
+    user_flags = flagged.get(u, {})
     for f in _TAG_FLAGS:
-        row[f] = flagged.get(u, {}).get(f, False)
+        row[f] = user_flags.get(f, False)
+    # 'When did I tag this?' for the current bucket. Same 1:1 column
+    # convention as build_row above — used by the frontend to render
+    # '📌 added Xd ago' on To-follow / Wait-back / etc. rows.
+    if kind in _TAG_FLAGS:
+        added_at = user_flags.get(f"{kind}_added_at")
+        if added_at:
+            row["tag_added_at"] = added_at
     # Optional context fields when present.
     if u in ctx["reengaged"]:
         row["history_status"] = "re-engaged"

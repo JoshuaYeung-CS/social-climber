@@ -2755,6 +2755,17 @@ function renderListRow(item) {
   if (item.following_via_extension) parts.push(`<span class="info-tag">via extension — not yet in export</span>`);
   if (item.mutual_since_at) parts.push(`mutual since ${escapeHtml(fmtDate(item.mutual_since_at))}`);
   if (item.history_status === "re-engaged") parts.push(`<span class="info-tag">re-engaged</span>`);
+  // "📌 added Xd ago" — only present when we're in a bucket list view
+  // (server fills tag_added_at based on the row's kind). Lets the user
+  // see how long an account has been sitting in their To-follow /
+  // Wait-back / Want-remove / etc. queue.
+  if (item.tag_added_at) {
+    const ms = Date.parse(item.tag_added_at);
+    if (Number.isFinite(ms)) {
+      const ago = _fmtRelativeFromUnix(Math.floor(ms / 1000));
+      if (ago) parts.push(`📌 added ${ago}`);
+    }
+  }
   // Privacy display:
   //   "🌐 public (you confirmed)" — user-tagged now_public.
   //   "🔒 private"                — banner OR ever-pending evidence.
