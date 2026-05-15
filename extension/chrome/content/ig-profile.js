@@ -12,7 +12,7 @@ const TAG_SYMS = {
   want_remove: "✦",
   watchlist: "↺",
   to_follow: "👤",
-  disabled: "⚠",
+  deactivated: "⚠",
   unavailable: "✕",
   random_request: "🎲",
   now_public: "🌐",
@@ -23,7 +23,7 @@ const TAG_LABELS = {
   want_remove: "Want to remove",
   watchlist: "Wait-back",
   to_follow: "To follow",
-  disabled: "Disabled",
+  deactivated: "Deactivated",
   unavailable: "Unavailable",
   random_request: "Random request",
   now_public: "Was private, now public (you confirmed)",
@@ -745,13 +745,17 @@ function renderPanel(panel, username, data) {
     // distinguishes "complete stranger" from "we have history together."
     // Promotes the most-specific past-state we can derive from the
     // lookup: previously-mutual > one-sided follow > pending-only.
+    // All four cases use relKind "history" (its own CSS class) so the
+    // pill jumps out visually — these are high-signal "we've crossed
+    // paths before, think twice before re-following" warnings that
+    // shouldn't blend into the muted grey relationship rows.
     const wasFollowing = !!data.ever_followed;
     const wasFollower = !!data.ever_was_follower;
     const wasPending = !!data.ever_requested;
-    if (wasFollowing && wasFollower) { rel = "↺ previously mutual"; relKind = "info"; }
-    else if (wasFollower) { rel = "↺ they followed you before"; relKind = "info"; }
-    else if (wasFollowing) { rel = "↺ you followed them before"; relKind = "info"; }
-    else if (wasPending) { rel = "↺ you requested before"; relKind = "muted"; }
+    if (wasFollowing && wasFollower) { rel = "↺ previously mutual"; relKind = "history"; }
+    else if (wasFollower) { rel = "↺ they followed you before"; relKind = "history"; }
+    else if (wasFollowing) { rel = "↺ you followed them before"; relKind = "history"; }
+    else if (wasPending) { rel = "↺ you requested before"; relKind = "history"; }
   }
 
   // Story lines from snapshot history.

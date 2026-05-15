@@ -82,7 +82,7 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
 
     diff_alerts: list[dict] = []
     suppressed = (
-        {r["username"] for r in list_with_flag(conn, "disabled")}
+        {r["username"] for r in list_with_flag(conn, "deactivated")}
         | {r["username"] for r in list_with_flag(conn, "unavailable")}
         | {r["username"] for r in list_with_flag(conn, "random_request")}
     )
@@ -578,7 +578,7 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
     # (IG's stable per-row timestamp) — falls back to
     # MIN(snapshots.taken_at) for rows where IG didn't record a
     # per-event timestamp, same dual-lookup pattern as the want_remove
-    # block. Suppressed accounts (disabled / unavailable /
+    # block. Suppressed accounts (deactivated / unavailable /
     # random_request) skipped — already classified.
     if curr.incoming_requests:
         pending_cutoff = datetime.now(timezone.utc) - timedelta(days=INCOMING_REQUEST_PENDING_DAYS)
@@ -649,13 +649,13 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
                     "ts": int(requested_at.timestamp()),
                 })
 
-    # Stateful: tagged-as-disabled or tagged-as-unavailable accounts that show
+    # Stateful: tagged-as-deactivated or tagged-as-unavailable accounts that show
     # real proof-of-life. The only reliable signal is them appearing in YOUR
     # followers (they actively follow you back, so their account must be alive).
     # `curr.following` and outgoing `pending` are both preserved by Instagram
     # even after deactivation, so they don't count as reactivation evidence.
     for flag, icon, label in (
-        ("disabled", "⚠", "disabled"),
+        ("deactivated", "⚠", "deactivated"),
         ("unavailable", "✕", "unavailable"),
         ("random_request", "🎲", "random request"),
     ):

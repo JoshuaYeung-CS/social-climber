@@ -84,8 +84,8 @@ CREATE TABLE IF NOT EXISTS profile_tags (
     want_remove_added_at TEXT,
     watchlist INTEGER NOT NULL DEFAULT 0,
     watchlist_added_at TEXT,
-    disabled INTEGER NOT NULL DEFAULT 0,
-    disabled_added_at TEXT,
+    deactivated INTEGER NOT NULL DEFAULT 0,
+    deactivated_added_at TEXT,
     unavailable INTEGER NOT NULL DEFAULT 0,
     unavailable_added_at TEXT,
     random_request INTEGER NOT NULL DEFAULT 0,
@@ -185,10 +185,25 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
     # Idempotent column adds for older databases.
     cols = {row[1] for row in conn.execute("PRAGMA table_info(profile_tags)").fetchall()}
-    if "disabled" not in cols:
+    # Legacy column add path (kept for v1 DBs that never had the rename
+    # below applied). The rename block right after handles the v1 → v2
+    # transition where `disabled` became `deactivated`.
+    if "disabled" not in cols and "deactivated" not in cols:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0")
-    if "disabled_added_at" not in cols:
+    if "disabled_added_at" not in cols and "deactivated_added_at" not in cols:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN disabled_added_at TEXT")
+    # v1→v2 column rename: 'disabled' was semantically wrong (the flag
+    # has always meant "the account is deactivated on Instagram" not
+    # "we disabled this row"). Rename in place if the legacy name
+    # still exists. SQLite ≥3.25 supports RENAME COLUMN.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(profile_tags)").fetchall()}
+    if "disabled" in cols and "deactivated" not in cols:
+        conn.execute("ALTER TABLE profile_tags RENAME COLUMN disabled TO deactivated")
+    if "disabled_added_at" in cols and "deactivated_added_at" not in cols:
+        conn.execute("ALTER TABLE profile_tags RENAME COLUMN disabled_added_at TO deactivated_added_at")
+    # Re-read after the rename so the rest of the migrations see the
+    # current column set.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(profile_tags)").fetchall()}
     if "unavailable" not in cols:
         conn.execute("ALTER TABLE profile_tags ADD COLUMN unavailable INTEGER NOT NULL DEFAULT 0")
     if "unavailable_added_at" not in cols:

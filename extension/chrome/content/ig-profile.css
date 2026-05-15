@@ -107,6 +107,27 @@
 .igt-rel-info    { color: #4f8cff; background: rgba(79, 140, 255, 0.10); border: 1px solid rgba(79, 140, 255, 0.3); }
 .igt-rel-pending { color: #a78bfa; background: rgba(167, 139, 250, 0.10); border: 1px solid rgba(167, 139, 250, 0.3); }
 .igt-rel-muted   { color: #8f8f99; background: rgba(143, 143, 153, 0.06); border: 1px solid #2a2a30; }
+/* "History" — prior-interaction warnings (previously mutual / followed /
+   requested). Deliberately the loudest pill on the panel because these
+   are the highest-signal moments — you've crossed paths with this
+   account before and probably want to know before re-following. Larger
+   font + heavier weight + amber/orange tint + subtle pulse so the eye
+   catches it immediately. */
+.igt-rel-history {
+  color: #ffd089;
+  background: rgba(255, 180, 84, 0.18);
+  border: 1px solid rgba(255, 180, 84, 0.55);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  box-shadow: 0 0 0 0 rgba(255, 180, 84, 0.45);
+  animation: igt-rel-history-pulse 2400ms ease-out 2;
+}
+@keyframes igt-rel-history-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(255, 180, 84, 0.45); }
+  60%  { box-shadow: 0 0 0 6px rgba(255, 180, 84, 0);   }
+  100% { box-shadow: 0 0 0 0 rgba(255, 180, 84, 0);     }
+}
 .igt-muted { color: #8f8f99; }
 .igt-lines {
   list-style: none;

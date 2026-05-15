@@ -281,7 +281,7 @@ async function loadHome() {
         ["Removed their follow request", s.incoming_request_dropped ?? 0, "incoming_request_dropped"],
         ["Ever requested to follow", s.ever_requested_outgoing ?? 0, "ever_requested_outgoing"],
         ["My follow request rejected", s.request_dropped ?? 0, "request_dropped"],
-        ["⚠ Tagged disabled", s.disabled_tagged ?? 0, "disabled"],
+        ["⚠ Tagged deactivated", s.deactivated_tagged ?? 0, "deactivated"],
         ["✕ Tagged unavailable", s.unavailable_tagged ?? 0, "unavailable"],
         ["🎲 Tagged random requests", s.random_request_tagged ?? 0, "random_request"],
         ["👤 To follow", s.to_follow_tagged ?? 0, "to_follow"],
@@ -386,7 +386,7 @@ async function loadHome() {
     $("#count-want_remove").textContent = data.bucket_counts.want_remove;
     $("#count-watchlist").textContent = data.bucket_counts.watchlist;
     $("#count-to_follow").textContent = data.bucket_counts.to_follow ?? 0;
-    $("#count-disabled").textContent = data.bucket_counts.disabled ?? 0;
+    $("#count-deactivated").textContent = data.bucket_counts.disabled ?? 0;
     $("#count-unavailable").textContent = data.bucket_counts.unavailable ?? 0;
     $("#count-random_request").textContent = data.bucket_counts.random_request ?? 0;
     $("#count-now_public").textContent = data.bucket_counts.now_public ?? 0;
@@ -638,7 +638,7 @@ function _startLiveRefresh() {
         setIfChanged("count-favorite", bc.favorites);
         setIfChanged("count-want_remove", bc.want_remove);
         setIfChanged("count-watchlist", bc.watchlist);
-        setIfChanged("count-disabled", bc.disabled ?? 0);
+        setIfChanged("count-deactivated", bc.disabled ?? 0);
         setIfChanged("count-unavailable", bc.unavailable ?? 0);
         setIfChanged("count-random_request", bc.random_request ?? 0);
         setIfChanged("count-now_public", bc.now_public ?? 0);
@@ -1603,7 +1603,7 @@ function renderTagToggles(tags) {
       <button class="tag-toggle ${tags.want_remove ? "active" : ""}" data-flag="want_remove">✦ Want-remove</button>
       <button class="tag-toggle ${tags.watchlist ? "active" : ""}" data-flag="watchlist">↺ Wait-back</button>
       <button class="tag-toggle ${tags.to_follow ? "active" : ""}" data-flag="to_follow">👤 To follow</button>
-      <button class="tag-toggle ${tags.disabled ? "active" : ""}" data-flag="disabled">⚠ Disabled</button>
+      <button class="tag-toggle ${tags.deactivated ? "active" : ""}" data-flag="deactivated">⚠ Deactivated</button>
       <button class="tag-toggle ${tags.unavailable ? "active" : ""}" data-flag="unavailable">✕ Unavailable</button>
       <button class="tag-toggle ${tags.random_request ? "active" : ""}" data-flag="random_request">🎲 Random request</button>
       <button class="tag-toggle ${tags.now_public ? "active" : ""}" data-flag="now_public">🌐 Now public</button>
@@ -1829,7 +1829,7 @@ async function showHistory(username) {
 // definition without becoming a wall of text.
 const LIST_DESCRIPTIONS = {
   everyone:                     "Every account that has appeared in any of your IG export tables across all imported snapshots — followers, following, pending, recently_unfollowed, or incoming follow requests. The widest possible 'have I ever interacted with this account?' set.",
-  all_followers:                "Accounts currently following you, per the latest snapshot. Excludes accounts you've tagged disabled / unavailable / random_request.",
+  all_followers:                "Accounts currently following you, per the latest snapshot. Excludes accounts you've tagged deactivated / unavailable / random_request.",
   all_following:                "Accounts you currently follow, per the latest snapshot, plus extension-confirmed follows that haven't been ingested into a snapshot yet.",
   mutuals:                      "Accounts that follow you AND that you follow.",
   public_mutuals:               "Mutuals whose privacy is public — either inferred 'likely public' from snapshot history or manually flipped via the now_public tag. Use this list to spot the public accounts that have followed you back (no request gate). New entries also fire a 🌐 follow-back alert.",
@@ -1857,7 +1857,7 @@ const LIST_DESCRIPTIONS = {
   watchlist:                    "Accounts you're waiting on for a follow-back. Each row shows one of: 'request pending' (you sent a follow request, they haven't accepted), 'no follow back yet' (they accepted or it's public, but haven't followed you back), 'now follows back ✓' (mutual), or 'you've unfollowed' (you withdrew). Alerts fire after 7 days of waiting; favorites get higher priority.",
   to_follow:                    "👤 Accounts you've bookmarked to follow later. Use this for profiles you want to revisit before sending a request — e.g. private accounts you want to wait to follow strategically, or new finds you want to confirm before requesting. Auto-marks 'now following ✓' or 'request sent ✓' when the bookmark is fulfilled, so the list trims itself as you act on it.",
   star:                         "⭐ Stars — models, celebrities, creators, public figures. Distinct from ★ Favorite (which is for everyday people you actually know). Lets you bucket the two populations separately so 'favorite unfollowed you' alerts and similar don't conflate someone you met with a creator you fan-follow.",
-  disabled:                     "Accounts you've manually marked as gone (deactivated, deleted, blocked you). Auto-clears if they reappear in your followers (proof of life). Excluded from non-bucket lists.",
+  deactivated:                  "Accounts you've manually marked as gone (deactivated, deleted, blocked you). Auto-clears if they reappear in your followers (proof of life). Excluded from non-bucket lists.",
   unavailable:                  "Accounts where the extension landed on Instagram's 'Sorry, this page isn't available' state. Auto-clears if they reappear in your followers. Excluded from non-bucket lists.",
   random_request:               "Manual flag for incoming requests that look like spam / bots / random users. Excluded from 'real_requests' and other non-bucket lists.",
   now_public:                   "Accounts you've personally verified flipped from private to public. The historical pending evidence in your DB still says 'likely private', but you've checked their profile and confirmed they're now public. This tag overrides the privacy display to '🌐 public (you confirmed)' for those accounts. Use it for the rare flip case the inference can't detect on its own.",
@@ -1895,7 +1895,7 @@ const LIST_KINDS = [
   ["want_remove", "✦ Want to remove"],
   ["watchlist", "↺ Wait-back"],
   ["to_follow", "👤 To follow"],
-  ["disabled", "⚠ Disabled"],
+  ["deactivated", "⚠ Deactivated"],
   ["unavailable", "✕ Unavailable (page not found)"],
   ["random_request", "🎲 Random requests"],
   ["now_public", "🌐 Was private, now public"],
@@ -1921,7 +1921,7 @@ const LIST_GROUPS = [
   { label: "Current",  kinds: ["everyone", "all_followers", "all_following", "mutuals", "public_mutuals", "they_followed_first", "you_followed_first", "private_accepted_no_follow_back", "not_following_you_back", "feeder_accounts", "pending", "incoming_requests", "renamed"] },
   { label: "History",  kinds: ["ever_unfollowed_you", "rats", "mutual_break_you_first", "mutual_break_they_first", "ever_removed_you_as_follower", "you_unfollowed_ever", "still_follow_after_drop"] },
   { label: "Requests", kinds: ["ever_incoming_requests", "real_requests", "incoming_request_dropped", "ever_requested_outgoing", "request_dropped"] },
-  { label: "Tags",     kinds: ["favorite", "star", "want_remove", "watchlist", "to_follow", "disabled", "unavailable", "random_request", "now_public", "with_notes"] },
+  { label: "Tags",     kinds: ["favorite", "star", "want_remove", "watchlist", "to_follow", "deactivated", "unavailable", "random_request", "now_public", "with_notes"] },
 ];
 
 // Cross-list intersection: cmd/ctrl+click (or long-press on touch) a pill
@@ -2173,7 +2173,7 @@ function exportCurrentListCsv() {
     "username", "instagram_url", "list_kind", "list_label", "intersections",
     "relationship", "bucket_status", "privacy", "aliases", "note",
     "favorite", "star", "want_remove", "watchlist", "to_follow",
-    "disabled", "unavailable", "random_request", "now_public",
+    "deactivated", "unavailable", "random_request", "now_public",
     "followed_at", "they_followed_at", "requested_at", "incoming_requested_at",
     "you_unfollowed_at", "last_seen_as_follower_at",
   ];
@@ -2268,13 +2268,13 @@ $("#list-output")?.addEventListener("click", async (e) => {
       tagBtn.classList.toggle("on", !!result[flag]);
       toast(`${flag.replace("_", " ")} ${result[flag] ? "added" : "removed"}`);
       const currentKind = select.value;
-      const BUCKETS = ["favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request"];
+      const BUCKETS = ["favorite", "want_remove", "watchlist", "deactivated", "unavailable", "random_request"];
       // Removed from the bucket we're viewing → drop the row.
       if (!result[flag] && currentKind === flag) row.remove();
       // Tagged suppressed flag ON while viewing a non-bucket list → drop
       // (server excludes these from non-bucket lists, so the local view
       // would be inconsistent with the server's next render).
-      if ((flag === "disabled" || flag === "unavailable" || flag === "random_request")
+      if ((flag === "deactivated" || flag === "unavailable" || flag === "random_request")
           && result[flag] && !BUCKETS.includes(currentKind)) {
         row.remove();
       }
@@ -2383,7 +2383,7 @@ function renderBulkToolbar() {
     ${tagBtn("favorite", "★", "Favorite")}
     ${tagBtn("want_remove", "✦", "Want to remove")}
     ${tagBtn("watchlist", "↺", "Wait-back")}
-    ${tagBtn("disabled", "⚠", "Disabled")}
+    ${tagBtn("deactivated", "⚠", "Disabled")}
     ${tagBtn("unavailable", "✕", "Unavailable")}
     ${tagBtn("random_request", "🎲", "Random request")}
     ${tagBtn("now_public", "🌐", "Now public")}
@@ -2437,7 +2437,7 @@ async function runBulkAction(action) {
     ));
     toast(`Applied ${flag} to ${usernames.length} account${usernames.length === 1 ? "" : "s"}`);
     // Exit select mode and refresh the current list so any newly-tagged
-    // rows that should now be filtered out (disabled / unavailable
+    // rows that should now be filtered out (deactivated / unavailable
     // exclude from non-bucket lists) actually drop.
     setSelectMode(false);
     loadLists();
@@ -2520,7 +2520,7 @@ function goToList(kind, push = true) {
   select.value = kind;
   // Default to newest-first across the board; bucket lists default alphabetical
   // so favorites/want-remove/etc. read like a roster.
-  const BUCKET_KINDS = new Set(["favorite", "want_remove", "watchlist", "disabled", "unavailable"]);
+  const BUCKET_KINDS = new Set(["favorite", "want_remove", "watchlist", "deactivated", "unavailable"]);
   sortSelect.value = BUCKET_KINDS.has(kind) ? "alphabetical" : "reverse_chronological";
   if (push) {
     history.pushState({ view: "lists", listKind: kind }, "", `#lists/${kind}`);
@@ -2818,7 +2818,7 @@ function renderListRow(item) {
     ${tagBtn("favorite", "★", item.favorite)}
     ${tagBtn("want_remove", "✦", item.want_remove)}
     ${tagBtn("watchlist", "↺", item.watchlist)}
-    ${tagBtn("disabled", "⚠", item.disabled)}
+    ${tagBtn("deactivated", "⚠", item.disabled)}
     ${tagBtn("unavailable", "✕", item.unavailable)}
     ${tagBtn("random_request", "🎲", item.random_request)}
     ${tagBtn("now_public", "🌐", item.now_public)}
@@ -2997,7 +2997,7 @@ async function loadLists() {
     _renderedView = "lists";
     _renderedListKind = kind;
     // For intersection, prefer the unsuppressed sections_full so that
-    // suppressed-tagged users (disabled / unavailable / random_request) can
+    // suppressed-tagged users (deactivated / unavailable / random_request) can
     // legitimately match a bucket pill. Without this, "all_following ∩
     // unavailable" would always be empty because all_following has those
     // users stripped out.
@@ -4240,7 +4240,7 @@ const HISTORY_DETAIL_SUPP_LABELS = {
   resolved_pending: "Resolved pending",
 };
 
-// Render the "tagged unavailable/disabled/random" suppressed footer as
+// Render the "tagged unavailable/deactivated/random" suppressed footer as
 // a single collapsed <details> block. Keeps the focused view clean but
 // preserves accountability — user can expand to reconcile the count
 // cards with named people. Series filter still applies.
@@ -4264,7 +4264,7 @@ function _renderSuppressedFooter(suppressed, visible) {
   return (
     `<details class="suppressed-footer">` +
     `<summary class="muted small">${totalHidden} hidden ` +
-    `(tagged unavailable / disabled / random) — click to show</summary>` +
+    `(tagged unavailable / deactivated / random) — click to show</summary>` +
     `<div class="suppressed-footer-body">${body}</div>` +
     `</details>`
   );
@@ -4318,7 +4318,7 @@ async function showHistoryDetail(idx, snaps) {
       `;
       // "Suppressed" section: transitions that happened at this snapshot
       // but were filtered out of the main blocks because the username is
-      // tagged unavailable / disabled / random. Collapsed by default so
+      // tagged unavailable / deactivated / random. Collapsed by default so
       // the focused view stays clean; user can expand to reconcile the
       // count cards with named people. Restricted to the same eight
       // kinds the main blocks use so bonus diff-only categories never

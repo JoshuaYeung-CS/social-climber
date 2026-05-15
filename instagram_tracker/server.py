@@ -983,7 +983,7 @@ def _home_compute():
             ever_removed = {u for u in ever_removed if not aliases_active(u, curr.following)}
 
             # NOTE: previously these three historical-event counters
-            # subtracted `suppressed_home` (disabled/unavailable/random
+            # subtracted `suppressed_home` (deactivated/unavailable/random
             # tagged users). That's wrong for HISTORICAL counts —
             # users typically get tagged 'unavailable' BECAUSE they
             # unfollowed and went private/deactivated. Subtracting the
@@ -993,7 +993,7 @@ def _home_compute():
             # below still use suppressed_home — that's appropriate
             # there because they describe current state.
             suppressed_home = (
-                {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
+                {r["username"] for r in tags_mod.list_with_flag(conn, "deactivated")}
                 | {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
                 | {r["username"] for r in tags_mod.list_with_flag(conn, "random_request")}
             )
@@ -1002,7 +1002,7 @@ def _home_compute():
             # the account was spam/noise, not a real follower
             # relationship. Briefly appearing in followers due to IG
             # export flicker quirks shouldn't count as "they unfollowed
-            # you." disabled/unavailable stay un-subtracted (real
+            # you." deactivated/unavailable stay un-subtracted (real
             # accounts that went private/deactivated — see comment
             # above), but random_request is removed from event-history
             # counts and lists.
@@ -1081,7 +1081,7 @@ def _home_compute():
             request_dropped = ever_pending_observed - ever_following - curr.pending - ext_still_requested
 
             # Active-relationship counts: subtract suppressed_home so that
-            # accounts the user has tagged disabled / unavailable / random
+            # accounts the user has tagged deactivated / unavailable / random
             # don't pad the "active" totals. Same rule the Lists view applies
             # to its non-bucket sections — keeps home and lists in sync.
             active_followers = curr.followers - suppressed_home
@@ -1189,7 +1189,7 @@ def _home_compute():
                 "ever_requested_outgoing": len(ever_requested_outgoing),
                 "incoming_request_dropped": len(incoming_request_dropped),
                 "request_dropped": len(request_dropped),
-                "disabled_tagged": len(tags_mod.list_with_flag(conn, "disabled")),
+                "deactivated_tagged": len(tags_mod.list_with_flag(conn, "deactivated")),
                 "unavailable_tagged": len(tags_mod.list_with_flag(conn, "unavailable")),
                 "random_request_tagged": len(tags_mod.list_with_flag(conn, "random_request")),
                 "to_follow_tagged": len(tags_mod.list_with_flag(conn, "to_follow")),
@@ -1200,7 +1200,7 @@ def _home_compute():
             "favorites": len(tags_mod.list_with_flag(conn, "favorite")),
             "want_remove": len(tags_mod.list_with_flag(conn, "want_remove")),
             "watchlist": len(tags_mod.list_with_flag(conn, "watchlist")),
-            "disabled": len(tags_mod.list_with_flag(conn, "disabled")),
+            "deactivated": len(tags_mod.list_with_flag(conn, "deactivated")),
             "unavailable": len(tags_mod.list_with_flag(conn, "unavailable")),
             "random_request": len(tags_mod.list_with_flag(conn, "random_request")),
             "now_public": len(tags_mod.list_with_flag(conn, "now_public")),
@@ -1256,7 +1256,7 @@ def _home_compute():
         # "Follow Request Rejected" — outbound requests that never made
         # it into the following set. `request_dropped` is computed
         # above (line ~438) inside the latest-snapshot branch; reuse
-        # it here. Suppress users we've tagged as disabled / random /
+        # it here. Suppress users we've tagged as deactivated / random /
         # unavailable so the home count matches the Lists view's
         # request_dropped section.
         request_rejected_home = sorted(set(request_dropped) - suppressed_home)
@@ -1460,7 +1460,7 @@ def get_activity_log():
     # Activity log doesn't read tags — only snapshot data. Tag writes
     # don't need to invalidate it.
     # Tag version is a dep now: the activity log filters out accounts
-    # tagged unavailable/disabled/random_request, so a tag toggle should
+    # tagged unavailable/deactivated/random_request, so a tag toggle should
     # invalidate the cached log.
     return _cached("activity_log", _activity_log_compute, deps=_DEPS_BOTH)
 
@@ -1837,7 +1837,7 @@ def _activity_log_compute():
         events = passthrough + kept_bounces
 
         # Filter out events involving accounts the user has tagged as
-        # ✕ unavailable, ⚠ disabled, or 🎲 random_request. The user has
+        # ✕ unavailable, ⚠ deactivated, or 🎲 random_request. The user has
         # already declared "this account is gone / spam," so surfacing
         # their inevitable unfollows / removals in the activity log is
         # noise that drowns out events from accounts the user actually
@@ -1845,7 +1845,7 @@ def _activity_log_compute():
         suppressed_users = {
             r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")
         } | {
-            r["username"] for r in tags_mod.list_with_flag(conn, "disabled")
+            r["username"] for r in tags_mod.list_with_flag(conn, "deactivated")
         } | {
             r["username"] for r in tags_mod.list_with_flag(conn, "random_request")
         }
@@ -2203,13 +2203,13 @@ def get_diff(old: int | None = None, new: int | None = None):
             q.snapshot_data(conn, new_id),
             ever_self_unfollowed=ever_self,
         )
-        # Filter out users tagged as gone (unavailable / disabled / random):
+        # Filter out users tagged as gone (unavailable / deactivated / random):
         # they always show up in the unfollow / removal sections after the
         # user marks them, but the user has already declared "this account
         # is gone, stop bothering me about it."
         suppressed = (
             {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
-            | {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
+            | {r["username"] for r in tags_mod.list_with_flag(conn, "deactivated")}
             | {r["username"] for r in tags_mod.list_with_flag(conn, "random_request")}
         )
         # NOTE: previously this endpoint applied two extra filters that
@@ -2283,7 +2283,7 @@ def get_diff_range(ids: str):
         ever_self = q.ever_self_unfollowed(conn)
         suppressed = (
             {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
-            | {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
+            | {r["username"] for r in tags_mod.list_with_flag(conn, "deactivated")}
             | {r["username"] for r in tags_mod.list_with_flag(conn, "random_request")}
         )
         agg: dict[str, set[str]] = {}
@@ -2422,7 +2422,7 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # Bucket lists. Skipped in pure mode — overlay rebuilds them from
         # current tags so a tag toggle doesn't invalidate the snapshot cache.
         if not _pure_only:
-            for flag in ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "to_follow", "star"):
+            for flag in ("favorite", "want_remove", "watchlist", "deactivated", "unavailable", "random_request", "now_public", "to_follow", "star"):
                 sections[flag] = sorted(r["username"] for r in tags_mod.list_with_flag(conn, flag))
 
         # ---- Cumulative / historical lists across ALL snapshots ----
@@ -2569,11 +2569,11 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         # definitions as the home dashboard summary. The 'suppressed'
         # variable doesn't exist in this scope (it lives in
         # _activity_log_compute), so we recompute the suppress-set
-        # locally — accounts the user has tagged disabled / unavailable
+        # locally — accounts the user has tagged deactivated / unavailable
         # / random_request shouldn't pad these counts either.
         suppressed_lists = (
             {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
-            | {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
+            | {r["username"] for r in tags_mod.list_with_flag(conn, "deactivated")}
             | {r["username"] for r in tags_mod.list_with_flag(conn, "random_request")}
         )
         ever_pending_observed_lists = {
@@ -2780,7 +2780,7 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
             "all_followers",
             "feeder_accounts",
         }
-        BUCKET_KINDS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "to_follow", "star"}
+        BUCKET_KINDS = {"favorite", "want_remove", "watchlist", "deactivated", "unavailable", "random_request", "now_public", "to_follow", "star"}
 
         # Tag state — empty in pure mode so pre-built rows have tag fields = False;
         # overlay attaches the real values per request.
@@ -2948,13 +2948,13 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
                 if not in_back:
                     return ("doesn't follow back", "warn")
                 return ("mutual", "good")
-            if kind == "disabled":
-                # Anyone tagged disabled who shows up in any current relationship → reactivated.
+            if kind == "deactivated":
+                # Anyone tagged deactivated who shows up in any current relationship → reactivated.
                 if in_fol or in_back or in_pend:
                     return ("⚠ BACK ONLINE", "action")
                 return ("still gone", "good")
             if kind == "unavailable":
-                # Same proof-of-life rule as disabled, but tied to "Instagram says
+                # Same proof-of-life rule as deactivated, but tied to "Instagram says
                 # the page doesn't exist" rather than user's manual judgement.
                 if in_fol or in_back or in_pend:
                     return ("✕ PAGE BACK", "action")
@@ -3004,7 +3004,7 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
                 "favorite": flagged.get(u, {}).get("favorite", False),
                 "want_remove": flagged.get(u, {}).get("want_remove", False),
                 "watchlist": flagged.get(u, {}).get("watchlist", False),
-                "disabled": flagged.get(u, {}).get("disabled", False),
+                "deactivated": flagged.get(u, {}).get("deactivated", False),
                 "unavailable": flagged.get(u, {}).get("unavailable", False),
                 "random_request": flagged.get(u, {}).get("random_request", False),
                 "currently_following": u in sd.following,
@@ -3190,11 +3190,11 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
                 },
             }
 
-        # Exclude disabled- or unavailable-tagged accounts from every non-bucket list.
+        # Exclude deactivated- or unavailable-tagged accounts from every non-bucket list.
         # Once you've tagged something as gone, you don't want to keep seeing it in
         # the follower / following / unfollow analyses — only in its bucket.
         suppressed_set = (
-            {r["username"] for r in tags_mod.list_with_flag(conn, "disabled")}
+            {r["username"] for r in tags_mod.list_with_flag(conn, "deactivated")}
             | {r["username"] for r in tags_mod.list_with_flag(conn, "unavailable")}
             | {r["username"] for r in tags_mod.list_with_flag(conn, "random_request")}
         )
@@ -3228,8 +3228,8 @@ def _lists_compute(snapshot_id: int | None, _pure_only: bool = False):
         return {"snapshot_id": sid, "previous_snapshot_id": prev_id, "sections": annotated}
 
 
-_TAG_FLAGS = ("favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "to_follow", "star")
-_BUCKET_KINDS_SET = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "to_follow", "star"}
+_TAG_FLAGS = ("favorite", "want_remove", "watchlist", "deactivated", "unavailable", "random_request", "now_public", "to_follow", "star")
+_BUCKET_KINDS_SET = {"favorite", "want_remove", "watchlist", "deactivated", "unavailable", "random_request", "now_public", "to_follow", "star"}
 _BUCKET_PRIORITY = {"action": 0, "warn": 1, "pending": 2, "stopped": 3, "good": 4, "": 5}
 
 
@@ -3279,7 +3279,7 @@ def _build_bucket_row(ctx: dict, flagged: dict, u: str, kind: str) -> dict:
             bs = ("doesn't follow back", "warn")
         else:
             bs = ("mutual", "good")
-    elif kind == "disabled":
+    elif kind == "deactivated":
         bs = ("⚠ BACK ONLINE", "action") if (in_fol or in_back or in_pend) else ("still gone", "good")
     elif kind == "unavailable":
         bs = ("✕ PAGE BACK", "action") if (in_fol or in_back or in_pend) else ("still gone", "good")
@@ -3405,10 +3405,10 @@ def _lists_apply_overlay(pure: dict) -> dict:
         }
     suppressed = {
         u for u, t in flagged.items()
-        if t.get("disabled") or t.get("unavailable") or t.get("random_request")
+        if t.get("deactivated") or t.get("unavailable") or t.get("random_request")
     }
     # random_request alone — used to suppress noise from the cumulative
-    # event-log lists. disabled/unavailable stay visible in those lists
+    # event-log lists. deactivated/unavailable stay visible in those lists
     # because users typically get tagged that BECAUSE they unfollowed,
     # so suppressing them would hide the event we're trying to log.
     # random_request is the user's explicit "this was spam, not a real
@@ -3420,10 +3420,10 @@ def _lists_apply_overlay(pure: dict) -> dict:
     # visible in the broader ever_unfollowed_you log and in the other
     # event-history lists.
     rats_suppression = random_only | {u for u, t in flagged.items() if t.get("unavailable")}
-    # Cumulative event-log lists. Full suppression (disabled/unavailable/
+    # Cumulative event-log lists. Full suppression (deactivated/unavailable/
     # random_request) MUST NOT apply here — see comment above. We only
     # apply random_only to keep these lists noise-free without hiding
-    # the disabled/unavailable accounts whose tag is itself a
+    # the deactivated/unavailable accounts whose tag is itself a
     # consequence of the historical event. Note that `ever_unfollowed_you`
     # is intentionally NOT in this set: it's the broad event log, no
     # filtering at all (`rats` is the noise-filtered counterpart).
@@ -3488,7 +3488,7 @@ def _lists_apply_overlay(pure: dict) -> dict:
         annotated[flag] = bucket_rows
         sections_full[flag] = bucket_rows
     # Has-notes list — every account with a saved note. Sourced from
-    # notes_map directly so unfollowed / disabled / unavailable accounts
+    # notes_map directly so unfollowed / deactivated / unavailable accounts
     # all stay visible. Reuses _build_bucket_row (an unknown kind gets
     # an empty bucket_status, which is what we want).
     noted_usernames = sorted(notes_map.keys())
@@ -3509,11 +3509,11 @@ def _lists_apply_overlay(pure: dict) -> dict:
         annotated["not_following_you_back"].sort(key=nfb_key)
 
     # Bucket-status override: if the extension confirmed an account is
-    # unavailable / disabled (page-not-found banner), trust that over the
+    # unavailable / deactivated (page-not-found banner), trust that over the
     # snapshot-derived "PAGE BACK" / "BACK ONLINE" alarm. The snapshot may
     # still show them in your following because IG keeps deactivated
     # accounts there indefinitely, but the live page check is authoritative.
-    for bk in ("unavailable", "disabled"):
+    for bk in ("unavailable", "deactivated"):
         for r in annotated.get(bk, []):
             if r["username"] in confirmed_unavailable:
                 r["bucket_status"] = "still gone (extension confirms)"

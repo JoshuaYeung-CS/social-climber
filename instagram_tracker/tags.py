@@ -8,7 +8,7 @@ import sqlite3
 
 from .db import utc_now_iso
 
-VALID_FLAGS = {"favorite", "want_remove", "watchlist", "disabled", "unavailable", "random_request", "now_public", "to_follow", "star"}
+VALID_FLAGS = {"favorite", "want_remove", "watchlist", "deactivated", "unavailable", "random_request", "now_public", "to_follow", "star"}
 
 
 def _added_at_col(flag: str) -> str:
@@ -25,7 +25,7 @@ def get_tags(conn: sqlite3.Connection, username: str) -> dict:
             "favorite": False,
             "want_remove": False,
             "watchlist": False,
-            "disabled": False,
+            "deactivated": False,
             "unavailable": False,
             "random_request": False,
             "now_public": False,
@@ -34,7 +34,7 @@ def get_tags(conn: sqlite3.Connection, username: str) -> dict:
             "favorite_added_at": None,
             "want_remove_added_at": None,
             "watchlist_added_at": None,
-            "disabled_added_at": None,
+            "deactivated_added_at": None,
             "unavailable_added_at": None,
             "random_request_added_at": None,
             "now_public_added_at": None,
@@ -49,7 +49,7 @@ def get_tags(conn: sqlite3.Connection, username: str) -> dict:
         "favorite": bool(row["favorite"]),
         "want_remove": bool(row["want_remove"]),
         "watchlist": bool(row["watchlist"]),
-        "disabled": bool(row["disabled"]) if "disabled" in keys else False,
+        "deactivated": bool(row["deactivated"]) if "deactivated" in keys else False,
         "unavailable": bool(row["unavailable"]) if "unavailable" in keys else False,
         "random_request": bool(row["random_request"]) if "random_request" in keys else False,
         "now_public": bool(row["now_public"]) if "now_public" in keys else False,
@@ -58,7 +58,7 @@ def get_tags(conn: sqlite3.Connection, username: str) -> dict:
         "favorite_added_at": row["favorite_added_at"],
         "want_remove_added_at": row["want_remove_added_at"],
         "watchlist_added_at": row["watchlist_added_at"],
-        "disabled_added_at": row["disabled_added_at"] if "disabled_added_at" in keys else None,
+        "deactivated_added_at": row["deactivated_added_at"] if "deactivated_added_at" in keys else None,
         "unavailable_added_at": row["unavailable_added_at"] if "unavailable_added_at" in keys else None,
         "random_request_added_at": row["random_request_added_at"] if "random_request_added_at" in keys else None,
         "now_public_added_at": row["now_public_added_at"] if "now_public_added_at" in keys else None,
@@ -96,7 +96,7 @@ def set_flag(
                 username, favorite, favorite_added_at,
                 want_remove, want_remove_added_at,
                 watchlist, watchlist_added_at,
-                disabled, disabled_added_at,
+                deactivated, deactivated_added_at,
                 unavailable, unavailable_added_at,
                 random_request, random_request_added_at,
                 now_public, now_public_added_at,
@@ -110,7 +110,7 @@ def set_flag(
                 cols["favorite"], added["favorite_added_at"],
                 cols["want_remove"], added["want_remove_added_at"],
                 cols["watchlist"], added["watchlist_added_at"],
-                cols["disabled"], added["disabled_added_at"],
+                cols["deactivated"], added["deactivated_added_at"],
                 cols["unavailable"], added["unavailable_added_at"],
                 cols["random_request"], added["random_request_added_at"],
                 cols["now_public"], added["now_public_added_at"],
@@ -160,16 +160,16 @@ def list_with_flag(conn: sqlite3.Connection, flag: str) -> list[dict]:
 
 def all_flagged_usernames(conn: sqlite3.Connection) -> dict[str, dict[str, bool]]:
     rows = conn.execute(
-        "SELECT username, favorite, want_remove, watchlist, disabled, unavailable, random_request, now_public, to_follow, star "
+        "SELECT username, favorite, want_remove, watchlist, deactivated, unavailable, random_request, now_public, to_follow, star "
         "FROM profile_tags "
-        "WHERE favorite = 1 OR want_remove = 1 OR watchlist = 1 OR disabled = 1 OR unavailable = 1 OR random_request = 1 OR now_public = 1 OR to_follow = 1 OR star = 1"
+        "WHERE favorite = 1 OR want_remove = 1 OR watchlist = 1 OR deactivated = 1 OR unavailable = 1 OR random_request = 1 OR now_public = 1 OR to_follow = 1 OR star = 1"
     ).fetchall()
     return {
         r["username"]: {
             "favorite": bool(r["favorite"]),
             "want_remove": bool(r["want_remove"]),
             "watchlist": bool(r["watchlist"]),
-            "disabled": bool(r["disabled"]),
+            "deactivated": bool(r["deactivated"]),
             "unavailable": bool(r["unavailable"]),
             "random_request": bool(r["random_request"]),
             "now_public": bool(r["now_public"]),
