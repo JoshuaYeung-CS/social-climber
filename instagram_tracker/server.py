@@ -1316,8 +1316,12 @@ def _home_compute():
         ).fetchall():
             last_pending_taken_at_home[r["username"]] = r["last_seen"]
         # Sort each preview list by its relevant timestamp, newest
-        # first, then take the top 50. Username fallback for users
-        # without timestamps so they still appear (just at the bottom).
+        # first. Username fallback for users without timestamps so
+        # they still appear (just at the bottom). Previously capped
+        # at 50 each, which made the home cards show a misleading
+        # "50" in the heading (= preview length) regardless of the
+        # true count. These bucket sizes are bounded by the user's
+        # active follow graph so the JSON stays reasonable.
         def _by_ts_desc(users, ts_map):
             return sorted(users, key=lambda u: (-(ts_map.get(u) or 0), u))
         public_followed_back_preview = [
@@ -1326,7 +1330,7 @@ def _home_compute():
                 "ts": followers_ts_home.get(u),
                 "ts2": following_ts_home.get(u),
             }
-            for u in _by_ts_desc(public_followed_back, followers_ts_home)[:50]
+            for u in _by_ts_desc(public_followed_back, followers_ts_home)
         ]
         private_accepted_preview = [
             {
@@ -1334,7 +1338,7 @@ def _home_compute():
                 "ts": pending_ts_home.get(u),
                 "ts2": following_ts_home.get(u),
             }
-            for u in _by_ts_desc(private_accepted_no_follow_back, pending_ts_home)[:50]
+            for u in _by_ts_desc(private_accepted_no_follow_back, pending_ts_home)
         ]
         request_dropped_preview = [
             {
@@ -1344,17 +1348,18 @@ def _home_compute():
                 # an int — render as-is on the client.
                 "ts2_iso": last_pending_taken_at_home.get(u),
             }
-            for u in _by_ts_desc(request_rejected_home, pending_ts_home)[:50]
+            for u in _by_ts_desc(request_rejected_home, pending_ts_home)
         ]
 
         # Inline preview of noted accounts so the home-page card can
         # show the actual usernames (and a note snippet) instead of
-        # just a count. Cap at 50 entries to keep the JSON small;
-        # the list view is the canonical full browser.
+        # just a count. The Notes count heading uses bucket_counts
+        # (true total) — capping the inline list made it inconsistent
+        # with the heading (heading "302" + 50 entries shown).
         noted_rows = conn.execute(
             "SELECT username, notes FROM profile_tags "
             "WHERE notes IS NOT NULL AND TRIM(notes) != '' "
-            "ORDER BY updated_at DESC LIMIT 50"
+            "ORDER BY updated_at DESC"
         ).fetchall()
         noted_users = [
             {"username": r["username"], "note": r["notes"]}
