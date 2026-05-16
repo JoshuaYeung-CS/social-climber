@@ -903,6 +903,7 @@ function renderPanel(panel, username, data) {
       <div class="igt-tags">${tagBtns}</div>
       <div class="igt-link-row">
         <a class="igt-link" href="${_settings.trackerUrl}/?lookup=${encodeURIComponent(username)}" target="_blank" rel="noopener">↗ open in tracker</a>
+        <button class="igt-link igt-link-btn" data-action="link-alt" title="Mark another account as an alt of this one. Adds 'alt of @<other>' to both profiles' notes.">🔗 link alt</button>
       </div>
     </div>
   `;
@@ -918,6 +919,30 @@ function renderPanel(panel, username, data) {
         btn.classList.toggle("on", !on);
       }
     });
+  });
+  panel.querySelector("[data-action='link-alt']")?.addEventListener("click", async () => {
+    const raw = window.prompt(`Other account that belongs to the same person as @${username}:`);
+    if (raw == null) return;
+    const other = raw.trim().replace(/^@+/, "").toLowerCase();
+    if (!other) return;
+    if (other === username.toLowerCase()) {
+      window.alert("Can't link an account to itself.");
+      return;
+    }
+    const r = await bgFetch(`${_settings.trackerUrl}/api/note/link-alt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, alt: other }),
+    });
+    if (r && r.ok) {
+      const ra = r.body?.results?.[username];
+      const rb = r.body?.results?.[other];
+      const aMsg = ra?.changed ? "added" : "already linked";
+      const bMsg = rb?.changed ? "added" : "already linked";
+      window.alert(`✓ @${username}: ${aMsg}\n✓ @${other}: ${bMsg}`);
+    } else {
+      window.alert(`Link failed: ${r?.error || r?.body?.detail || "unknown error"}`);
+    }
   });
 }
 

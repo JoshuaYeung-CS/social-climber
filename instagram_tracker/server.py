@@ -4065,6 +4065,49 @@ def set_note(payload: dict = Body(...)):
     return {"username": username, "note": note}
 
 
+@app.post("/api/note/link-alt")
+def link_alt_account(payload: dict = Body(...)):
+    """Reciprocally mark two profiles as alt accounts of each other by
+    appending an 'alt of @<other>' line to each side's free-form notes.
+    Idempotent — if the marker line is already present on a side, that
+    side is left alone. Lets the user say 'this dump/finsta/work account
+    belongs to <person>' in one click instead of typing a free-form note
+    on both profiles."""
+    a_raw = payload.get("username") or payload.get("a")
+    b_raw = payload.get("alt") or payload.get("b")
+    if not a_raw or not b_raw:
+        raise HTTPException(status_code=400, detail="Need both username and alt.")
+    a, _a_url = normalize_account_input(a_raw)
+    b, _b_url = normalize_account_input(b_raw)
+    if a == b:
+        raise HTTPException(status_code=400, detail="Cannot link an account to itself.")
+
+    results: dict[str, dict] = {}
+    with db_conn() as conn:
+        for username, other in ((a, b), (b, a)):
+            marker = f"alt of @{other}"
+            row = conn.execute(
+                "SELECT notes FROM profile_tags WHERE username = ?", (username,)
+            ).fetchone()
+            existing = (row["notes"] if row and row["notes"] else "").strip()
+            if marker.lower() in existing.lower():
+                results[username] = {"changed": False, "note": existing}
+                continue
+            final = (existing + "\n" + marker).strip() if existing else marker
+            conn.execute(
+                """INSERT INTO profile_tags (username, notes, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(username) DO UPDATE SET
+                       notes = excluded.notes,
+                       updated_at = CURRENT_TIMESTAMP""",
+                (username, final),
+            )
+            results[username] = {"changed": True, "note": final}
+        conn.commit()
+    _bump_tag_version()
+    return {"username": a, "alt": b, "results": results}
+
+
 # ---------- static frontend ----------
 
 class NoCacheStaticFiles(StaticFiles):
