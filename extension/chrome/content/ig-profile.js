@@ -39,6 +39,9 @@ const RESERVED = new Set([
 
 let _settings = null;
 let _lastUsername = null;
+// Holds the previously-visited profile username so the 🔗 link-alt
+// picker can offer it as a one-click candidate ("you were just on @X").
+let _prevProfileUsername = null;
 let _panelOpen = true;
 let _panelEl = null;
 // Set to true once we detect the extension was reloaded out from under us
@@ -920,16 +923,78 @@ function renderPanel(panel, username, data) {
       }
     });
   });
-  panel.querySelector("[data-action='link-alt']")?.addEventListener("click", async () => {
-    const raw = window.prompt(`Other account that belongs to the same person as @${username}:`);
-    if (raw == null) return;
-    const other = raw.trim().replace(/^@+/, "").toLowerCase();
+  panel.querySelector("[data-action='link-alt']")?.addEventListener("click", () => {
+    renderLinkAltPicker(panel, username, profile);
+  });
+}
+
+// Pull plausible alt-account candidates from the current profile's bio.
+// IG usernames are [A-Za-z0-9._] up to 30 chars. We don't enforce all
+// of IG's rules — the server normalizes whatever the user submits —
+// but we trim trailing punctuation so "@zoey.tan." in a sentence
+// becomes "zoey.tan".
+function _extractAtMentions(text, excludeUsername) {
+  if (!text) return [];
+  const exclude = (excludeUsername || "").toLowerCase();
+  const out = new Set();
+  const re = /@([A-Za-z0-9_.]{2,30})/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    let u = m[1].toLowerCase().replace(/\.+$/, "");
+    if (u && u !== exclude) out.add(u);
+  }
+  return [...out];
+}
+
+// Inline picker that replaces the link row with a candidate list +
+// free-form input. Click a chip OR type a username + Link. Cancel
+// puts the original row back. Avoids the native prompt() — which is
+// blocking, ugly, and doesn't surface bio-mention candidates.
+function renderLinkAltPicker(panel, username, profile) {
+  const linkRow = panel.querySelector(".igt-link-row");
+  if (!linkRow) return;
+  if (!linkRow.dataset.origHtml) linkRow.dataset.origHtml = linkRow.innerHTML;
+
+  const bioMentions = _extractAtMentions(profile.bio, username);
+  const candidates = bioMentions.map((u) => ({ user: u, source: "bio" }));
+  if (_prevProfileUsername
+      && _prevProfileUsername.toLowerCase() !== username.toLowerCase()
+      && !candidates.some((c) => c.user === _prevProfileUsername.toLowerCase())) {
+    candidates.push({ user: _prevProfileUsername.toLowerCase(), source: "last visited" });
+  }
+  const chipHtml = candidates.length
+    ? `<div class="igt-alt-chips">` + candidates.map((c) =>
+        `<button class="igt-link igt-link-btn igt-alt-chip" data-alt="${escapeHtml(c.user)}" title="From ${c.source}">🔗 @${escapeHtml(c.user)} <span class="igt-alt-src">· ${escapeHtml(c.source)}</span></button>`
+      ).join("") + `</div>`
+    : `<div class="igt-alt-empty">no candidates found in bio</div>`;
+
+  linkRow.innerHTML = `
+    <div class="igt-alt-picker">
+      <div class="igt-alt-head">Link @${escapeHtml(username)} to:</div>
+      ${chipHtml}
+      <div class="igt-alt-input-row">
+        <input class="igt-alt-input" type="text" placeholder="or type username" autocomplete="off" />
+        <button class="igt-link igt-link-btn igt-alt-go" type="button">Link</button>
+        <button class="igt-link igt-link-btn igt-alt-cancel" type="button">cancel</button>
+      </div>
+    </div>
+  `;
+
+  const restore = () => {
+    linkRow.innerHTML = linkRow.dataset.origHtml;
+    delete linkRow.dataset.origHtml;
+    linkRow.querySelector("[data-action='link-alt']")
+      ?.addEventListener("click", () => renderLinkAltPicker(panel, username, profile));
+  };
+
+  const submit = async (otherRaw) => {
+    const other = (otherRaw || "").trim().replace(/^@+/, "").toLowerCase();
     if (!other) return;
     if (other === username.toLowerCase()) {
       window.alert("Can't link an account to itself.");
       return;
     }
-    const r = await bgFetch(`${_settings.trackerUrl}/api/note/link-alt`, {
+    const r = await bgFetch(`${_settings.trackerUrl}/api/link-alt`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, alt: other }),
@@ -939,11 +1004,32 @@ function renderPanel(panel, username, data) {
       const rb = r.body?.results?.[other];
       const aMsg = ra?.changed ? "added" : "already linked";
       const bMsg = rb?.changed ? "added" : "already linked";
-      window.alert(`✓ @${username}: ${aMsg}\n✓ @${other}: ${bMsg}`);
+      linkRow.innerHTML = `<div class="igt-alt-ok">✓ @${escapeHtml(username)}: ${aMsg} · @${escapeHtml(other)}: ${bMsg}</div>`;
+      setTimeout(restore, 1500);
     } else {
-      window.alert(`Link failed: ${r?.error || r?.body?.detail || "unknown error"}`);
+      const msg = r?.error || r?.body?.detail || "unknown error";
+      linkRow.innerHTML = `<div class="igt-alt-err">Link failed: ${escapeHtml(String(msg))}</div>
+        <button class="igt-link igt-link-btn igt-alt-cancel" type="button">back</button>`;
+      linkRow.querySelector(".igt-alt-cancel")?.addEventListener("click", restore);
+    }
+  };
+
+  linkRow.querySelectorAll(".igt-alt-chip").forEach((b) =>
+    b.addEventListener("click", () => submit(b.dataset.alt))
+  );
+  linkRow.querySelector(".igt-alt-go")?.addEventListener("click", () => {
+    submit(linkRow.querySelector(".igt-alt-input").value);
+  });
+  linkRow.querySelector(".igt-alt-input")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      submit(linkRow.querySelector(".igt-alt-input").value);
+    } else if (e.key === "Escape") {
+      restore();
     }
   });
+  linkRow.querySelector(".igt-alt-cancel")?.addEventListener("click", restore);
+  linkRow.querySelector(".igt-alt-input")?.focus();
 }
 
 // Drag-to-move support. Mousedown on the header (avoiding the icon
@@ -1072,6 +1158,9 @@ function onLocationMaybeChanged() {
     return;
   }
   if (username === _lastUsername) return;
+  // Track previous profile (for the 🔗 link-alt picker, so navigating
+  // A → B exposes @A as a one-click candidate when linking on B).
+  if (_lastUsername) _prevProfileUsername = _lastUsername;
   _lastUsername = username;
   refreshOverlay(username);
 }

@@ -198,6 +198,41 @@ button.igt-link-btn {
   cursor: pointer;
   font: inherit;
 }
+.igt-alt-picker {
+  display: flex; flex-direction: column; gap: 6px; width: 100%;
+  font-size: 11px; color: #c8c8cd;
+}
+.igt-alt-head { font-size: 11px; color: #8f8f99; }
+.igt-alt-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.igt-alt-chip {
+  background: rgba(79, 140, 255, 0.10);
+  border: 1px solid rgba(79, 140, 255, 0.35) !important;
+  color: #aac8ff;
+  padding: 3px 8px !important;
+  border-radius: 999px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.igt-alt-chip:hover { background: rgba(79, 140, 255, 0.20); }
+.igt-alt-src { color: #6f7480; font-size: 10px; }
+.igt-alt-empty { font-size: 11px; color: #6f7480; font-style: italic; }
+.igt-alt-input-row { display: flex; gap: 6px; align-items: center; }
+.igt-alt-input {
+  flex: 1; min-width: 0;
+  background: #1a1a1c; border: 1px solid #2a2a2e;
+  color: #f1f1f3; padding: 4px 8px; border-radius: 6px;
+  font-size: 12px;
+}
+.igt-alt-go {
+  color: #aac8ff !important;
+  background: rgba(79, 140, 255, 0.12) !important;
+  border: 1px solid rgba(79, 140, 255, 0.35) !important;
+  padding: 3px 10px !important;
+  border-radius: 6px;
+}
+.igt-alt-cancel { color: #8f8f99 !important; padding: 3px 8px !important; }
+.igt-alt-ok { color: #6fdc8c; font-size: 11px; }
+.igt-alt-err { color: #ff8a8a; font-size: 11px; }
 /* Account-type indicator next to the username — small inline pill,
    matching the verified-check sizing. Business gets an amber hue,
    creator gets cool blue. */

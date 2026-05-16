@@ -4065,7 +4065,7 @@ def set_note(payload: dict = Body(...)):
     return {"username": username, "note": note}
 
 
-@app.post("/api/note/link-alt")
+@app.post("/api/link-alt")
 def link_alt_account(payload: dict = Body(...)):
     """Reciprocally mark two profiles as alt accounts of each other by
     appending an 'alt of @<other>' line to each side's free-form notes.
