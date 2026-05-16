@@ -4203,22 +4203,26 @@ function shortDate(s) {
 // cards only render when at least one of their related series is
 // visible. Lets the user focus on "just unfollowers" or "just pending
 // activity" without scanning past unrelated blocks.
-// Strict 1-to-1 mapping: each diff block is governed by exactly one
-// chip, and each chip governs exactly one direction of count change.
-//   Followers chip                       → ↑ followers (new_followers)
-//   Unfollowers (cumulative) chip        → ↓ followers (they unfollowed + you removed)
-//   Following chip                       → ↑ following (new_following)
-//   You unfollowed (cumulative) chip     → ↓ following (you unfollowed + they removed you)
+//
+// The Followers and Following chips are "superset" chips — they
+// govern EVERY event that moves the corresponding count, in either
+// direction, so ticking Followers explains the full net change rather
+// than only the gains. The cumulative chips remain available for
+// users who want to focus on just the losses.
+//   Followers chip                       → ↑↓ followers (new_followers + they_unfollowed_you + you_removed_as_follower)
+//   Unfollowers (cumulative) chip        → ↓ followers only (they unfollowed + you removed)
+//   Following chip                       → ↑↓ following (new_following + you_unfollowed + they_removed_you_as_follower)
+//   You unfollowed (cumulative) chip     → ↓ following only (you unfollowed + they removed you)
 //   Pending (you sent) chip              → both directions of pending
 // Mutuals / Pending (they sent) / all Δ chips are chart-only — they
 // have no mapping here, so they don't add or hide diff blocks.
 const HISTORY_DETAIL_BLOCK_TO_SERIES = {
   new_followers:                ["followers"],
-  they_unfollowed_you:          ["cumulative_unfollowers"],
-  you_removed_as_follower:      ["cumulative_unfollowers"],
+  they_unfollowed_you:          ["cumulative_unfollowers", "followers"],
+  you_removed_as_follower:      ["cumulative_unfollowers", "followers"],
   new_following:                ["following"],
-  you_unfollowed:               ["cumulative_you_unfollowed"],
-  they_removed_you_as_follower: ["cumulative_you_unfollowed"],
+  you_unfollowed:               ["cumulative_you_unfollowed", "following"],
+  they_removed_you_as_follower: ["cumulative_you_unfollowed", "following"],
   new_pending:                  ["pending"],
   resolved_pending:             ["pending"],
 };
