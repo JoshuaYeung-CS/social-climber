@@ -4,7 +4,7 @@
 #
 # Touches:
 #   - extension/chrome/manifest.json      ("version": "x.y.PATCH" → patch+1)
-#   - instagram_tracker/static/index.html (?v=N → N+1 on app.js / styles.css)
+#   - social_climber/static/index.html (?v=N → N+1 on app.js / styles.css)
 #
 # Usage:
 #   ./scripts/bump_version.sh          # bump both extension + web cache-buster
@@ -38,7 +38,7 @@ bump_ext() {
 }
 
 bump_web() {
-  local ih="instagram_tracker/static/index.html"
+  local ih="social_climber/static/index.html"
   if [[ ! -f "$ih" ]]; then
     echo "skip web: $ih not found" >&2
     return

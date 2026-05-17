@@ -3,7 +3,7 @@ from pathlib import Path
 PACKAGE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = PACKAGE_DIR.parent
 
-DB_PATH = PROJECT_DIR / "data" / "instagram_tracker.db"
+DB_PATH = PROJECT_DIR / "data" / "social_climber.db"
 STATIC_DIR = PACKAGE_DIR / "static"
 
 DEFAULT_PORT = 8000

@@ -28,4 +28,4 @@ if [[ ! -d .venv ]]; then
 fi
 
 PORT="${1:-8000}"
-exec .venv/bin/python -m instagram_tracker "$PORT"
+exec .venv/bin/python -m social_climber "$PORT"

@@ -31,7 +31,7 @@ from .config import DB_PATH
 from .db import connect
 from .ingest import import_path
 
-log = logging.getLogger("instagram_tracker.watcher")
+log = logging.getLogger("social_climber.watcher")
 
 # Serializes scan_once() calls. Without this, two near-simultaneous button
 # clicks (or a button click + the polling thread) could race the duplicate

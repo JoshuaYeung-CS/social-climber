@@ -168,7 +168,7 @@ The local web app — home view with the Chrome extension popup open in the corn
 ## Project layout
 
 ```
-instagram_tracker/
+social_climber/
 ├── server.py             FastAPI HTTP API (~40 endpoints)
 ├── ingest.py             Zip/folder import with auto-discovery, dedup, backfill
 ├── watcher.py            Polling folder watcher for Drive auto-import
@@ -209,7 +209,7 @@ The launcher prints two URLs:
 - `http://localhost:8000` — open on the same machine
 - `http://<your-lan-ip>:8000` — open in Safari on your phone (same Wi-Fi)
 
-Stop with `Ctrl-C`. Your local database lives at `data/instagram_tracker.db`.
+Stop with `Ctrl-C`. Your local database lives at `data/social_climber.db`.
 
 ### Drive auto-import
 
@@ -241,7 +241,7 @@ Load `extension/chrome/` as an unpacked extension at `chrome://extensions`. Set 
 ## Privacy
 
 Surface area for your data:
-- `data/instagram_tracker.db` — local SQLite file, never transmitted
+- `data/social_climber.db` — local SQLite file, never transmitted
 - A FastAPI server bound to `0.0.0.0:8000` so your phone on the same Wi-Fi can reach it
 - The frontend is plain HTML/CSS/JS served from disk; it makes no third-party requests
 - The browser extension talks to **two** origins only: this server (localhost) and `instagram.com` pages you're already on

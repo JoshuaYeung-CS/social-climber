@@ -41,7 +41,7 @@ from pathlib import Path
 
 # Locate the project root regardless of where the script is invoked from.
 ROOT = Path(__file__).resolve().parent.parent
-DB_PATH = ROOT / "data" / "instagram_tracker.db"
+DB_PATH = ROOT / "data" / "social_climber.db"
 
 WIPE_TABLES = [
     "snapshots",
