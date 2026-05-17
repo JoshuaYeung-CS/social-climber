@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/static/icon.svg" />
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/static/styles.css?v=29" />
+  <link rel="stylesheet" href="/static/styles.css?v=30" />
   <title>Social Climber</title>
 </head>
 <body>
@@ -114,6 +114,14 @@
         </a>
         <p class="muted small">Accounts you've saved a note on. Persists even if you (or they) unfollow.</p>
         <div id="notes-users" class="notes-users"></div>
+      </div>
+
+      <div class="card" id="incoming-pending-card" hidden>
+        <a class="notes-card-head" href="#lists/incoming_requests">
+          <h2>📥 Currently requesting to follow you <span class="count" id="count-incoming_pending">0</span></h2>
+        </a>
+        <p class="muted small">Accounts whose follow request to you is still pending acceptance — sorted by when they sent it, newest first.</p>
+        <div id="incoming-pending-users" class="notes-users"></div>
       </div>
 
       <div class="card" id="private-accepted-card" hidden>
@@ -285,6 +293,6 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="/static/app.js?v=45"></script>
+  <script src="/static/app.js?v=46"></script>
 </body>
 </html>

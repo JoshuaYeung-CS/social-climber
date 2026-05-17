@@ -476,6 +476,15 @@ async function loadHome() {
       ]
     );
     renderUserCard(
+      "incoming-pending-card",
+      $("#incoming-pending-users"),
+      "count-incoming_pending",
+      data.incoming_pending || [],
+      [
+        { key: "ts", label: "they requested" },
+      ]
+    );
+    renderUserCard(
       "private-accepted-card",
       $("#private-accepted-users"),
       "count-private_accepted_no_follow_back",

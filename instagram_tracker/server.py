@@ -1303,6 +1303,18 @@ def _home_compute():
                 "GROUP BY username"
             ).fetchall()
         }
+        # Earliest-observed incoming-request timestamp per username.
+        # MIN because export_timestamp is when THEY made the request
+        # (stable across exports), so the earliest sighting is closest
+        # to truth — same pattern alerts.py uses for "they requested".
+        incoming_ts_home = {
+            r["username"]: r["ts"]
+            for r in conn.execute(
+                "SELECT username, MIN(export_timestamp) AS ts "
+                "FROM incoming_follow_requests "
+                "GROUP BY username"
+            ).fetchall()
+        }
         # Last-seen-in-pending: for the Follow Request Rejected card,
         # the rejection happened sometime after this snapshot's
         # taken_at. Stored as ISO string from the snapshots table.
@@ -1349,6 +1361,19 @@ def _home_compute():
                 "ts2_iso": last_pending_taken_at_home.get(u),
             }
             for u in _by_ts_desc(request_rejected_home, pending_ts_home)
+        ]
+        # Currently-requesting-to-follow-you preview: every account in
+        # the latest snapshot's incoming_requests that the user hasn't
+        # tagged-away (deactivated / unavailable / random / etc.). The
+        # Lists view has the same data as "Requests to follow you" but
+        # this surfaces it on the home page so the user can act on new
+        # incoming requests without drilling in.
+        incoming_pending_preview = [
+            {
+                "username": u,
+                "ts": incoming_ts_home.get(u),
+            }
+            for u in _by_ts_desc(sorted(active_incoming), incoming_ts_home)
         ]
 
         # Inline preview of noted accounts so the home-page card can
@@ -1430,6 +1455,7 @@ def _home_compute():
             # Inline previews (capped) so the home cards can list the
             # actual usernames without a second round-trip. Full lists
             # live under /api/dashboard sections.
+            "incoming_pending": incoming_pending_preview,
             "public_followed_back": public_followed_back_preview,
             "private_accepted_no_follow_back": private_accepted_preview,
             "request_dropped": request_dropped_preview,
