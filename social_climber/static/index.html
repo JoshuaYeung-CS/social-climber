@@ -11,13 +11,14 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/static/icon.svg" />
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/static/styles.css?v=30" />
+  <link rel="stylesheet" href="/static/styles.css?v=31" />
   <title>Social Climber</title>
 </head>
 <body>
   <header class="topbar">
     <div class="brand">Social Climber</div>
     <div class="snapshot-pill" id="snapshot-pill">no data</div>
+    <div class="tz-pill" id="tz-pill" title="Every timestamp in this UI is converted to your browser's local timezone. IG exports use unix epoch internally, so changing your system TZ would just relabel — not shift — the events.">tz: …</div>
   </header>
 
   <!-- Calibration banner: pinned to top-right, sticky in viewport.
@@ -293,6 +294,6 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="/static/app.js?v=46"></script>
+  <script src="/static/app.js?v=47"></script>
 </body>
 </html>

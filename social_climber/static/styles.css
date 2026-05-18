@@ -100,6 +100,17 @@ body {
   border-radius: 999px;
   border: 1px solid rgba(79, 140, 255, 0.3);
 }
+.tz-pill {
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: help;
+}
 
 .tabs {
   display: flex;

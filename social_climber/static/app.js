@@ -4573,6 +4573,34 @@ if (_bootView === "home") loadHome();
 // gets the network slot first.
 else setTimeout(loadHome, 250);
 
+// TZ pill in the topbar. Surfaces the browser's local timezone +
+// current UTC offset so the user can sanity-check that the timestamps
+// shown match what they expect (every shown timestamp comes from
+// `new Date(epoch * 1000).toLocaleString()`, so the pill is
+// authoritative for what every other time on the page is anchored to).
+(function _initTzPill() {
+  const tzEl = $("#tz-pill");
+  if (!tzEl) return;
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "local";
+    const offsetMin = -new Date().getTimezoneOffset();
+    const sign = offsetMin >= 0 ? "+" : "-";
+    const abs = Math.abs(offsetMin);
+    const h = String(Math.floor(abs / 60)).padStart(2, "0");
+    const m = String(abs % 60).padStart(2, "0");
+    let short = tz;
+    try {
+      const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(new Date());
+      const tzPart = parts.find((p) => p.type === "timeZoneName");
+      if (tzPart && tzPart.value) short = tzPart.value;
+    } catch { /* keep IANA fallback */ }
+    tzEl.textContent = `${short} · UTC${sign}${h}:${m}`;
+    tzEl.title = `Times shown in ${tz} (${short}, UTC${sign}${h}:${m}). ` + tzEl.title;
+  } catch {
+    tzEl.textContent = "local time";
+  }
+})();
+
 // Allow ?lookup=<username|url> to auto-open a lookup. Used by iOS Shortcuts and bookmarklets.
 (function autoLookupFromUrl() {
   const params = new URLSearchParams(window.location.search);
