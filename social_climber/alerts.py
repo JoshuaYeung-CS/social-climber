@@ -316,6 +316,8 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
 
     for entry in watchlist_entries:
         u = entry["username"]
+        if u in suppressed:
+            continue  # tagged random_request / deactivated / unavailable — silenced
         added = _parse_iso(entry["added_at"])
         if added is None:
             continue
@@ -382,6 +384,8 @@ def compute_alerts(conn: sqlite3.Connection) -> dict:
             wr_now_public_set.add(r["username"])
         for entry in want_remove_entries:
             u = entry["username"]
+            if u in suppressed:
+                continue  # tagged random_request / deactivated / unavailable — silenced
             if u not in curr.following:
                 continue  # not currently following — nothing to remove
             if u in curr.followers:
