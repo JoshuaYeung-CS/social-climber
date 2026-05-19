@@ -110,6 +110,40 @@ function findAccountRow(email) {
   return null;
 }
 
+// Passkey-verification screen: Google sometimes wedges a "Verify it's
+// you / Complete sign-in using your passkey" interstitial between the
+// account-picker click and the Meta consent screen. The passkey flow
+// requires biometric input we can't automate, and on failure it loops
+// on "Something went wrong" indefinitely. Detect it and click "Try
+// another way" to fall back to password sign-in (user fills the
+// password screen manually; we then resume on the consent screen).
+const PASSKEY_MARKERS = [
+  "verify it's you",
+  "verify it’s you",   // Google uses curly apostrophe in some locales
+  "complete sign-in using your passkey",
+  "complete sign in using your passkey",
+];
+const PASSKEY_FALLBACK_TARGETS = ["try another way", "use your password", "use password"];
+
+function isPasskeyScreen() {
+  const txt = (document.body?.innerText || "").toLowerCase();
+  return PASSKEY_MARKERS.some(m => txt.includes(m));
+}
+
+function findPasskeyFallback() {
+  const candidates = document.querySelectorAll(
+    "a, button, [role='button'], [role='link']"
+  );
+  for (const el of candidates) {
+    const t = (el.textContent || "").trim().toLowerCase();
+    if (!t || t.length > 40) continue;
+    if (PASSKEY_FALLBACK_TARGETS.some(target => t === target || t.includes(target))) {
+      return el;
+    }
+  }
+  return null;
+}
+
 (async function main() {
   const stored = await chrome.storage.local.get([
     "autosubmitGoogle",
@@ -123,20 +157,49 @@ function findAccountRow(email) {
   // independent opt-in for users who don't set an email.
   const wantContinue = !!stored.autosubmitGoogle || wantPickAccount;
   if (!wantContinue && !wantPickAccount) return;
-  console.log(`[Social Climber] OAuth helper active (pickEmail=${targetEmail || "—"}, autoContinue=${wantContinue})`);
+  console.log(`[IG Tracker] OAuth helper active (pickEmail=${targetEmail || "—"}, autoContinue=${wantContinue})`);
 
-  // Single polling loop that handles both screens (account picker
-  // → consent). Google's OAuth flow uses SPA navigation between these
-  // screens — the document doesn't reload, so the content script
-  // doesn't get re-injected; we have to keep polling and detect the
-  // newly-rendered Continue button after the picker click.
+  // Single polling loop that handles all screens (account picker →
+  // optional passkey-verify interstitial → consent). Google's OAuth
+  // flow uses SPA navigation between these screens — the document
+  // doesn't reload, so the content script doesn't get re-injected;
+  // we have to keep polling and detect each newly-rendered target.
+  //
+  // `everSawMeta` latches once we've confirmed this is a Meta OAuth
+  // flow. Google's passkey interstitial doesn't mention Meta at all,
+  // so without the latch we'd skip it as "not our flow". Bumped iter
+  // count from 60 → 200 (1 min total) because the multi-screen flow
+  // can legitimately take longer than the original picker-only path.
   let pickDone = !wantPickAccount;
+  let passkeyFallbackClicked = false;
+  let everSawMeta = false;
   let lastWarn = 0;
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 200; i++) {
     await new Promise(r => setTimeout(r, 300));
-    if (!pageMentionsMeta()) {
+    const onMeta = pageMentionsMeta();
+    if (onMeta) everSawMeta = true;
+
+    // Passkey interstitial bypass: only fires within an established
+    // Meta flow (everSawMeta) so we don't hijack the user's unrelated
+    // Gmail / Drive sign-ins. One click per session — the fallback
+    // chain may itself land on another sign-in screen we don't want
+    // to re-process.
+    if (everSawMeta && !passkeyFallbackClicked && isPasskeyScreen()) {
+      const fb = findPasskeyFallback();
+      if (fb) {
+        console.log("[IG Tracker] Passkey verification screen detected — clicking 'Try another way' to bypass.");
+        fb.click();
+        passkeyFallbackClicked = true;
+        continue;
+      } else if (i - lastWarn > 6) {
+        console.warn("[IG Tracker] Passkey screen detected but no 'Try another way' link found — user will need to complete or cancel manually.");
+        lastWarn = i;
+      }
+    }
+
+    if (!onMeta) {
       if (i > 0 && i % 10 === 0) {
-        console.log(`[Social Climber] OAuth: waiting for Meta-branded page text… (iter ${i})`);
+        console.log(`[IG Tracker] OAuth: waiting for Meta-branded page text… (iter ${i})`);
       }
       continue;
     }
@@ -144,14 +207,14 @@ function findAccountRow(email) {
     if (!pickDone) {
       const row = findAccountRow(targetEmail);
       if (row) {
-        console.log(`[Social Climber] Auto-picking Google account ${targetEmail}.`);
+        console.log(`[IG Tracker] Auto-picking Google account ${targetEmail}.`);
         row.click();
         pickDone = true;
         // Keep looping — the consent screen mounts via SPA nav, no
         // page reload, so we need to find Continue on a later iter.
         continue;
       } else if (i - lastWarn > 6) {
-        console.warn(`[Social Climber] OAuth: account row for ${targetEmail} not found yet; still waiting.`);
+        console.warn(`[IG Tracker] OAuth: account row for ${targetEmail} not found yet; still waiting.`);
         lastWarn = i;
       }
     }
@@ -159,11 +222,11 @@ function findAccountRow(email) {
     if (wantContinue) {
       const btn = findContinueButton();
       if (btn) {
-        console.log("[Social Climber] Auto-clicking Google OAuth Continue.");
+        console.log("[IG Tracker] Auto-clicking Google OAuth Continue.");
         btn.click();
         return;
       }
     }
   }
-  console.warn("[Social Climber] OAuth: gave up after polling — page never matched, or click target not found.");
+  console.warn("[IG Tracker] OAuth: gave up after polling — page never matched, or click target not found.");
 })();
