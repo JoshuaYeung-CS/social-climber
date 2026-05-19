@@ -276,6 +276,21 @@ async function _onScheduledExportFire({ manual = false } = {}) {
       return;
     }
   }
+
+  // Offline guard: opening the wizard while the laptop is off-Wi-Fi is
+  // pure waste — a visible window flash plus a 20-min arrival-poll
+  // spin that's guaranteed to fail. Set a single pendingExportWhileOffline
+  // flag so however many alarms fire while offline, we collapse to ONE
+  // catch-up export when the network returns (handled by the `online`
+  // event listener + the SW-wake check at the bottom of this file).
+  // Manual ▶ Now bypasses the guard — the user explicitly asked.
+  if (!manual && typeof navigator !== "undefined" && navigator.onLine === false) {
+    console.log("[Social Climber] Scheduled export: navigator.onLine=false — skipping; will fire one catch-up when back online.");
+    await chrome.storage.local.set({ pendingExportWhileOffline: true });
+    await _appendHistory({ ts: Date.now(), status: "skipped-offline" });
+    await refreshExportAlarm();
+    return;
+  }
   await chrome.storage.local.set({ lastScheduledFireAt: Date.now() });
 
   console.log("[Social Climber] Scheduled export alarm fired — opening wizard.");
@@ -475,6 +490,39 @@ chrome.runtime.onStartup.addListener(async () => {
     refreshExportAlarm().catch(() => {});
   }
 })();
+
+// Offline catch-up: if we skipped one or more alarms because the laptop
+// was off-Wi-Fi, fire ONE export when we come back online. Two triggers:
+//   1. `online` event during SW lifetime (fires while SW is alive).
+//   2. Top-level check on every SW wake (covers the case where the
+//      `online` event fired while the SW was dormant — in which case
+//      the next wake-up alarm respawns this script, navigator.onLine
+//      is now true, and we still catch the pending flag).
+// Both paths funnel through `_maybeFireCatchUpExport` so we never
+// double-fire — clearing the flag atomically before invoking the
+// scheduled-fire path makes back-to-back triggers safe.
+async function _maybeFireCatchUpExport() {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+  const { pendingExportWhileOffline } = await chrome.storage.local.get(["pendingExportWhileOffline"]);
+  if (!pendingExportWhileOffline) return;
+  await chrome.storage.local.set({ pendingExportWhileOffline: false });
+  console.log("[Social Climber] Network online + pending offline export queued — firing one catch-up.");
+  await _onScheduledExportFire({ manual: false });
+}
+
+self.addEventListener("online", () => {
+  console.log("[Social Climber] `online` event fired.");
+  _maybeFireCatchUpExport().catch((e) =>
+    console.warn("[Social Climber] catch-up export failed:", e?.message || e),
+  );
+});
+
+// SW-wake check: every time the service worker respawns (any alarm
+// fire, message, etc.), give the catch-up logic a chance to run.
+// Cheap — early-returns immediately when offline or no flag set.
+_maybeFireCatchUpExport().catch((e) =>
+  console.warn("[Social Climber] boot catch-up check failed:", e?.message || e),
+);
 
 
 
